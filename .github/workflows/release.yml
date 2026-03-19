@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
   release:
@@ -21,6 +22,11 @@ jobs:
         id: release-please
         with:
           release-type: node
+
+      - name: Configure git identity
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
 
       - name: Convert lightweight tag to annotated
         if: steps.release-please.outputs.releases_created == 'true'
