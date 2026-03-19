@@ -33,6 +33,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gmartin/opencode-claude-auth.git"
+    "url": "git+https://github.com/griffinmartin/opencode-claude-auth.git"
   }
 }
