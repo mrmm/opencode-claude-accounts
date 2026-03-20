@@ -6,7 +6,7 @@ OpenCode plugin that uses your existing Claude Code credentials — no separate 
 
 ## How it works
 
-Claude Code stores OAuth tokens in the macOS Keychain (or `~/.claude/.credentials.json` on other platforms). This plugin reads those tokens and provides them to OpenCode via its auth hook, so you don't need to log in twice. When a token is about to expire, it re-reads credentials automatically. If they're still stale, it runs the Claude CLI to trigger a refresh. For OpenCode > 1.2.27, it also injects the Anthropic session prompt via the `experimental.chat.system.transform` hook.
+Claude Code stores OAuth tokens in the macOS Keychain (or `~/.claude/.credentials.json` on other platforms). This plugin reads those tokens and writes them to OpenCode's `~/.local/share/opencode/auth.json`, so you don't need to log in twice. It re-syncs every 5 minutes to pick up token refreshes. If a token is near expiry, it runs the Claude CLI to trigger a refresh.
 
 ## Prerequisites
 
@@ -41,7 +41,7 @@ Then add to the `plugin` array in your `opencode.json`:
 
 ## Usage
 
-Just run OpenCode. The plugin reads your Claude Code credentials automatically and handles token refresh in the background.
+Just run OpenCode. The plugin syncs your Claude Code credentials to OpenCode's auth.json and refreshes them in the background.
 
 ## Credential sources
 
@@ -63,12 +63,12 @@ The plugin checks these in order:
 
 ## How it works (technical)
 
-- Registers an OpenCode auth hook for the `anthropic` provider
-- Overrides the built-in `opencode-anthropic-auth` plugin
-- Returns a custom `fetch` wrapper that injects `Authorization: Bearer` headers
-- When a token is within 60 seconds of expiry, re-reads credentials from Keychain or file
-- If still expired, runs `claude -p . --model claude-haiku-4-5-20250514` to trigger a refresh
-- For OpenCode > 1.2.27, injects the Anthropic session prompt via `experimental.chat.system.transform`
+- Reads OAuth tokens from macOS Keychain (`Claude Code-credentials` entry) or `~/.claude/.credentials.json` fallback
+- Writes an `anthropic` entry to `~/.local/share/opencode/auth.json` in OpenCode's native OAuth format
+- Preserves other provider entries already in auth.json
+- Re-syncs credentials every 5 minutes in the background
+- When a token is within 60 seconds of expiry, runs `claude` CLI to trigger a refresh
+- If credentials are unavailable or unreadable, the plugin disables itself and OpenCode continues without Claude auth
 
 ## License
 
