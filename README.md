@@ -1,6 +1,7 @@
 # opencode-claude-auth
 
 [![npm](https://img.shields.io/npm/v/opencode-claude-auth)](https://www.npmjs.com/package/opencode-claude-auth)
+[![Socket Badge](https://socket.dev/api/badge/npm/package/opencode-claude-auth)](https://socket.dev/npm/package/opencode-claude-auth)
 
 OpenCode plugin that uses your existing Claude Code credentials — no separate login needed.
 
