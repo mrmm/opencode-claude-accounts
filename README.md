@@ -4,11 +4,13 @@
 [![CI](https://github.com/griffinmartin/opencode-claude-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/griffinmartin/opencode-claude-auth/actions/workflows/ci.yml)
 [![Socket Badge](https://socket.dev/api/badge/npm/package/opencode-claude-auth)](https://socket.dev/npm/package/opencode-claude-auth)
 
-OpenCode plugin that uses your existing Claude Code credentials — no separate login needed.
+Self-contained Anthropic auth provider for OpenCode using your Claude Code credentials — no separate login or API key needed.
 
 ## How it works
 
-Claude Code stores OAuth tokens in the macOS Keychain (or `~/.claude/.credentials.json` on other platforms). This plugin reads those tokens and writes them to OpenCode's `~/.local/share/opencode/auth.json` (on Windows, it writes to both `%USERPROFILE%\.local\share\opencode\auth.json` and `%LOCALAPPDATA%\opencode\auth.json` to cover all installation methods), so you don't need to log in twice. It re-syncs every 5 minutes to pick up token refreshes. If a token is near expiry, it runs the Claude CLI to trigger a refresh.
+The plugin registers its own auth provider with a custom fetch handler that intercepts all Anthropic API requests. It reads OAuth tokens from the macOS Keychain (or `~/.claude/.credentials.json` on other platforms), caches them in memory with a 30-second TTL, and handles the full request lifecycle — no builtin Anthropic auth plugin required.
+
+It also syncs credentials to OpenCode's `auth.json` as a fallback (on Windows, it writes to both `%USERPROFILE%\.local\share\opencode\auth.json` and `%LOCALAPPDATA%\opencode\auth.json` to cover all installation methods). If a token is near expiry, it runs the Claude CLI to trigger a refresh. Background re-sync runs every 5 minutes.
 
 ## Prerequisites
 
@@ -43,7 +45,7 @@ Then add to the `plugin` array in your `opencode.json`:
 
 ## Usage
 
-Just run OpenCode. The plugin syncs your Claude Code credentials to OpenCode's auth.json and refreshes them in the background.
+Just run OpenCode. The plugin handles auth automatically — it reads your Claude Code credentials, provides them to the Anthropic API, and refreshes them in the background. If your credentials aren't OAuth-based, the plugin falls through to standard API key auth.
 
 ## Credential sources
 
@@ -62,14 +64,20 @@ The plugin checks these in order:
 | Not working on Linux/Windows | Ensure `~/.claude/.credentials.json` exists. Run `claude` to create it |
 | Keychain access denied | Grant access when macOS prompts you |
 | Keychain read timed out | Restart Keychain Access (can happen on macOS Tahoe) |
+| "Credentials are unavailable or expired" | Run `claude` to refresh your Claude Code credentials |
 
 ## How it works (technical)
 
-- Reads OAuth tokens from macOS Keychain (`Claude Code-credentials` entry) or `~/.claude/.credentials.json` fallback
-- Writes an `anthropic` entry to `~/.local/share/opencode/auth.json` (on Windows, writes to both `%USERPROFILE%\.local\share\opencode\auth.json` and `%LOCALAPPDATA%\opencode\auth.json`) in OpenCode's native OAuth format
-- Preserves other provider entries already in auth.json
-- Re-syncs credentials every 5 minutes in the background
+- Registers an `auth.loader` with a custom `fetch` that intercepts all Anthropic API requests
+- Sets `Authorization: Bearer` with fresh OAuth tokens (cached in memory, 30s TTL)
+- Translates tool names between OpenCode and Anthropic API formats (adds/strips `mcp_` prefix)
+- Buffers SSE response streams at event boundaries for reliable tool name translation
+- Injects Claude Code identity into system prompts via `experimental.chat.system.transform`
+- Sets required API headers (beta flags, billing, user-agent) with model-aware selection
+- Syncs credentials to `auth.json` on startup and every 5 minutes as a fallback
+- On Windows, writes to both `%USERPROFILE%\.local\share\opencode\auth.json` and `%LOCALAPPDATA%\opencode\auth.json`
 - When a token is within 60 seconds of expiry, runs `claude` CLI to trigger a refresh
+- If credentials aren't OAuth-based, the auth loader returns `{}` and falls through to API key auth
 - If credentials are unavailable or unreadable, the plugin disables itself and OpenCode continues without Claude auth
 
 ## License
