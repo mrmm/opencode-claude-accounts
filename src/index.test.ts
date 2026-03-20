@@ -151,6 +151,14 @@ describe("exported helpers", () => {
     assert.ok(!opus45.includes("context-1m-2025-08-07"), "opus 4.5 should not get 1M beta")
   })
 
+  it("getModelBetas excludes context-1m for date-suffixed models without minor version", () => {
+    const opus4 = helpers.getModelBetas("claude-opus-4-20250514")
+    assert.ok(!opus4.includes("context-1m-2025-08-07"), "opus 4 with date suffix should not get 1M beta")
+
+    const sonnet4 = helpers.getModelBetas("claude-sonnet-4-20250514")
+    assert.ok(!sonnet4.includes("context-1m-2025-08-07"), "sonnet 4 with date suffix should not get 1M beta")
+  })
+
   it("getModelBetas excludes context-1m for unversioned aliases", () => {
     const bare = helpers.getModelBetas("sonnet")
     assert.ok(!bare.includes("context-1m-2025-08-07"), "bare 'sonnet' alias should not get 1M beta")
@@ -177,14 +185,22 @@ describe("exported helpers", () => {
     assert.ok(betas.includes("claude-code-20250219"), "non-excluded beta should remain")
   })
 
-  it("isLongContextError detects the specific error message", () => {
+  it("isLongContextError detects the specific error messages", () => {
     assert.ok(
       helpers.isLongContextError("Extra usage is required for long context requests"),
-      "should detect exact error message"
+      "should detect extra usage error"
+    )
+    assert.ok(
+      helpers.isLongContextError("The long context beta is not yet available for this subscription."),
+      "should detect subscription error"
     )
     assert.ok(
       helpers.isLongContextError('{"error": {"message": "Extra usage is required for long context requests"}}'),
-      "should detect error in JSON response"
+      "should detect extra usage error in JSON"
+    )
+    assert.ok(
+      helpers.isLongContextError('{"error": {"message": "The long context beta is not yet available for this subscription."}}'),
+      "should detect subscription error in JSON"
     )
     assert.ok(
       !helpers.isLongContextError("Some other error message"),

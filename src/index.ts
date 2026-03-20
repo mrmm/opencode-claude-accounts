@@ -163,6 +163,7 @@ function addExcludedBeta(modelId: string, beta: string): void {
 
 export function isLongContextError(responseBody: string): boolean {
   return responseBody.includes("Extra usage is required for long context requests")
+    || responseBody.includes("long context beta is not yet available")
 }
 
 function getNextBetaToExclude(modelId: string): string | null {
@@ -259,7 +260,9 @@ export function getModelBetas(modelId: string, excluded?: Set<string>): string[]
     if (versionMatch) {
       const major = parseInt(versionMatch[2], 10)
       const minor = parseInt(versionMatch[3], 10)
-      if (major > 4 || (major === 4 && minor >= 6)) {
+      // Date suffixes like 20250514 are not minor versions — treat as x.0
+      const effectiveMinor = minor > 99 ? 0 : minor
+      if (major > 4 || (major === 4 && effectiveMinor >= 6)) {
         betas.push("context-1m-2025-08-07")
       }
     }
