@@ -2,11 +2,27 @@
   "name": "opencode-claude-auth",
   "version": "1.0.0",
   "description": "OpenCode plugin that uses your Claude Code credentials — no separate login needed.",
-  "preferGlobal": true,
+  "keywords": [
+    "anthropic",
+    "auth",
+    "claude",
+    "opencode",
+    "plugin"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/griffinmartin/opencode-claude-auth.git"
+  },
+  "files": [
+    "opencode-claude-auth.js",
+    "dist",
+    "installation.md"
+  ],
+  "type": "module",
   "main": "opencode-claude-auth.js",
   "module": "opencode-claude-auth.js",
   "types": "dist/index.d.ts",
-  "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -29,35 +45,24 @@
       "import": "./dist/index.js"
     }
   },
-  "files": [
-    "opencode-claude-auth.js",
-    "dist",
-    "installation.md"
-  ],
   "scripts": {
     "build": "tsc && cp src/anthropic-prompt.txt dist/",
     "test": "node --test --experimental-strip-types src/**/*.test.ts",
-    "test:models": "npm run build && node scripts/test-models.ts",
-    "prepublishOnly": "npm run build && npm test"
-  },
-  "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+    "test:models": "pnpm run build && node scripts/test-models.ts",
+    "lint": "oxlint && oxfmt --check .",
+    "lint:fix": "oxlint --fix . && oxfmt --write .",
+    "format": "oxfmt --write .",
+    "prepublishOnly": "pnpm run build && pnpm test"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "latest",
     "@types/node": "^25.5.0",
+    "oxfmt": "0.41.0",
+    "oxlint": "1.56.0",
     "typescript": "^5.0.0"
   },
-  "keywords": [
-    "opencode",
-    "claude",
-    "anthropic",
-    "plugin",
-    "auth"
-  ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/griffinmartin/opencode-claude-auth.git"
-  }
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "packageManager": "pnpm@10.32.1"
 }
