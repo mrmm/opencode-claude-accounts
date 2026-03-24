@@ -6,8 +6,13 @@ import {
   isLongContextError,
   LONG_CONTEXT_BETAS,
 } from "../dist/betas.js"
-import { getCachedCredentials } from "../dist/credentials.js"
+import {
+  getCachedCredentials,
+  initAccounts,
+  setActiveAccountSource,
+} from "../dist/credentials.js"
 import { buildRequestHeaders, fetchWithRetry } from "../dist/index.js"
+import { readAllClaudeAccounts } from "../dist/keychain.js"
 
 // ANSI color helpers
 const c = {
@@ -376,11 +381,21 @@ async function main(): Promise<void> {
   console.log(c.bold("Model Smoke Test"))
   console.log(`${"=".repeat(50)}\n`)
 
-  // Get credentials
+  // Initialize accounts (required after multi-account refactor)
+  const accounts = readAllClaudeAccounts()
+  if (accounts.length === 0) {
+    console.error(
+      c.red("No Claude Code credentials found. Run `claude` to authenticate."),
+    )
+    process.exit(1)
+  }
+  initAccounts(accounts)
+  setActiveAccountSource(accounts[0].source)
+
   const creds = getCachedCredentials()
   if (!creds) {
     console.error(
-      c.red("No Claude Code credentials found. Run `claude` to authenticate."),
+      c.red("Credentials are expired and could not be refreshed."),
     )
     process.exit(1)
   }
