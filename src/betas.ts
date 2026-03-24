@@ -1,14 +1,10 @@
-const DEFAULT_BETA_FLAGS =
-  "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05"
+import { config, getModelOverride } from "./model-config.ts"
 
 // Beta flags to try removing in order when "long context" errors occur
-export const LONG_CONTEXT_BETAS = [
-  "context-1m-2025-08-07",
-  "interleaved-thinking-2025-05-14",
-]
+export const LONG_CONTEXT_BETAS = config.longContextBetas
 
 function getRequiredBetas(): string[] {
-  return (process.env.ANTHROPIC_BETA_FLAGS ?? DEFAULT_BETA_FLAGS)
+  return (process.env.ANTHROPIC_BETA_FLAGS ?? config.baseBetas.join(","))
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
@@ -84,7 +80,6 @@ export function getModelBetas(
   excluded?: Set<string>,
 ): string[] {
   const betas = [...getRequiredBetas()]
-  const lower = modelId.toLowerCase()
 
   // context-1m is OPT-IN only, matching the official Claude CLI behavior.
   // The CLI only sends this beta when the model ID has a [1m] suffix.
@@ -98,13 +93,23 @@ export function getModelBetas(
     process.env.ANTHROPIC_ENABLE_1M_CONTEXT === "true" &&
     supports1mContext(modelId)
   ) {
-    betas.push("context-1m-2025-08-07")
+    betas.push(config.longContextBetas[0])
   }
 
-  // haiku doesn't get claude-code-20250219
-  if (lower.includes("haiku")) {
-    const idx = betas.indexOf("claude-code-20250219")
-    if (idx !== -1) betas.splice(idx, 1)
+  // Apply per-model overrides (e.g. haiku excludes claude-code-20250219)
+  const override = getModelOverride(modelId)
+  if (override) {
+    if (override.exclude) {
+      for (const ex of override.exclude) {
+        const idx = betas.indexOf(ex)
+        if (idx !== -1) betas.splice(idx, 1)
+      }
+    }
+    if (override.add) {
+      for (const add of override.add) {
+        if (!betas.includes(add)) betas.push(add)
+      }
+    }
   }
 
   // Filter out excluded betas (from previous failed requests due to long context errors)

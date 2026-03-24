@@ -11,6 +11,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { before, describe, it } from "node:test"
 import { pathToFileURL } from "node:url"
+import { config as modelConfig } from "./model-config.ts"
 
 interface ClaudeCredentials {
   accessToken: string
@@ -121,6 +122,7 @@ function buildAuthorizeResult(account: Account) {
 const SOURCE_FILES = [
   "index.ts",
   "betas.ts",
+  "model-config.ts",
   "transforms.ts",
   "credentials.ts",
 ] as const
@@ -129,7 +131,10 @@ async function copySourceFiles(tempDir: string): Promise<void> {
   await Promise.all(
     SOURCE_FILES.map(async (file) => {
       let source = await readFile(new URL(`./${file}`, import.meta.url), "utf8")
-      source = source.replace(/from\s+["']\.\/(\w+)\.js["']/g, 'from "./$1.ts"')
+      source = source.replace(
+        /from\s+["']\.\/([\w-]+)\.js["']/g,
+        'from "./$1.ts"',
+      )
       await writeFile(join(tempDir, file), source, "utf8")
     }),
   )
@@ -275,7 +280,9 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
 
   it("getBillingHeader includes version and model", () => {
     const header = helpers.getBillingHeader("claude-opus-4-1")
-    assert.ok(header.includes("cc_version=2.1.80.claude-opus-4-1"))
+    assert.ok(
+      header.includes(`cc_version=${modelConfig.ccVersion}.claude-opus-4-1`),
+    )
     assert.ok(header.includes("cc_entrypoint=cli"))
   })
 
@@ -824,12 +831,13 @@ function loadPersistedAccountSourceFrom(stateFile: string): string | null {
 }
 
 function resolveStartupAccount(
-  accounts: Account[],
+  candidateAccounts: Account[],
   persistedSource: string | null,
 ): Account {
   return (
-    (persistedSource && accounts.find((a) => a.source === persistedSource)) ||
-    accounts[0]
+    (persistedSource &&
+      candidateAccounts.find((a) => a.source === persistedSource)) ||
+    candidateAccounts[0]
   )
 }
 
