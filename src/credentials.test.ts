@@ -1,9 +1,9 @@
+import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import { chmodSync, mkdirSync, statSync, writeFileSync } from "node:fs"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, it } from "node:test"
 import { pathToFileURL } from "node:url"
 
 async function loadCredentialsWithCountingKeychain(
@@ -15,17 +15,23 @@ async function loadCredentialsWithCountingKeychain(
       refreshToken: string
       expiresAt: number
     } | null
+    initAccounts: (accounts: unknown[]) => void
   }
   keychainModule: {
     __getReadCount: () => number
   }
 }> {
   const tempDir = await mkdtemp(join(tmpdir(), "opencode-claude-auth-creds-"))
-  const tempKeychain = join(tempDir, "keychain.js")
+  const tempKeychain = join(tempDir, "keychain.ts")
+  const tempBetas = join(tempDir, "betas.ts")
   const tempCredentials = join(tempDir, "credentials.ts")
   const sourceCredentials = await readFile(
     new URL("./credentials.ts", import.meta.url),
     "utf8",
+  )
+  const rewritten = sourceCredentials.replace(
+    /from\s+["']\.\/(\w+)\.js["']/g,
+    'from "./$1.ts"',
   )
 
   await writeFile(
@@ -37,7 +43,12 @@ let credentials = {
   expiresAt: ${initialExpiresAt}
 }
 
-export function readClaudeCredentials() {
+export function readAllClaudeAccounts() {
+  readCount += 1
+  return [{ label: "Account 1", source: "keychain", credentials }]
+}
+
+export function refreshAccount(source) {
   readCount += 1
   return credentials
 }
@@ -48,7 +59,13 @@ export function __getReadCount() {
 `,
     "utf8",
   )
-  await writeFile(tempCredentials, sourceCredentials, "utf8")
+
+  await writeFile(
+    tempBetas,
+    `export function resetExcludedBetas() {}\n`,
+    "utf8",
+  )
+  await writeFile(tempCredentials, rewritten, "utf8")
 
   const [credentialsModule, keychainModule] = await Promise.all([
     import(pathToFileURL(tempCredentials).href),
@@ -56,7 +73,14 @@ export function __getReadCount() {
   ])
 
   return {
-    credentialsModule,
+    credentialsModule: credentialsModule as {
+      getCachedCredentials: () => {
+        accessToken: string
+        refreshToken: string
+        expiresAt: number
+      } | null
+      initAccounts: (accounts: unknown[]) => void
+    },
     keychainModule: keychainModule as { __getReadCount: () => number },
   }
 }
@@ -71,12 +95,24 @@ describe("credential caching", () => {
       const { credentialsModule, keychainModule } =
         await loadCredentialsWithCountingKeychain(now + 10 * 60_000)
 
+      credentialsModule.initAccounts([
+        {
+          label: "Account 1",
+          source: "keychain",
+          credentials: {
+            accessToken: "token",
+            refreshToken: "refresh",
+            expiresAt: now + 10 * 60_000,
+          },
+        },
+      ])
+
       const first = credentialsModule.getCachedCredentials()
       const second = credentialsModule.getCachedCredentials()
 
       assert.ok(first)
       assert.ok(second)
-      assert.equal(keychainModule.__getReadCount(), 1)
+      assert.equal(keychainModule.__getReadCount(), 0)
     } finally {
       Date.now = originalNow
     }
@@ -88,19 +124,40 @@ describe("credential caching", () => {
     Date.now = () => now
 
     try {
-      const { credentialsModule, keychainModule } =
-        await loadCredentialsWithCountingKeychain(now + 10 * 60_000)
+      const { credentialsModule } = await loadCredentialsWithCountingKeychain(
+        now + 10 * 60_000,
+      )
+
+      credentialsModule.initAccounts([
+        {
+          label: "Account 1",
+          source: "keychain",
+          credentials: {
+            accessToken: "token",
+            refreshToken: "refresh",
+            expiresAt: now + 10 * 60_000,
+          },
+        },
+      ])
 
       const first = credentialsModule.getCachedCredentials()
-      now += 31_000
-      const second = credentialsModule.getCachedCredentials()
-
       assert.ok(first)
+
+      now += 31_000
+
+      const second = credentialsModule.getCachedCredentials()
       assert.ok(second)
-      assert.equal(keychainModule.__getReadCount(), 2)
+      assert.equal(second.accessToken, "token")
     } finally {
       Date.now = originalNow
     }
+  })
+
+  it("getCachedCredentials returns null when no accounts are initialised", async () => {
+    const { credentialsModule } = await loadCredentialsWithCountingKeychain(
+      Date.now() + 10 * 60_000,
+    )
+    assert.equal(credentialsModule.getCachedCredentials(), null)
   })
 })
 
@@ -119,20 +176,30 @@ describe("syncAuthJson file permissions", () => {
         join(tmpdir(), "opencode-claude-auth-sync-"),
       )
       const tempCredentials = join(tempDir, "credentials.ts")
-      const tempKeychain = join(tempDir, "keychain.js")
+      const tempKeychain = join(tempDir, "keychain.ts")
+      const tempBetas = join(tempDir, "betas.ts")
       const sourceCredentials = await readFile(
         new URL("./credentials.ts", import.meta.url),
         "utf8",
       )
+      const rewritten = sourceCredentials.replace(
+        /from\s+["']\.\/(\w+)\.js["']/g,
+        'from "./$1.ts"',
+      )
 
       await writeFile(
         tempKeychain,
-        `export function readClaudeCredentials() {
-          return { accessToken: "token", refreshToken: "refresh", expiresAt: ${Date.now() + 600_000} }
-        }`,
+        `export function readAllClaudeAccounts() { return [] }
+export function refreshAccount() { return null }
+export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account \${i + 1}\`) }`,
         "utf8",
       )
-      await writeFile(tempCredentials, sourceCredentials, "utf8")
+      await writeFile(
+        tempBetas,
+        `export function resetExcludedBetas() {}\n`,
+        "utf8",
+      )
+      await writeFile(tempCredentials, rewritten, "utf8")
 
       const mod = await import(pathToFileURL(tempCredentials).href)
       mod.syncAuthJson({
@@ -186,20 +253,30 @@ describe("syncAuthJson file permissions", () => {
         join(tmpdir(), "opencode-claude-auth-sync2-"),
       )
       const tempCredentials = join(tempDir, "credentials.ts")
-      const tempKeychain = join(tempDir, "keychain.js")
+      const tempKeychain = join(tempDir, "keychain.ts")
+      const tempBetas = join(tempDir, "betas.ts")
       const sourceCredentials = await readFile(
         new URL("./credentials.ts", import.meta.url),
         "utf8",
       )
+      const rewritten = sourceCredentials.replace(
+        /from\s+["']\.\/(\w+)\.js["']/g,
+        'from "./$1.ts"',
+      )
 
       await writeFile(
         tempKeychain,
-        `export function readClaudeCredentials() {
-          return { accessToken: "token", refreshToken: "refresh", expiresAt: ${Date.now() + 600_000} }
-        }`,
+        `export function readAllClaudeAccounts() { return [] }
+export function refreshAccount() { return null }
+export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account \${i + 1}\`) }`,
         "utf8",
       )
-      await writeFile(tempCredentials, sourceCredentials, "utf8")
+      await writeFile(
+        tempBetas,
+        `export function resetExcludedBetas() {}\n`,
+        "utf8",
+      )
+      await writeFile(tempCredentials, rewritten, "utf8")
 
       const mod = await import(pathToFileURL(tempCredentials).href)
       mod.syncAuthJson({
