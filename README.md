@@ -109,6 +109,28 @@ If only one account is found, the switcher is hidden and the plugin uses it dire
 | "Credentials are unavailable or expired"            | Run `claude` to refresh your Claude Code credentials                                                               |
 | "Extra usage is required for long context requests" | Your conversation exceeded 200k tokens. See [Long context (1M)](#long-context-1m) below                            |
 
+### Diagnostic logging
+
+If you're hitting auth errors that are hard to reproduce, enable debug logging to capture the full auth flow:
+
+```bash
+export CLAUDE_AUTH_DEBUG=1
+```
+
+Restart OpenCode and reproduce the issue. The plugin writes structured JSON logs to `~/.local/share/opencode/claude-auth-debug.log`. All secrets (tokens, API keys) are automatically redacted — the log file is safe to paste into a GitHub issue.
+
+To write logs to a custom path:
+
+```bash
+export CLAUDE_AUTH_DEBUG=/tmp/claude-auth-debug.log
+```
+
+Disable when done:
+
+```bash
+unset CLAUDE_AUTH_DEBUG
+```
+
 ## Long context (1M)
 
 The `context-1m-2025-08-07` beta header is not sent by default. Without it, the API caps context at 200k tokens.
@@ -133,6 +155,7 @@ All configurable parameters can be overridden via environment variables. If Anth
 | `ANTHROPIC_USER_AGENT`        | Full User-Agent string (overrides CLI version)                             | `claude-cli/{version} (external, cli)`                                                                  |
 | `ANTHROPIC_BETA_FLAGS`        | Comma-separated beta feature flags                                         | `claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05` |
 | `ANTHROPIC_ENABLE_1M_CONTEXT` | Enable 1M token context window for 4.6+ models (requires Max subscription) | `false`                                                                                                 |
+| `CLAUDE_AUTH_DEBUG`           | Enable diagnostic logging (`1` for default path, or a custom file path)    | disabled                                                                                                |
 
 Example:
 
