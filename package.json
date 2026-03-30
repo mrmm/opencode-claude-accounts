@@ -28,6 +28,10 @@
       "types": "./dist/index.d.ts",
       "import": "./opencode-claude-auth.js"
     },
+    "./server": {
+      "types": "./dist/index.d.ts",
+      "import": "./opencode-claude-auth.js"
+    },
     "./claude-auth-plugin": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
