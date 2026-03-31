@@ -13,6 +13,7 @@ import {
 import { transformBody, transformResponseStream } from "./transforms.ts"
 import {
   getCachedCredentials,
+  getCredentialsForSync,
   syncAuthJson,
   initAccounts,
   setActiveAccountSource,
@@ -186,15 +187,15 @@ const plugin: Plugin = async () => {
     syncAuthJson(initialCreds)
   } else {
     console.warn(
-      "opencode-claude-auth: Claude credentials are expired and could not be refreshed via Claude CLI.",
+      "opencode-claude-auth: Claude credentials are expired and could not be refreshed. Run `claude` to re-authenticate.",
     )
   }
 
-  // Keep auth.json synced, refreshing via CLI if token is near expiry
+  // Keep auth.json synced with current credentials (no refresh triggered)
   const syncTimer = setInterval(() => {
     try {
-      const fresh = getCachedCredentials()
-      if (fresh) syncAuthJson(fresh)
+      const creds = getCredentialsForSync()
+      if (creds) syncAuthJson(creds)
     } catch {
       // Non-fatal
     }
