@@ -166,7 +166,7 @@ export function transformBody(
     const keptSystem: SystemEntry[] = []
     const movedTexts: string[] = []
     for (const entry of parsed.system) {
-      const txt = typeof entry === "string" ? entry : entry.text ?? ""
+      const txt = typeof entry === "string" ? entry : (entry.text ?? "")
       if (txt.startsWith(BILLING_PREFIX) || txt.startsWith(SYSTEM_IDENTITY)) {
         keptSystem.push(entry)
       } else if (txt.length > 0) {

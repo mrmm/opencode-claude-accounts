@@ -156,7 +156,9 @@ describe("transforms", () => {
     assert.equal(parsed.system[1].text, identity)
     // remainder is relocated to user message
     assert.equal(parsed.system.length, 2)
-    assert.ok(parsed.messages[0].content.includes("Working directory: /home/test"))
+    assert.ok(
+      parsed.messages[0].content.includes("Working directory: /home/test"),
+    )
   })
 
   it("transformBody preserves identity without cache_control and relocates remainder", () => {
@@ -271,10 +273,14 @@ describe("transforms", () => {
     // Both custom blocks should be prepended to user message content
     assert.equal(parsed.messages[0].content[0].type, "text")
     assert.ok(
-      parsed.messages[0].content[0].text.includes("Custom instructions block A"),
+      parsed.messages[0].content[0].text.includes(
+        "Custom instructions block A",
+      ),
     )
     assert.ok(
-      parsed.messages[0].content[0].text.includes("Custom instructions block B"),
+      parsed.messages[0].content[0].text.includes(
+        "Custom instructions block B",
+      ),
     )
     // Original user content preserved
     assert.equal(parsed.messages[0].content[1].text, "hello")
@@ -282,9 +288,7 @@ describe("transforms", () => {
 
   it("transformBody keeps system intact when no messages exist", () => {
     const input = JSON.stringify({
-      system: [
-        { type: "text", text: "Some instructions" },
-      ],
+      system: [{ type: "text", text: "Some instructions" }],
       messages: [],
     })
 
