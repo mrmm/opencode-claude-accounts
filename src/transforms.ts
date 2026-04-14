@@ -3,6 +3,22 @@ import { config, getModelOverride } from "./model-config.ts"
 
 const TOOL_PREFIX = "mcp_"
 
+/**
+ * Prefix a tool name with TOOL_PREFIX and uppercase the first character.
+ * Claude Code uses PascalCase tool names (e.g. mcp_Bash, mcp_Read);
+ * lowercase names (mcp_bash, mcp_read) are flagged as non-Claude-Code clients.
+ */
+function prefixName(name: string): string {
+  return `${TOOL_PREFIX}${name.charAt(0).toUpperCase()}${name.slice(1)}`
+}
+
+/**
+ * Reverse prefixName: strip TOOL_PREFIX and restore the original leading case.
+ */
+function unprefixName(name: string): string {
+  return `${name.charAt(0).toLowerCase()}${name.slice(1)}`
+}
+
 const SYSTEM_IDENTITY =
   "You are Claude Code, Anthropic's official CLI for Claude."
 
@@ -206,10 +222,13 @@ export function transformBody(
       }
     }
 
+    // Anthropic's OAuth billing validation rejects lowercase tool names
+    // when multiple tools are present. Claude Code uses PascalCase after
+    // the mcp_ prefix (e.g. mcp_Bash, mcp_Read). Apply the same convention.
     if (Array.isArray(parsed.tools)) {
       parsed.tools = parsed.tools.map((tool) => ({
         ...tool,
-        name: tool.name ? `${TOOL_PREFIX}${tool.name}` : tool.name,
+        name: tool.name ? prefixName(tool.name) : tool.name,
       }))
     }
 
@@ -226,10 +245,7 @@ export function transformBody(
               return block
             }
 
-            return {
-              ...block,
-              name: `${TOOL_PREFIX}${block.name}`,
-            }
+            return { ...block, name: prefixName(block.name) }
           }),
         }
       })
@@ -246,7 +262,10 @@ export function transformBody(
 }
 
 export function stripToolPrefix(text: string): string {
-  return text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"')
+  return text.replace(
+    /"name"\s*:\s*"mcp_([^"]+)"/g,
+    (_match, name: string) => `"name": "${unprefixName(name)}"`,
+  )
 }
 
 export function transformResponseStream(response: Response): Response {

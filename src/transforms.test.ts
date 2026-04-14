@@ -8,7 +8,7 @@ import {
 } from "./transforms.ts"
 
 describe("transforms", () => {
-  it("transformBody moves non-core system text to user message and prefixes tool names", () => {
+  it("transformBody moves non-core system text to user message and PascalCase-prefixes tool names", () => {
     const input = JSON.stringify({
       system: [{ type: "text", text: "OpenCode and opencode" }],
       tools: [{ name: "search" }],
@@ -36,8 +36,8 @@ describe("transforms", () => {
     // The original system text should now be prepended to the first user message
     assert.equal(parsed.messages[0].content[0].type, "text")
     assert.equal(parsed.messages[0].content[0].text, "OpenCode and opencode")
-    assert.equal(parsed.tools[0].name, "mcp_search")
-    assert.equal(parsed.messages[0].content[1].name, "mcp_lookup")
+    assert.equal(parsed.tools[0].name, "mcp_Search")
+    assert.equal(parsed.messages[0].content[1].name, "mcp_Lookup")
   })
 
   it("transformBody relocates non-core system text to user message", () => {
@@ -447,6 +447,51 @@ describe("transforms", () => {
 
     assert.equal(parsed.output_config, undefined)
     assert.equal(parsed.thinking, undefined)
+  })
+
+  it("transformBody PascalCase-prefixes tool names with mcp_", () => {
+    const input = JSON.stringify({
+      system: [],
+      tools: [
+        { name: "bash" },
+        { name: "read" },
+        { name: "background_output" },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "tool_use", name: "bash" },
+            { type: "tool_use", name: "background_output" },
+          ],
+        },
+      ],
+    })
+
+    const output = transformBody(input)
+    const parsed = JSON.parse(output as string) as {
+      tools: Array<{ name: string }>
+      messages: Array<{
+        content: Array<{ type: string; name?: string }>
+      }>
+    }
+
+    assert.equal(parsed.tools[0].name, "mcp_Bash")
+    assert.equal(parsed.tools[1].name, "mcp_Read")
+    assert.equal(parsed.tools[2].name, "mcp_Background_output")
+    assert.equal(parsed.messages[0].content[0].name, "mcp_Bash")
+    assert.equal(parsed.messages[0].content[1].name, "mcp_Background_output")
+  })
+
+  it("stripToolPrefix reverses PascalCase mcp_ prefix", () => {
+    assert.equal(
+      stripToolPrefix('{"name": "mcp_Bash"}'),
+      '{"name": "bash"}',
+    )
+    assert.equal(
+      stripToolPrefix('{"name": "mcp_Background_output"}'),
+      '{"name": "background_output"}',
+    )
   })
 
   it("stripToolPrefix removes mcp_ from response payload names", () => {
