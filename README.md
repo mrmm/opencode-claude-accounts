@@ -369,6 +369,39 @@ you, and no other level implies it.
 Blocks composed programmatically by OpenCode report as `unattributed`, which is
 the useful answer: no file is responsible for them.
 
+### Account chip and picker in the TUI (optional)
+
+The server plugin cannot draw anything -- `PluginInput.tui` is `never`. Drawing
+is a separate plugin kind, loaded from a separate config file, running in the
+TUI process. `tui/claude-auth-tui.tsx` is that module.
+
+It adds two things:
+
+- a chip beside the prompt showing which account is serving and both quota
+  windows, refreshed every few seconds
+- `<leader>a`, or `/account`, opening a picker of presets, Auto and accounts
+
+Install by adding its absolute path to `~/.config/opencode/tui.json`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": ["/absolute/path/to/tui/claude-auth-tui.tsx"],
+}
+```
+
+Picking here writes the selection file and nothing else -- the same thing
+`pnpm lb` and `claude_auth_select` do. No `authorize()`, no `auth.json` rewrite.
+The provider auth flow (`opencode auth login`) remains the only path that
+re-runs authentication.
+
+Two honest limits. The TUI is a different process from the balancer and cannot
+see its in-memory choice, so "serving now" is inferred from the newest quota
+observation; before a session's first response it names whichever account served
+last. And this module imports `@opentui/solid`, which the TUI host provides --
+the server plugin keeps its zero runtime dependencies, because the two never
+share a module.
+
 ### When an account is spent
 
 Health is derived from the rate-limit headers Anthropic returns on every
