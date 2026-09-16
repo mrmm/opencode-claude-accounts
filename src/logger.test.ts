@@ -24,6 +24,7 @@ import {
   parseSize,
   redact,
   rotateLog,
+  reconfigureLogger,
 } from "./logger.ts"
 
 describe("logger", () => {
@@ -626,5 +627,79 @@ describe("level threshold", () => {
     assert.deepEqual(pass("verbose", MIX), MIX)
     assert.equal(parseLevel("nonsense"), "info")
     assert.equal(parseLevel("WARNING"), "warn")
+  })
+})
+
+/**
+ * The logging keys were the only group a running session could not pick up:
+ * every other key is read at decision time, these are copied into module state
+ * by initLogger(). reconfigureLogger re-applies them on a config reload.
+ */
+describe("reconfigureLogger", () => {
+  it("does nothing when a stream owns the logger", () => {
+    const lines: string[] = []
+    const stream = new PassThrough()
+    stream.on("data", (c) => lines.push(String(c)))
+    initLogger({ stream })
+    assert.equal(
+      reconfigureLogger({ debug: true, logLevel: "error" }),
+      false,
+      "a test stream must not be swapped for a file",
+    )
+    log("still_streaming", {})
+    assert.ok(
+      lines.some((l) => l.includes("still_streaming")),
+      "the stream must still receive events",
+    )
+    closeLogger()
+  })
+
+  it("does nothing after closeLogger, when nothing owns the logger", () => {
+    initLogger({ config: { debug: true } })
+    closeLogger()
+    // A test that merely reads config must not cause the real debug log to be
+    // opened as a side effect.
+    assert.equal(reconfigureLogger({ debug: true }), false)
+  })
+
+  it("re-applies the level when it changes, and only then", () => {
+    // Same values -> no work.
+    initLogger({ config: { debug: true, logLevel: "info" } })
+    assert.equal(
+      reconfigureLogger({ debug: true, logLevel: "info" }),
+      false,
+      "an unchanged config must not reopen the log",
+    )
+    // Changed value -> re-applied.
+    assert.equal(
+      reconfigureLogger({ debug: true, logLevel: "error" }),
+      true,
+      "a changed level must be applied to the running logger",
+    )
+    closeLogger()
+  })
+
+  it("treats each logging key as a trigger", () => {
+    const base = {
+      debug: true,
+      logLevel: "info" as const,
+      logEvents: "",
+      logMaxSizeBytes: 1024,
+      logKeep: 2,
+    }
+    for (const [key, value] of [
+      ["logEvents", "quota"],
+      ["logMaxSizeBytes", 2048],
+      ["logKeep", 5],
+      ["logLevel", "warn"],
+    ] as const) {
+      initLogger({ config: base })
+      assert.equal(
+        reconfigureLogger({ ...base, [key]: value }),
+        true,
+        `${key} must trigger a re-apply`,
+      )
+      closeLogger()
+    }
   })
 })

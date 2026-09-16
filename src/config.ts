@@ -28,7 +28,13 @@ import {
   isAccountLabelPlacement,
   type AccountLabelPlacement,
 } from "./ui/display.ts"
-import { parseKeep, parseLevel, parseSize, type LogLevel } from "./logger.ts"
+import {
+  parseKeep,
+  parseLevel,
+  parseSize,
+  reconfigureLogger,
+  type LogLevel,
+} from "./logger.ts"
 
 export const CONFIG_FILENAME = "claude-auth.jsonc"
 export const CONFIG_FILENAME_JSON = "claude-auth.json"
@@ -789,6 +795,10 @@ export function getConfig(
   cachedProjectDir = projectDir
   cachedInline = inline
   cached = resolveConfig(projectDir, inline)
+  // The logging keys are the one group a running session could not pick up:
+  // initLogger() copies them into module state once. This re-applies them when
+  // they actually change, so every key in the config behaves the same way.
+  reconfigureLogger(cached)
   return cached
 }
 

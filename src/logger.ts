@@ -286,6 +286,47 @@ export type LoggerConfig = {
  * the environment is used directly otherwise, so the logger still works when
  * used standalone or in tests.
  */
+/**
+ * The five logging keys, as a value that can be compared.
+ *
+ * initLogger() copies them into module state, so a config edit could not reach
+ * a running session: every other key is read at decision time, these were read
+ * once. Comparing a signature lets a reload re-apply them without reopening the
+ * log file on every config check.
+ */
+function loggingSignature(cfg?: LoggerConfig): string {
+  return JSON.stringify([
+    cfg?.debug ?? null,
+    cfg?.logLevel ?? null,
+    cfg?.logEvents ?? null,
+    cfg?.logMaxSizeBytes ?? null,
+    cfg?.logKeep ?? null,
+  ])
+}
+
+let currentSignature: string | undefined
+/** True once a real config configured the logger -- see reconfigureLogger. */
+let configOwned = false
+
+/**
+ * Re-apply the logging keys when they have changed, and only then.
+ *
+ * Called from getConfig() on a reload. Returns whether anything was done, so a
+ * caller can log the change without having to diff the config itself.
+ *
+ * Refuses in two cases. A stream-backed logger belongs to whoever supplied the
+ * stream (the tests), and reopening it as a file would send their output to
+ * disk. A logger that no config has configured belongs to nobody, and creating
+ * one here would have a test that merely reads config start writing to the
+ * real debug log.
+ */
+export function reconfigureLogger(config: LoggerConfig): boolean {
+  if (!configOwned || mode === "stream") return false
+  if (loggingSignature(config) === currentSignature) return false
+  initLogger({ config })
+  return true
+}
+
 export function initLogger(options?: {
   stream?: Writable
   config?: LoggerConfig
@@ -293,6 +334,8 @@ export function initLogger(options?: {
   closeLogger()
 
   const cfg = options?.config
+  currentSignature = loggingSignature(cfg)
+  if (cfg && !options?.stream) configOwned = true
   compileEventSpec(cfg?.logEvents ?? process.env.CLAUDE_AUTH_DEBUG_EVENTS)
   minLevel = cfg?.logLevel ?? parseLevel(process.env.CLAUDE_AUTH_DEBUG_LEVEL)
 
@@ -373,6 +416,10 @@ export function log(event: string, data?: Record<string, unknown>): void {
 }
 
 export function closeLogger(): void {
+  // After a teardown nothing owns the logger, so a config reload must not
+  // resurrect it as a file. initLogger sets these again.
+  configOwned = false
+  currentSignature = undefined
   mode = "disabled"
   matchers = []
   hasInclude = false

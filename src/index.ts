@@ -417,6 +417,13 @@ const plugin: PluginWithOptions = async (
     setActiveAccountSource(defaultAccount.source)
 
     log("plugin_init", {
+      // Who started this process. A plugin instance per opencode process is
+      // correct, so a high init count is a question about the spawner, not the
+      // plugin -- and answering it from the log beats guessing at `ps`, which
+      // cannot see a process that already exited.
+      pid: process.pid,
+      ppid: process.ppid,
+      argv: process.argv.slice(1).join(" ").slice(0, 200),
       accountCount: accounts.length,
       sources: accounts.map((a) => a.source),
       activeSource: defaultAccount.source,
