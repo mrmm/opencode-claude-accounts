@@ -4,6 +4,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -217,12 +219,39 @@ function syncToPath(authPath: string, creds: ClaudeCredentials): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
   }
-  writeFileSync(authPath, JSON.stringify(auth, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  })
-  if (process.platform !== "win32") {
-    chmodSync(authPath, 0o600)
+
+  // Write through a temporary file and rename into place. `writeFileSync`
+  // truncates first, so for the width of one write the file on disk is empty or
+  // half a JSON document -- and this is a file OpenCode reads on its own
+  // schedule, including while it builds providers. Nothing is known to have
+  // read a torn write: this was found while chasing the `a.name` crash and
+  // measured NOT to be its cause (the cause was in ui/display.ts, plus an
+  // OpenCode 1.18.30 bug). It is fixed because a reader can lose either way and
+  // the atomic version costs nothing, not because it explains a bug.
+  //
+  // rename(2) is atomic within a filesystem: a concurrent reader sees either
+  // the whole old file or the whole new one, never a partial write. The
+  // temporary name carries the pid so two OpenCode processes syncing at once
+  // cannot clobber each other's staging file.
+  const tmpPath = `${authPath}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmpPath, JSON.stringify(auth, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    })
+    if (process.platform !== "win32") {
+      chmodSync(tmpPath, 0o600)
+    }
+    renameSync(tmpPath, authPath)
+  } catch (err) {
+    // Never leave the staging file behind: it holds a live OAuth token, and the
+    // directory is the one OpenCode lists.
+    try {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath)
+    } catch {
+      // Best effort -- the original error is the one worth reporting.
+    }
+    throw err
   }
 }
 
