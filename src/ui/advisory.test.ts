@@ -121,6 +121,45 @@ describe("buildAdvisory", () => {
     assert.ok(!a?.message.includes("Team B"))
   })
 
+  // The thresholds parameter had no coverage, which is how the only caller came
+  // to omit it: quotaWarnAt, quotaWeeklyWarnAt and quotaAlternativeAt were
+  // settable and validated while this function used its own constants.
+  it("honours a caller-supplied warn threshold", () => {
+    const cache: QuotaCache = { s1w: q(0.5) }
+    assert.equal(
+      buildAdvisory(ACCOUNTS, cache, "s1w", NOW),
+      undefined,
+      "50% is below the default warn threshold",
+    )
+    const a = buildAdvisory(ACCOUNTS, cache, "s1w", NOW, { warnAt: 0.4 })
+    assert.equal(
+      a?.variant,
+      "warning",
+      "a lower configured threshold must fire",
+    )
+    assert.match(a?.message ?? "", /at 50%/)
+  })
+
+  it("honours a caller-supplied alternative threshold", () => {
+    const cache: QuotaCache = { s1w: q(1.0), s2: q(0.8) }
+    // 80% is worse than the default 0.7 bar, so no alternative is suggested.
+    assert.ok(
+      !buildAdvisory(ACCOUNTS, cache, "s1w", NOW)?.message.includes("Team B"),
+    )
+    // Raising the bar makes the same account acceptable.
+    const a = buildAdvisory(ACCOUNTS, cache, "s1w", NOW, {
+      alternativeAt: 0.85,
+    })
+    assert.match(a?.message ?? "", /Team B/)
+  })
+
+  it("honours a caller-supplied weekly threshold", () => {
+    const cache: QuotaCache = { s1w: q(0.1, { weekUtil: 0.6 }) }
+    assert.equal(buildAdvisory(ACCOUNTS, cache, "s1w", NOW), undefined)
+    const a = buildAdvisory(ACCOUNTS, cache, "s1w", NOW, { weeklyWarnAt: 0.5 })
+    assert.ok(a, "a lower configured weekly threshold must fire")
+  })
+
   it("stays silent on a healthy account — no toast spam", () => {
     assert.equal(
       buildAdvisory(ACCOUNTS, { s1w: q(0.35) }, "s1w", NOW),

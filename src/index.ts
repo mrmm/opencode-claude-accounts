@@ -526,10 +526,22 @@ const plugin: PluginWithOptions = async (
           // plugin hook or endpoint -- so an actionable state is delivered as a
           // toast. Silent unless something is worth interrupting for.
           try {
+            // The thresholds are configurable, so pass them. Omitting this
+            // argument left quotaWarnAt, quotaWeeklyWarnAt and
+            // quotaAlternativeAt settable, validated and documented while
+            // buildAdvisory silently used its own constants instead.
+            const advisoryCfg = getConfig()
             const advisory = buildAdvisory(
               accounts.map((a) => ({ source: a.source, label: a.label })),
               readQuotaCache(),
               getActiveAccount()?.source ?? null,
+              undefined,
+              {
+                warnAt: advisoryCfg.quotaWarnAt,
+                weeklyWarnAt: advisoryCfg.quotaWeeklyWarnAt,
+                alternativeAt: advisoryCfg.quotaAlternativeAt,
+                maxAgeSeconds: Math.floor(advisoryCfg.quotaMaxAge / 1000),
+              },
             )
             if (!advisory) return
             await client.tui.showToast({
