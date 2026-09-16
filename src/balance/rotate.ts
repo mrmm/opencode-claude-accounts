@@ -259,6 +259,15 @@ export function maybeRotate(
     // Every account is spent: moving achieves nothing except a cold prompt
     // cache on an account that will refuse the request too. Stay put and let
     // the advisory toast explain the wait.
+    if (decision.pool === "over-threshold") {
+      log("rotate_over_threshold", {
+        trigger,
+        to: decision.source,
+        reason: decision.reason,
+      })
+      // Falls through: this is a real, serving account, just a full-ish one.
+    }
+
     if (decision.pool === "exhausted") {
       log("rotate_skipped_all_spent", {
         trigger,

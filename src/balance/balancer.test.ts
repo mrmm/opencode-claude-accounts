@@ -553,3 +553,69 @@ describe("ejection honours the server's retry-after", () => {
     assert.equal(e.until, NOW_MS + 5000)
   })
 })
+
+describe("over threshold is not the same as exhausted", () => {
+  // switchAt is a margin, not the limit. Three accounts sitting at 96-98% with
+  // the server still answering `allowed` will serve requests perfectly well;
+  // announcing "all accounts spent, wait 53m" while they idle was the bug.
+  it("uses the emptiest still-serving account instead of declaring exhaustion", () => {
+    const cache: QuotaCache = {
+      a: reading(0.98),
+      b: reading(0.96),
+      c: reading(0.97),
+    }
+    const d = selectAccount(
+      members("a", "b", "c"),
+      cache,
+      cfg({ switchAt: 0.95 }),
+      null,
+      NOW_MS,
+    )
+    assert.equal(d!.pool, "over-threshold")
+    assert.equal(d!.source, "b", "the emptiest of the three")
+    assert.match(d!.reason, /above switchAt/)
+  })
+
+  it("still declares exhaustion when the server actually refused them", () => {
+    const cache: QuotaCache = {
+      a: reading(1.0, { status: "rejected" }),
+      b: reading(1.0, { status: "rejected" }),
+    }
+    const d = selectAccount(members("a", "b"), cache, cfg(), null, NOW_MS)
+    assert.equal(d!.pool, "exhausted")
+  })
+
+  it("does not fall back to an account at its literal limit", () => {
+    const cache: QuotaCache = { a: reading(1.0), b: reading(1.01) }
+    const d = selectAccount(members("a", "b"), cache, cfg(), null, NOW_MS)
+    assert.equal(d!.pool, "exhausted")
+  })
+
+  it("does not fall back to an ejected account", () => {
+    const cache: QuotaCache = { a: reading(0.97), b: reading(0.98) }
+    eject("a", cfg({ ejectFor: 60_000 }), NOW_MS)
+    eject("b", cfg({ ejectFor: 60_000 }), NOW_MS)
+    const d = selectAccount(members("a", "b"), cache, cfg(), null, NOW_MS)
+    assert.equal(d!.pool, "exhausted")
+  })
+
+  it("does not fall back to an account that cannot authenticate", () => {
+    const cache: QuotaCache = { dead: reading(0.5) }
+    const d = selectAccount(
+      [{ source: "dead", credential: "unusable" }],
+      cache,
+      cfg(),
+      null,
+      NOW_MS,
+    )
+    assert.equal(d!.pool, "exhausted")
+  })
+
+  it("prefers a healthy account over a merely-serving one", () => {
+    // The degraded path must never win while something is genuinely under the bar.
+    const cache: QuotaCache = { full: reading(0.98), ok: reading(0.1) }
+    const d = selectAccount(members("full", "ok"), cache, cfg(), null, NOW_MS)
+    assert.equal(d!.source, "ok")
+    assert.notEqual(d!.pool, "over-threshold")
+  })
+})

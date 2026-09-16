@@ -541,12 +541,43 @@ export function selectAccount(
     }
   }
 
-  // Everything is spent. Prefer whoever frees up first.
+  // No account is under the threshold. That is not the same as no account being
+  // usable: switchAt is a margin, not the limit. An account at 98% with the
+  // server still answering `allowed` will serve requests perfectly well, and
+  // declaring exhaustion because every account sits in the 95-100% band tells
+  // the operator to wait while three working accounts sit idle.
+  //
+  // So separate the two cases. Anything the server has not actually refused, and
+  // that is not literally at its limit, is a degraded-but-usable fallback.
   const all = pools.flatMap((p) => p.accounts)
-  const soonest = all
-    .map((s) => health.get(s))
-    .filter((h): h is Health => !!h)
-    .sort((a, b) => (a.resetsAt ?? Infinity) - (b.resetsAt ?? Infinity))[0]
+  const known = all.map((s) => health.get(s)).filter((h): h is Health => !!h)
+
+  const overThresholdButServing = known
+    .filter(
+      (h) =>
+        h.credential !== "unusable" &&
+        h.reason !== "server rejected" &&
+        !h.reason.startsWith("ejected") &&
+        (h.utilization ?? 0) < 1,
+    )
+    .sort(byHeadroom)
+
+  const fallback = overThresholdButServing[0]
+  if (fallback) {
+    return {
+      source: fallback.source,
+      pool: "over-threshold",
+      strategy: cfg.strategy,
+      changed: fallback.source !== activeSource,
+      reason: `every account is above switchAt; using the emptiest still serving (${Math.round((fallback.utilization ?? 0) * 100)}%)`,
+    }
+  }
+
+  // Genuinely nothing left: refused, ejected, or at the limit. Prefer whoever
+  // frees up first so the wait is as short as it can be.
+  const soonest = known.sort(
+    (a, b) => (a.resetsAt ?? Infinity) - (b.resetsAt ?? Infinity),
+  )[0]
   if (!soonest) return undefined
 
   return {
