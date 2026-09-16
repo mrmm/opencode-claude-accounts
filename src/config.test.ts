@@ -5,8 +5,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
+  type ClaudeAuthConfig,
   DEFAULT_CONFIG,
   envLayer,
+  envNameFor,
   getConfig,
   mergeConfig,
   parseRatio,
@@ -299,7 +301,7 @@ describe("balancer config", () => {
     assert.equal(sanitize({ ejectFor: "90s" }).ejectFor, 90_000)
   })
 
-  it("exposes the balancer knobs to the environment, pools excepted", () => {
+  it("exposes the balancer knobs to the environment", () => {
     const layer = envLayer({
       CLAUDE_AUTH_AUTO_SWITCH: "1",
       CLAUDE_AUTH_SWITCH_AT: "70%",
@@ -314,7 +316,19 @@ describe("balancer config", () => {
     assert.equal(layer.switchWindow, "5h")
     assert.equal(layer.strategy, "least-loaded")
     assert.deepEqual(layer.accounts, ["a", "b"])
+    // Unset stays unset — a key absent from the environment must not appear in
+    // the layer at all, or it would mask the config file underneath it.
     assert.equal(layer.pools, undefined)
+  })
+
+  it("reads pools and presets from the environment as JSON", () => {
+    const layer = envLayer({
+      CLAUDE_AUTH_POOLS: '[{"accounts":["a","b"],"strategy":"round-robin"}]',
+      CLAUDE_AUTH_PRESETS: '{"pair":{"accounts":["a","b"]}}',
+    } as NodeJS.ProcessEnv)
+    assert.equal(layer.pools?.length, 1)
+    assert.deepEqual(layer.pools?.[0]?.accounts, ["a", "b"])
+    assert.ok(layer.presets?.pair)
   })
 
   it("defaults to off and sticky, so nothing rotates until asked", () => {
@@ -353,5 +367,116 @@ describe("parseRatio ambiguity", () => {
     assert.equal(parseRatio(0, 0.5), 0.5)
     assert.equal(parseRatio(-1, 0.5), 0.5)
     assert.equal(parseRatio("150%", 0.5), 0.5)
+  })
+})
+
+/**
+ * Every config key must be reachable from all three surfaces: the config file,
+ * the inline plugin options, and the environment. Ten keys — every duration and
+ * every ratio — were settable in the file but silently ignored from the
+ * environment, because the env layer was a hand-written if-chain that nobody
+ * updated when a key was added. These tests enumerate DEFAULT_CONFIG rather
+ * than a list, so a new key is covered the moment it exists.
+ */
+describe("config surface coverage", () => {
+  // One representative value per key, chosen to differ from the default so an
+  // ignored variable shows up as "still the default" rather than passing by
+  // coincidence.
+  const SAMPLES: Record<string, string> = {
+    debug: "1",
+    logLevel: "warn",
+    logEvents: "auth",
+    logMaxSizeBytes: "4mb",
+    logKeep: "7",
+    quotaProbe: "1",
+    toastOnRefresh: "1",
+    accountLabel: "model",
+    refreshCheckInterval: "90s",
+    refreshBeforeExpiry: "4m",
+    noticeCooldown: "11m",
+    quotaProbeMaxAge: "12m",
+    quotaMaxAge: "13m",
+    configReloadInterval: "14s",
+    ejectFor: "15m",
+    quotaWarnAt: "0.42",
+    quotaWeeklyWarnAt: "0.43",
+    quotaAlternativeAt: "0.44",
+    switchAt: "0.77",
+    autoSwitch: "1",
+    switchOn429: "0",
+    switchWindow: "5h",
+    strategy: "round-robin",
+    bindBy: "none",
+    pinBlocksRotation: "0",
+    tools: "0",
+    captureRequests: "messages",
+    preset: "rr-12",
+    accounts: "alpha,beta",
+    pools: '[{"accounts":["alpha"]}]',
+    presets: '{"p":{"accounts":["alpha"]}}',
+  }
+
+  it("has an environment variable for every key in DEFAULT_CONFIG", () => {
+    const missing = Object.keys(DEFAULT_CONFIG).filter((k) => !(k in SAMPLES))
+    assert.deepEqual(
+      missing,
+      [],
+      `key(s) with no environment coverage: ${missing.join(", ")}`,
+    )
+  })
+
+  it("reads every key from its environment variable", () => {
+    const unread: string[] = []
+    for (const [key, raw] of Object.entries(SAMPLES)) {
+      const got = envLayer({ [envNameFor(key)]: raw } as NodeJS.ProcessEnv)
+      if (got[key as keyof typeof got] === undefined) unread.push(key)
+    }
+    assert.deepEqual(
+      unread,
+      [],
+      `set in the environment but not read: ${unread.join(", ")}`,
+    )
+  })
+
+  it("lets the environment override the config file, for every key", () => {
+    const notOverriding: string[] = []
+    for (const [key, raw] of Object.entries(SAMPLES)) {
+      const fromEnv = envLayer({ [envNameFor(key)]: raw } as NodeJS.ProcessEnv)
+      const merged = mergeConfig(DEFAULT_CONFIG, fromEnv)
+      const before = JSON.stringify(
+        DEFAULT_CONFIG[key as keyof ClaudeAuthConfig],
+      )
+      const after = JSON.stringify(merged[key as keyof ClaudeAuthConfig])
+      if (before === after) notOverriding.push(key)
+    }
+    assert.deepEqual(
+      notOverriding,
+      [],
+      `environment value did not take effect: ${notOverriding.join(", ")}`,
+    )
+  })
+
+  it("derives conventional environment names", () => {
+    assert.equal(envNameFor("switchAt"), "CLAUDE_AUTH_SWITCH_AT")
+    assert.equal(
+      envNameFor("pinBlocksRotation"),
+      "CLAUDE_AUTH_PIN_BLOCKS_ROTATION",
+    )
+    assert.equal(envNameFor("debug"), "CLAUDE_AUTH_DEBUG")
+    // Shipped names win over the convention, so nobody's exported variable
+    // stops being read.
+    assert.equal(envNameFor("switchOn429"), "CLAUDE_AUTH_SWITCH_ON_429")
+    assert.equal(envNameFor("logLevel"), "CLAUDE_AUTH_DEBUG_LEVEL")
+  })
+
+  it("ignores an unparseable environment value instead of applying it", () => {
+    const got = envLayer({
+      CLAUDE_AUTH_POOLS: "{not json",
+    } as NodeJS.ProcessEnv)
+    assert.equal(got.pools, undefined)
+    const ratio = envLayer({
+      CLAUDE_AUTH_SWITCH_AT: "banana",
+    } as NodeJS.ProcessEnv)
+    assert.equal(ratio.switchAt, undefined)
   })
 })

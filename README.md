@@ -329,6 +329,46 @@ by OpenCode, which ships as a Bun binary, while its own tests run under
 `.1`; `least-used` reads it through a 30s cache so telemetry never costs more
 than the thing it measures.
 
+### What is in the prompt
+
+Every request carries a system prompt, a tool schema for each registered tool,
+and the conversation. The first two are paid on every turn regardless of what
+you type, and they are invisible — `captureRequests` records them so they can be
+measured.
+
+```jsonc
+{ "captureRequests": "shape" } // off | shape | full | messages
+```
+
+| level      | records                                                                                |
+| ---------- | -------------------------------------------------------------------------------------- |
+| `off`      | nothing. The default.                                                                  |
+| `shape`    | sizes, hashes and an 80-character head. No text.                                       |
+| `full`     | the above plus the system text, so a block can be traced to the file that produced it. |
+| `messages` | the above plus **the conversation itself, verbatim on disk**.                          |
+
+Records land in `~/.local/share/opencode/claude-auth-requests.jsonl`. Then:
+
+```bash
+pnpm prompt              # the most recent request
+pnpm prompt -- --all     # aggregated across every captured request
+```
+
+The report breaks the system prompt into blocks, largest first, with the file
+each one came from; lists the per-tool schema cost with descriptions broken out;
+and separates fixed overhead from conversation, noting how much is cacheable.
+
+`shape` and `full` never record message content — two tests assert a known
+string cannot appear in the output at either level. `messages` exists for the
+times that is the actual question ("what is being sent?"), and it writes your
+conversation to a plain-text file. It is hot-reloadable like every other
+setting, so the intended use is to turn it on in the config file, reproduce the
+one thing you need to see, and turn it straight back off. Nothing enables it for
+you, and no other level implies it.
+
+Blocks composed programmatically by OpenCode report as `unattributed`, which is
+the useful answer: no file is responsible for them.
+
 ### When an account is spent
 
 Health is derived from the rate-limit headers Anthropic returns on every
@@ -421,7 +461,55 @@ Precedence, least specific first:
 Environment stays highest so a single command can override without editing
 anything (`CLAUDE_AUTH_DEBUG_EVENTS=refresh opencode`), but it is no longer
 where configuration is expected to live. A malformed file contributes nothing
-rather than failing the plugin.
+rather than failing the plugin, and an unparseable environment variable is
+dropped rather than reverting the key to its default — so a typo cannot quietly
+undo what the config file says.
+
+Every key is available on all three surfaces: the config file, the inline plugin
+options, and the environment. A test enumerates the config type to keep that
+true, because ten keys had previously drifted into being file-only.
+
+| key                    | environment variable                     |
+| ---------------------- | ---------------------------------------- |
+| `debug`                | `CLAUDE_AUTH_DEBUG`                      |
+| `logLevel`             | `CLAUDE_AUTH_DEBUG_LEVEL`                |
+| `logEvents`            | `CLAUDE_AUTH_DEBUG_EVENTS`               |
+| `logMaxSize`           | `CLAUDE_AUTH_DEBUG_MAX_SIZE`             |
+| `logKeep`              | `CLAUDE_AUTH_DEBUG_KEEP`                 |
+| `quotaProbe`           | `CLAUDE_AUTH_QUOTA_PROBE`                |
+| `toastOnRefresh`       | `CLAUDE_AUTH_TOAST_REFRESH`              |
+| `accountLabel`         | `CLAUDE_AUTH_ACCOUNT_LABEL`              |
+| `refreshCheckInterval` | `CLAUDE_AUTH_REFRESH_CHECK_INTERVAL`     |
+| `refreshBeforeExpiry`  | `CLAUDE_AUTH_REFRESH_BEFORE_EXPIRY`      |
+| `noticeCooldown`       | `CLAUDE_AUTH_NOTICE_COOLDOWN`            |
+| `quotaProbeMaxAge`     | `CLAUDE_AUTH_QUOTA_PROBE_MAX_AGE`        |
+| `quotaMaxAge`          | `CLAUDE_AUTH_QUOTA_MAX_AGE`              |
+| `quotaWarnAt`          | `CLAUDE_AUTH_QUOTA_WARN_AT`              |
+| `quotaWeeklyWarnAt`    | `CLAUDE_AUTH_QUOTA_WEEKLY_WARN_AT`       |
+| `quotaAlternativeAt`   | `CLAUDE_AUTH_QUOTA_ALTERNATIVE_AT`       |
+| `configReloadInterval` | `CLAUDE_AUTH_CONFIG_RELOAD_INTERVAL`     |
+| `accounts`             | `CLAUDE_AUTH_ACCOUNTS` (comma-separated) |
+| `autoSwitch`           | `CLAUDE_AUTH_AUTO_SWITCH`                |
+| `switchAt`             | `CLAUDE_AUTH_SWITCH_AT`                  |
+| `switchWindow`         | `CLAUDE_AUTH_SWITCH_WINDOW`              |
+| `switchOn429`          | `CLAUDE_AUTH_SWITCH_ON_429`              |
+| `strategy`             | `CLAUDE_AUTH_STRATEGY`                   |
+| `bindBy`               | `CLAUDE_AUTH_BIND_BY`                    |
+| `pinBlocksRotation`    | `CLAUDE_AUTH_PIN_BLOCKS_ROTATION`        |
+| `pools`                | `CLAUDE_AUTH_POOLS` (JSON)               |
+| `ejectFor`             | `CLAUDE_AUTH_EJECT_FOR`                  |
+| `presets`              | `CLAUDE_AUTH_PRESETS` (JSON)             |
+| `preset`               | `CLAUDE_AUTH_PRESET`                     |
+| `tools`                | `CLAUDE_AUTH_TOOLS`                      |
+| `captureRequests`      | `CLAUDE_AUTH_CAPTURE_REQUESTS`           |
+
+Names follow `camelCase` -> `CLAUDE_AUTH_SCREAMING_SNAKE`, except the six that
+shipped before that convention and are kept as they are rather than renamed.
+
+One asymmetry worth knowing: the config file is re-read every few seconds, so
+editing it takes effect in a running OpenCode. A process cannot have its own
+environment changed from outside, so `CLAUDE_AUTH_*` is fixed for the life of
+the run. To flip something mid-session — capture especially — edit the file.
 
 ### Log format
 

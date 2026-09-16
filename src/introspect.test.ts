@@ -41,7 +41,7 @@ describe("describeRequest", () => {
     assert.equal(describeRequest(body(), "off", null), undefined)
   })
 
-  it("never records message content, at any level", () => {
+  it("never records message content below the messages level", () => {
     for (const level of ["shape", "full"] as const) {
       const s = describeRequest(body(), level, "ses_1")!
       const dumped = JSON.stringify(s)
@@ -53,6 +53,29 @@ describe("describeRequest", () => {
         s.messages.map((m) => m.role),
         ["user", "assistant"],
       )
+    }
+  })
+
+  it("records message content only at the messages level", () => {
+    const s = describeRequest(body(), "messages", "ses_1")!
+    assert.equal(
+      s.messages[0]?.content,
+      "a secret the capture must never keep",
+      "messages level exists to record content and must actually do so",
+    )
+    // Still reports role and size, so a messages capture is a superset of a
+    // shape capture rather than a different shape the report cannot read.
+    assert.equal(s.messages[0]?.role, "user")
+    assert.ok((s.messages[0]?.bytes ?? 0) > 0)
+  })
+
+  it("leaves content absent at shape and full, not empty", () => {
+    // An empty string would read as "the message was blank" in the report.
+    for (const level of ["shape", "full"] as const) {
+      const shape = describeRequest(body(), level, "ses_1")!
+      for (const m of shape.messages) {
+        assert.ok(!("content" in m), `content key present at ${level}`)
+      }
     }
   })
 

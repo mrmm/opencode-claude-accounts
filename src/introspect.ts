@@ -32,7 +32,20 @@ import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-export type CaptureLevel = "off" | "shape" | "full"
+/**
+ * How much of a request to record.
+ *
+ *   off       nothing
+ *   shape     sizes, hashes, an 80-char head. No text of any kind.
+ *   full      + the system text, which is what allows a block to be traced to
+ *             the file that produced it. Still no message content.
+ *   messages  + the message content itself. This is the conversation, verbatim,
+ *             on disk in plain text. Intended to be switched on for a few
+ *             minutes to answer a specific question and switched off again —
+ *             the config comment and the README both say so, and nothing turns
+ *             it on by default.
+ */
+export type CaptureLevel = "off" | "shape" | "full" | "messages"
 
 export type SystemBlock = {
   index: number
@@ -65,8 +78,8 @@ export type RequestShape = {
   systemBytes: number
   tools: ToolShape[]
   toolBytes: number
-  /** Role and size only. Never content. */
-  messages: Array<{ role: string; bytes: number }>
+  /** Role and size always; `content` only at level "messages". */
+  messages: Array<{ role: string; bytes: number; content?: unknown }>
   messageBytes: number
   cachedBytes: number
 }
@@ -159,11 +172,16 @@ export function describeRequest(
   const tools = toolShapes(parsed.tools)
   const rawMessages = Array.isArray(parsed.messages) ? parsed.messages : []
   const messages = rawMessages.map((m) => {
-    const msg = (m ?? {}) as { role?: string }
-    return {
+    const msg = (m ?? {}) as { role?: string; content?: unknown }
+    const entry: { role: string; bytes: number; content?: unknown } = {
       role: typeof msg.role === "string" ? msg.role : "?",
       bytes: bytes(m),
     }
+    // Only at the level that exists to record it. Every other level stops at
+    // role and size, so turning capture on to measure prompt size never writes
+    // the conversation to disk as a side effect.
+    if (level === "messages") entry.content = msg.content
+    return entry
   })
 
   const now = Date.now()
@@ -225,5 +243,5 @@ export function readShapeFile(path: string = capturePath()): RequestShape[] {
 }
 
 export function isCaptureLevel(v: unknown): v is CaptureLevel {
-  return v === "off" || v === "shape" || v === "full"
+  return v === "off" || v === "shape" || v === "full" || v === "messages"
 }

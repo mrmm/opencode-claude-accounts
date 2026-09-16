@@ -18,7 +18,7 @@
  * without editing anything, but it is no longer where configuration lives.
  */
 
-import { isCaptureLevel } from "./introspect.ts"
+import { type CaptureLevel, isCaptureLevel } from "./introspect.ts"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -329,12 +329,17 @@ export type ClaudeAuthConfig = {
   /**
    * Record the SHAPE of outgoing requests for later analysis: which system
    * blocks, how large, which tools, how much is cacheable. "off" by default
-   * because a request body contains the conversation. "shape" records sizes,
-   * hashes and an 80-character head; "full" adds the complete system text so a
-   * block can be traced back to the file that produced it. Message content is
-   * never recorded at either level.
+   * because a request body contains the conversation.
+   *
+   *   shape     sizes, hashes, an 80-character head
+   *   full      + system text, so a block can be traced to its source file
+   *   messages  + the conversation itself, verbatim on disk
+   *
+   * "messages" is for answering a specific question over a few minutes and then
+   * turning off again. It is hot-reloadable like every other key, so it can be
+   * switched on and off without restarting anything.
    */
-  captureRequests: "off" | "shape" | "full"
+  captureRequests: CaptureLevel
   /** Named, switchable arrangements. Offered as rows in the switcher. */
   presets: Record<string, Preset>
   /**
@@ -551,77 +556,148 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
 }
 
 /** Highest-precedence layer: the environment. */
+/**
+ * Environment variable names that predate the derived convention.
+ *
+ * Deriving CLAUDE_AUTH_LOG_LEVEL from `logLevel` reads better than the
+ * CLAUDE_AUTH_DEBUG_LEVEL that is actually shipped — but renaming it would
+ * silently stop honouring a variable someone already has exported, and four of
+ * these are upstream's. The shipped name wins; the convention applies to keys
+ * that do not have one yet.
+ */
+const ENV_NAME_OVERRIDES: Record<string, string> = {
+  logLevel: "CLAUDE_AUTH_DEBUG_LEVEL",
+  logEvents: "CLAUDE_AUTH_DEBUG_EVENTS",
+  logMaxSizeBytes: "CLAUDE_AUTH_DEBUG_MAX_SIZE",
+  logKeep: "CLAUDE_AUTH_DEBUG_KEEP",
+  toastOnRefresh: "CLAUDE_AUTH_TOAST_REFRESH",
+  switchOn429: "CLAUDE_AUTH_SWITCH_ON_429",
+}
+
+/**
+ * Environment name for a config key: the shipped name if it has one, otherwise
+ * camelCase -> CLAUDE_AUTH_SCREAMING_SNAKE.
+ */
+export function envNameFor(key: string): string {
+  return (
+    ENV_NAME_OVERRIDES[key] ??
+    `CLAUDE_AUTH_${key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`
+  )
+}
+
+/**
+ * Keys whose sanitizer reads a differently-named raw field. `logMaxSizeBytes`
+ * is the parsed result; `logMaxSize` is the human "4mb" that sanitize() parses.
+ * Feeding the parsed name straight back in would be dropped silently.
+ */
+const ENV_RAW_KEY: Record<string, string> = {
+  logMaxSizeBytes: "logMaxSize",
+}
+
+type EnvParser = (raw: string) => unknown
+
+/**
+ * parseDuration and parseRatio answer with their fallback when the input does
+ * not parse, which is right for a config file but wrong here: falling back to
+ * the DEFAULT would let a typo'd environment variable silently override a
+ * perfectly good value from the config file. A sentinel no real ratio or
+ * duration can equal distinguishes "parsed" from "gave up", so an unparseable
+ * variable is dropped and the lower layer stands.
+ */
+const UNPARSED = -1
+
+const strictRatio = (v: string): number | undefined => {
+  const r = parseRatio(v, UNPARSED)
+  return r === UNPARSED ? undefined : r
+}
+
+const strictDuration = (v: string): number | undefined => {
+  const r = parseDuration(v, UNPARSED)
+  return r === UNPARSED ? undefined : r
+}
+
+const strictInt = (v: string): number | undefined => {
+  const n = Number.parseInt(v, 10)
+  return Number.isFinite(n) ? n : undefined
+}
+
+/**
+ * How each key reads its environment variable.
+ *
+ * Table-driven on purpose. Ten keys had drifted out of the hand-written version
+ * — every duration and every ratio — so they were settable in the file and not
+ * from the environment, silently. A test asserts this table covers every key in
+ * DEFAULT_CONFIG, which makes that class of omission impossible to repeat.
+ */
+const ENV_PARSERS: Record<string, EnvParser> = {
+  debug: (v) => (v === "1" ? true : v === "0" ? false : v),
+  logLevel: (v) => v,
+  logEvents: (v) => v,
+  logMaxSizeBytes: (v) => v,
+  logKeep: strictInt,
+  quotaProbe: (v) => v === "1",
+  toastOnRefresh: (v) => v === "1",
+  accountLabel: (v) => v,
+  refreshCheckInterval: (v) =>
+    parseDuration(v, DEFAULT_CONFIG.refreshCheckInterval),
+  refreshBeforeExpiry: (v) =>
+    parseDuration(v, DEFAULT_CONFIG.refreshBeforeExpiry),
+  noticeCooldown: strictDuration,
+  quotaProbeMaxAge: strictDuration,
+  quotaMaxAge: strictDuration,
+  configReloadInterval: (v) =>
+    parseDuration(v, DEFAULT_CONFIG.configReloadInterval),
+  ejectFor: strictDuration,
+  quotaWarnAt: strictRatio,
+  quotaWeeklyWarnAt: strictRatio,
+  quotaAlternativeAt: strictRatio,
+  switchAt: strictRatio,
+  autoSwitch: (v) => v === "1",
+  switchOn429: (v) => v === "1",
+  switchWindow: (v) => v,
+  strategy: (v) => v,
+  bindBy: (v) => v,
+  pinBlocksRotation: (v) => v === "1",
+  tools: (v) => v === "1",
+  captureRequests: (v) => v,
+  preset: (v) => v.trim(),
+  accounts: (v) => parseAccounts(v.split(",")),
+  // Structured values arrive as JSON. Unwieldy to type by hand, but a config
+  // surface that silently omits two keys is worse than one that is verbose.
+  pools: (v) => {
+    try {
+      return parsePools(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
+  presets: (v) => {
+    try {
+      return parsePresets(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
+}
+
+/**
+ * Read every key from the environment. Values go through sanitize() afterwards,
+ * so an unparseable or out-of-range value is dropped exactly as it would be in
+ * the config file rather than taking effect unchecked.
+ */
 export function envLayer(
   env: NodeJS.ProcessEnv = process.env,
 ): Partial<ClaudeAuthConfig> {
-  const out: Partial<ClaudeAuthConfig> = {}
-  if (env.CLAUDE_AUTH_DEBUG) {
-    out.debug = env.CLAUDE_AUTH_DEBUG === "1" ? true : env.CLAUDE_AUTH_DEBUG
+  const raw: Record<string, unknown> = {}
+  for (const key of Object.keys(DEFAULT_CONFIG)) {
+    const value = env[envNameFor(key)]
+    if (value === undefined || value === "") continue
+    const parser = ENV_PARSERS[key]
+    if (!parser) continue
+    const parsed = parser(value)
+    if (parsed !== undefined) raw[ENV_RAW_KEY[key] ?? key] = parsed
   }
-  if (env.CLAUDE_AUTH_DEBUG_LEVEL) {
-    out.logLevel = parseLevel(env.CLAUDE_AUTH_DEBUG_LEVEL)
-  }
-  if (env.CLAUDE_AUTH_DEBUG_EVENTS !== undefined) {
-    out.logEvents = env.CLAUDE_AUTH_DEBUG_EVENTS
-  }
-  if (env.CLAUDE_AUTH_DEBUG_MAX_SIZE) {
-    out.logMaxSizeBytes = parseSize(env.CLAUDE_AUTH_DEBUG_MAX_SIZE)
-  }
-  if (env.CLAUDE_AUTH_DEBUG_KEEP)
-    out.logKeep = parseKeep(env.CLAUDE_AUTH_DEBUG_KEEP)
-  if (env.CLAUDE_AUTH_QUOTA_PROBE !== undefined) {
-    out.quotaProbe = env.CLAUDE_AUTH_QUOTA_PROBE === "1"
-  }
-  if (env.CLAUDE_AUTH_TOAST_REFRESH !== undefined) {
-    out.toastOnRefresh = env.CLAUDE_AUTH_TOAST_REFRESH === "1"
-  }
-  if (isAccountLabelPlacement(env.CLAUDE_AUTH_ACCOUNT_LABEL)) {
-    out.accountLabel = env.CLAUDE_AUTH_ACCOUNT_LABEL
-  }
-  if (env.CLAUDE_AUTH_AUTO_SWITCH !== undefined) {
-    out.autoSwitch = env.CLAUDE_AUTH_AUTO_SWITCH === "1"
-  }
-  if (env.CLAUDE_AUTH_SWITCH_ON_429 !== undefined) {
-    out.switchOn429 = env.CLAUDE_AUTH_SWITCH_ON_429 === "1"
-  }
-  if (env.CLAUDE_AUTH_SWITCH_AT) {
-    out.switchAt = parseRatio(
-      env.CLAUDE_AUTH_SWITCH_AT,
-      DEFAULT_CONFIG.switchAt,
-    )
-  }
-  if (isSwitchWindow(env.CLAUDE_AUTH_SWITCH_WINDOW)) {
-    out.switchWindow = env.CLAUDE_AUTH_SWITCH_WINDOW
-  }
-  if (isBalanceStrategy(env.CLAUDE_AUTH_STRATEGY)) {
-    out.strategy = env.CLAUDE_AUTH_STRATEGY
-  }
-  if (env.CLAUDE_AUTH_ACCOUNTS !== undefined) {
-    const parsed = parseAccounts(env.CLAUDE_AUTH_ACCOUNTS.split(","))
-    if (parsed) out.accounts = parsed
-  }
-  if (
-    env.CLAUDE_AUTH_BIND_BY === "none" ||
-    env.CLAUDE_AUTH_BIND_BY === "session"
-  ) {
-    out.bindBy = env.CLAUDE_AUTH_BIND_BY
-  }
-  if (env.CLAUDE_AUTH_PIN_BLOCKS_ROTATION !== undefined) {
-    out.pinBlocksRotation = env.CLAUDE_AUTH_PIN_BLOCKS_ROTATION === "1"
-  }
-  if (isCaptureLevel(env.CLAUDE_AUTH_CAPTURE_REQUESTS)) {
-    out.captureRequests = env.CLAUDE_AUTH_CAPTURE_REQUESTS
-  }
-  if (env.CLAUDE_AUTH_TOOLS !== undefined) {
-    out.tools = env.CLAUDE_AUTH_TOOLS === "1"
-  }
-  if (env.CLAUDE_AUTH_PRESET !== undefined) {
-    out.preset = env.CLAUDE_AUTH_PRESET.trim()
-  }
-  // `pools` and `presets` are deliberately file-only: a tiered, per-pool-strategy
-  // structure does not survive being flattened into one environment variable
-  // legibly. CLAUDE_AUTH_PRESET selects one by name, which does.
-  return out
+  return sanitize(raw)
 }
 
 export function candidatePaths(

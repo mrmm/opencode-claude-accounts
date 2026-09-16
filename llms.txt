@@ -71,6 +71,13 @@ Runtime facts worth knowing before reading code:
 
 - [src/config.ts](src/config.ts): layered config (defaults < user file < project
   file < inline < env), re-read on a stat check so edits apply without a restart.
+  Every key is reachable from all three surfaces; the env layer is table-driven
+  and a test enumerates the config type, because ten keys had drifted into being
+  file-only. An unparseable env value is dropped rather than applying the default,
+  so a typo cannot override the config file.
+- [src/introspect.ts](src/introspect.ts): request capture — `off | shape | full |
+  messages`. Content is recorded only at `messages`; tests assert it cannot leak
+  at the levels below.
 - [src/logger.ts](src/logger.ts): structured JSONL debug log with key-based
   redaction of credential fields.
 
