@@ -94,13 +94,38 @@ describe("placement", () => {
 describe("applyAccountLabelToConfig", () => {
   const LBL = "Claude Team - Jack Test"
 
-  it("names the provider even when config has no provider section", () => {
+  it("names a provider the config declares, even bare", () => {
+    const cfg = { provider: { anthropic: {} } } as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >
+    const r = applyAccountLabelToConfig(cfg, LBL)
+    assert.equal(cfg.provider.anthropic.name, `Anthropic (acct: ${LBL})`)
+    assert.equal(r.provider, true)
+  })
+
+  // The regression that took OpenCode down: inventing `provider.anthropic` for
+  // a config that never declared it left OpenCode 1.18 building a layer node
+  // from an entry with nothing in it, and every session died on its first
+  // prompt with "undefined is not an object (evaluating 'a.name')" out of
+  // SystemPrompt.environment -- for all providers, not just this one. An
+  // undeclared provider must be left exactly as it was found.
+  it("never invents a provider the config does not declare", () => {
     const cfg: Record<string, unknown> = {}
     const r = applyAccountLabelToConfig(cfg, LBL)
-    const p = (cfg.provider as Record<string, Record<string, unknown>>)
-      .anthropic
-    assert.equal(p.name, `Anthropic (acct: ${LBL})`)
-    assert.equal(r.provider, true)
+    assert.equal(cfg.provider, undefined)
+    assert.deepEqual(r, { provider: false, models: 0 })
+  })
+
+  it("never invents the entry for a provider id absent from the section", () => {
+    const cfg = { provider: { openai: { name: "OpenAI" } } } as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >
+    const r = applyAccountLabelToConfig(cfg, LBL)
+    assert.equal(cfg.provider.anthropic, undefined)
+    assert.equal(cfg.provider.openai.name, "OpenAI")
+    assert.deepEqual(r, { provider: false, models: 0 })
   })
 
   it("preserves an existing provider name as the base", () => {
@@ -141,32 +166,35 @@ describe("applyAccountLabelToConfig", () => {
   })
 
   it("does not invent model entries the account may not have", () => {
-    const cfg: Record<string, unknown> = {}
+    const cfg = { provider: { anthropic: {} } } as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >
     const r = applyAccountLabelToConfig(cfg, LBL, "model")
-    const p = (cfg.provider as Record<string, Record<string, unknown>>)
-      .anthropic
     assert.equal(r.models, 0)
-    assert.equal(p.models, undefined)
+    assert.equal(cfg.provider.anthropic.models, undefined)
   })
 
   it("is idempotent across repeated config loads", () => {
-    const cfg: Record<string, unknown> = {}
+    const cfg = { provider: { anthropic: {} } } as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >
     applyAccountLabelToConfig(cfg, LBL)
     applyAccountLabelToConfig(cfg, LBL)
     const second = applyAccountLabelToConfig(cfg, LBL)
-    const p = (cfg.provider as Record<string, Record<string, unknown>>)
-      .anthropic
-    assert.equal(p.name, `Anthropic (acct: ${LBL})`)
+    assert.equal(cfg.provider.anthropic.name, `Anthropic (acct: ${LBL})`)
     assert.equal(second.provider, false)
   })
 
   it("replaces the label after switching accounts", () => {
-    const cfg: Record<string, unknown> = {}
+    const cfg = { provider: { anthropic: {} } } as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >
     applyAccountLabelToConfig(cfg, "Claude Pro - Old")
     applyAccountLabelToConfig(cfg, LBL)
-    const p = (cfg.provider as Record<string, Record<string, unknown>>)
-      .anthropic
-    assert.equal(p.name, `Anthropic (acct: ${LBL})`)
+    assert.equal(cfg.provider.anthropic.name, `Anthropic (acct: ${LBL})`)
   })
 
   it("off and empty labels write nothing at all", () => {
@@ -188,11 +216,12 @@ describe("applyAccountLabelToConfig", () => {
   })
 
   it("honours a non-default provider id", () => {
-    const cfg: Record<string, unknown> = {}
+    const cfg = {
+      provider: { "anthropic-vertex": {}, anthropic: {} },
+    } as Record<string, Record<string, Record<string, unknown>>>
     applyAccountLabelToConfig(cfg, LBL, "provider", "anthropic-vertex")
-    const ps = cfg.provider as Record<string, Record<string, unknown>>
-    assert.ok(ps["anthropic-vertex"].name)
-    assert.equal(ps.anthropic, undefined)
+    assert.ok(cfg.provider["anthropic-vertex"].name)
+    assert.equal(cfg.provider.anthropic.name, undefined)
   })
 })
 

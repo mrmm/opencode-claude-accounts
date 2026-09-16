@@ -99,8 +99,35 @@ export function applyAccountLabelToConfig(
   if (!config || typeof config !== "object") return result
 
   const cfg = config as Record<string, unknown>
-  const providers = (cfg.provider ??= {}) as Record<string, unknown>
-  const entry = (providers[providerId] ??= {}) as Record<string, unknown>
+
+  // Decorate only a provider the config already declares. Never invent one.
+  //
+  // This used to be `cfg.provider ??= {}` followed by `providers[id] ??= {}`,
+  // so a config that did not declare `provider.anthropic` -- the common case
+  // here, since this plugin supplies the credentials and there is nothing else
+  // to configure -- got a provider entry holding a cosmetic name and nothing
+  // else. OpenCode 1.18 builds a layer node per configured provider, and a node
+  // built from such an entry leaves an undefined dependency in the graph. The
+  // session then died on its first prompt with
+  //
+  //   TypeError: undefined is not an object (evaluating 'a.name')
+  //     at SystemPrompt.environment
+  //
+  // which names neither the provider, nor the config, nor this plugin, and
+  // takes down every provider rather than just anthropic. It reproduced on
+  // roughly two session starts in three, and appeared the day a config stopped
+  // declaring `provider.anthropic` -- so a label nobody asked to be load-bearing
+  // became the reason nothing worked.
+  //
+  // Adding a `models: {}` map to the invented entry was not enough: measured at
+  // 4 crashes in 6 starts. The entry itself is the problem, so there is no
+  // shape of invented entry to get right. An undeclared provider goes
+  // undecorated, which is the same answer this function already gives for
+  // models it did not find.
+  const providers = cfg.provider as Record<string, unknown> | undefined
+  if (!providers || typeof providers !== "object") return result
+  const entry = providers[providerId] as Record<string, unknown> | undefined
+  if (!entry || typeof entry !== "object") return result
 
   if (shouldDecorateProvider(placement)) {
     const base = typeof entry.name === "string" ? entry.name : "Anthropic"
