@@ -163,10 +163,20 @@ describe("buildPickerOptions", () => {
     )
   })
 
+  it("shapes rows as the host DialogSelect expects", () => {
+    // The host requires `title`; a row built with `label` type-checks nowhere
+    // and renders as an empty line.
+    for (const row of buildPickerOptions(input)) {
+      assert.equal(typeof row.title, "string")
+      assert.ok(row.title.length > 0)
+      assert.equal(typeof row.value, "string")
+    }
+  })
+
   it("marks only the current selection as active", () => {
     const rows = buildPickerOptions(input)
     assert.deepEqual(
-      rows.filter((r) => r.hint === "active").map((r) => r.value),
+      rows.filter((r) => r.description === "active").map((r) => r.value),
       ["preset:rr-123"],
     )
   })
@@ -186,8 +196,8 @@ describe("buildPickerOptions", () => {
 
   it("shows quota per account where it is known", () => {
     const rows = buildPickerOptions(input)
-    assert.match(rows.find((r) => r.value === "s1")!.label, /41%/)
-    assert.ok(!rows.find((r) => r.value === "s2")!.label.includes("%"))
+    assert.match(rows.find((r) => r.value === "s1")!.title, /41%/)
+    assert.ok(!rows.find((r) => r.value === "s2")!.title.includes("%"))
   })
 })
 

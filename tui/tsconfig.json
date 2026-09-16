@@ -1,0 +1,19 @@
+{
+  // Type-checks the TUI entry point without letting it into the main build.
+  // The server plugin must keep zero runtime dependencies, so this file and its
+  // @opentui/solid imports are compiled by nothing -- the TUI host loads the
+  // .tsx directly. Checking it here is the only thing standing between a typo
+  // and a broken TUI on someone's machine.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The parent pins rootDir to src/; this file lives outside it on purpose.
+    "rootDir": "..",
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["./*.tsx"]
+}

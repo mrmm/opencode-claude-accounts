@@ -23,8 +23,20 @@ export type ChipInput = {
   now?: number
 }
 
-/** A row in the account picker. `value` is what gets written to the selection file. */
-export type PickerOption = { label: string; value: string; hint?: string }
+/**
+ * A row in the account picker.
+ *
+ * Shaped as TuiDialogSelectOption, which names the visible text `title` (not
+ * `label`) and has no `hint`. Matching the host type here rather than mapping in
+ * the entry point is what lets `tsc` prove the picker is well-formed -- the
+ * first draft used `label`/`hint` and only the type-check caught it.
+ */
+export type PickerOption = {
+  title: string
+  value: string
+  description?: string
+  category?: string
+}
 
 const AUTO = "__auto__"
 const PRESET = "preset:"
@@ -123,26 +135,32 @@ export function buildPickerOptions(input: {
   selection: string
 }): PickerOption[] {
   const mark = (value: string, row: PickerOption): PickerOption =>
-    input.selection === value ? { ...row, hint: "active" } : row
+    input.selection === value ? { ...row, description: "active" } : row
 
   const presets = Object.entries(input.presets).map(([name, p]) =>
     mark(`${PRESET}${name}`, {
-      label: `⇄ ${p.label ?? name}${p.strategy ? ` — ${p.strategy}` : ""}`,
+      title: `${p.label ?? name}${p.strategy ? ` - ${p.strategy}` : ""}`,
       value: `${PRESET}${name}`,
+      category: "Balancing",
     }),
   )
 
-  const auto = mark(AUTO, { label: "⇄ Auto — balance across all", value: AUTO })
+  const auto = mark(AUTO, {
+    title: "Auto - balance across all",
+    value: AUTO,
+    category: "Balancing",
+  })
 
   const accounts = input.accounts.map((a) => {
     const { five, week, rejected } = utilisation(input.quota, a.source)
     const load =
       five === undefined
         ? ""
-        : ` [${five}%/${week ?? "–"}%${rejected ? " !" : ""}]`
+        : ` [${five}%/${week ?? "-"}%${rejected ? " !" : ""}]`
     return mark(a.source, {
-      label: `${shortLabel(a.label)}${load}`,
+      title: `${shortLabel(a.label)}${load}`,
       value: a.source,
+      category: "Pin to one account",
     })
   })
 

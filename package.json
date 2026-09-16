@@ -1,7 +1,7 @@
 {
   "name": "opencode-claude-auth",
   "version": "2.1.4",
-  "description": "OpenCode plugin that uses your Claude Code credentials — no separate login needed.",
+  "description": "OpenCode plugin that uses your Claude Code credentials \u2014 no separate login needed.",
   "keywords": [
     "anthropic",
     "auth",
@@ -58,7 +58,7 @@
     "intercept:all": "pnpm run build && node --experimental-strip-types scripts/intercept-claude.ts --all",
     "intercept:update": "pnpm run build && node --experimental-strip-types scripts/intercept-claude.ts --all --update",
     "validate:oauth": "pnpm run build && node --experimental-strip-types scripts/validate-oauth-refresh.ts",
-    "lint": "oxlint && oxfmt --check . && pnpm run check:structure",
+    "lint": "oxlint && oxfmt --check . && pnpm run check:structure && pnpm run check:tui",
     "lint:fix": "oxlint --fix . && oxfmt --write .",
     "format": "oxfmt --write .",
     "prepublishOnly": "pnpm run build && pnpm test",
@@ -68,13 +68,18 @@
     "check:structure": "node --experimental-strip-types scripts/check-structure.ts",
     "capture": "node --experimental-strip-types scripts/capture.ts",
     "dash": "pnpm run build && node --experimental-strip-types scripts/dash.ts",
-    "prompt": "pnpm run build && node --experimental-strip-types scripts/prompt-analyze.ts"
+    "prompt": "pnpm run build && node --experimental-strip-types scripts/prompt-analyze.ts",
+    "check:tui": "tsc -p tui/tsconfig.json"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "latest",
+    "@opencode-ai/plugin": "1.18.31",
+    "@opentui/core": "^0.5.11",
+    "@opentui/keymap": "^0.5.11",
+    "@opentui/solid": "^0.5.11",
     "@types/node": "^25.5.0",
     "oxfmt": "0.41.0",
     "oxlint": "1.56.0",
+    "solid-js": "^1.9.15",
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
