@@ -18,6 +18,7 @@
  * without editing anything, but it is no longer where configuration lives.
  */
 
+import { isCaptureLevel } from "./introspect.ts"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -325,6 +326,15 @@ export type ClaudeAuthConfig = {
    * as the only front door.
    */
   tools: boolean
+  /**
+   * Record the SHAPE of outgoing requests for later analysis: which system
+   * blocks, how large, which tools, how much is cacheable. "off" by default
+   * because a request body contains the conversation. "shape" records sizes,
+   * hashes and an 80-character head; "full" adds the complete system text so a
+   * block can be traced back to the file that produced it. Message content is
+   * never recorded at either level.
+   */
+  captureRequests: "off" | "shape" | "full"
   /** Named, switchable arrangements. Offered as rows in the switcher. */
   presets: Record<string, Preset>
   /**
@@ -364,6 +374,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   pinBlocksRotation: true,
   pools: [],
   ejectFor: 5 * 60_000,
+  captureRequests: "off",
   presets: {},
   preset: "",
   tools: true,
@@ -478,6 +489,8 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
 
   const pinBlocks = bool(r.pinBlocksRotation)
   if (pinBlocks !== undefined) out.pinBlocksRotation = pinBlocks
+
+  if (isCaptureLevel(r.captureRequests)) out.captureRequests = r.captureRequests
 
   const tools = bool(r.tools)
   if (tools !== undefined) out.tools = tools
@@ -595,6 +608,9 @@ export function envLayer(
   }
   if (env.CLAUDE_AUTH_PIN_BLOCKS_ROTATION !== undefined) {
     out.pinBlocksRotation = env.CLAUDE_AUTH_PIN_BLOCKS_ROTATION === "1"
+  }
+  if (isCaptureLevel(env.CLAUDE_AUTH_CAPTURE_REQUESTS)) {
+    out.captureRequests = env.CLAUDE_AUTH_CAPTURE_REQUESTS
   }
   if (env.CLAUDE_AUTH_TOOLS !== undefined) {
     out.tools = env.CLAUDE_AUTH_TOOLS === "1"

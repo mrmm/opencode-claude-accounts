@@ -1,3 +1,4 @@
+import { describeRequest, recordShape } from "./introspect.ts"
 import type { Plugin, PluginInput } from "@opencode-ai/plugin"
 import {
   applyAccountLabelToConfig,
@@ -808,6 +809,20 @@ const plugin: PluginWithOptions = async (
               excluded,
             )
             const body = transformBody(requestInit.body)
+
+            // Record the shape of what actually goes out — system blocks, tool
+            // schemas, message sizes. Off unless asked for: the body carries the
+            // conversation. Taken from the TRANSFORMED body, because that is the
+            // request Anthropic receives, not the one OpenCode handed us.
+            const captureLevel = getConfig().captureRequests
+            if (captureLevel !== "off") {
+              const shape = describeRequest(
+                typeof body === "string" ? body : bodyStr,
+                captureLevel,
+                ocSessionId,
+              )
+              if (shape) recordShape(shape)
+            }
 
             const headerKeys: string[] = []
             headers.forEach((_, key) => {
