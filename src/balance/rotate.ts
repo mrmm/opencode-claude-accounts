@@ -266,12 +266,27 @@ export function maybeRotate(
         soonest: decision.source,
         reason: decision.reason,
       })
-      const soonestReset = readQuotaCache()[decision.source]
-      const w = soonestReset ? bindingWindow(soonestReset) : undefined
+      // Report WHICH window bound, and what the other one still holds. A 5-hour
+      // limit can be full while the weekly budget is barely touched, and a bare
+      // "all accounts spent" makes that look like the balancer refusing an
+      // account that plainly has quota left.
+      const q = readQuotaCache()[decision.source]
+      const w = q ? bindingWindow(q) : undefined
+      const isFiveHour = w !== undefined && w === q?.fiveHour
+      const other = isFiveHour ? q?.sevenDay : q?.fiveHour
       emitNotice({
         kind: "accounts-exhausted",
         soonestSource: decision.source,
         ...(w?.resetsAt ? { resetsAt: w.resetsAt } : {}),
+        ...(w
+          ? { window: isFiveHour ? "5h" : "weekly", utilization: w.utilization }
+          : {}),
+        ...(other
+          ? {
+              otherWindow: isFiveHour ? "weekly" : "5h",
+              otherUtilization: other.utilization,
+            }
+          : {}),
       })
       return undefined
     }

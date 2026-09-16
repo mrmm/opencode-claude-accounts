@@ -227,12 +227,24 @@ export function noticeToToast(
       const when = notice.resetsAt
         ? formatDuration(notice.resetsAt - Math.floor(Date.now() / 1000))
         : undefined
+      // Name the window that actually bound. "Spent" without it reads as "no
+      // quota at all", when a 5-hour limit can be full while the weekly budget
+      // is barely touched.
+      const which = notice.window ? `${notice.window} limit` : "limit"
+      const pct =
+        notice.utilization !== undefined
+          ? ` (${Math.round(notice.utilization * 100)}%)`
+          : ""
+      const other =
+        notice.otherWindow && notice.otherUtilization !== undefined
+          ? ` Your ${notice.otherWindow} budget still has ${Math.round((1 - notice.otherUtilization) * 100)}% left.`
+          : ""
       return {
         variant: "error",
-        title: "All Claude accounts are spent",
+        title: `All Claude accounts have hit their ${which}`,
         message: when
-          ? `Staying on ${shortenLabel(notice.soonestSource)}, which frees up in ${when}.`
-          : `Staying on ${shortenLabel(notice.soonestSource)}; no reset time was reported.`,
+          ? `Staying on ${shortenLabel(notice.soonestSource)}${pct}; it frees up in ${when}.${other}`
+          : `Staying on ${shortenLabel(notice.soonestSource)}${pct}; no reset time was reported.${other}`,
       }
     }
 

@@ -260,3 +260,51 @@ describe("refresh notices", () => {
     )
   })
 })
+
+describe("exhaustion names the window that actually bound", () => {
+  // A 5-hour limit can be full while the weekly budget is barely touched. A bare
+  // "all accounts spent" made that look like the balancer refusing an account
+  // with obvious quota left — observed live at 5h=101% with weekly at 15%.
+  const base = {
+    kind: "accounts-exhausted" as const,
+    soonestSource: "Claude Code-credentials-bbbb2222",
+    resetsAt: Math.floor(Date.now() / 1000) + 3180,
+  }
+
+  it("says which limit was hit and what the other window has left", () => {
+    const t = noticeToToast(
+      {
+        ...base,
+        window: "5h",
+        utilization: 1.01,
+        otherWindow: "weekly",
+        otherUtilization: 0.15,
+      },
+      { showSuccess: false },
+    )
+    assert.match(t?.title ?? "", /5h limit/)
+    assert.match(t?.message ?? "", /101%/)
+    assert.match(t?.message ?? "", /weekly budget still has 85% left/)
+  })
+
+  it("works when the weekly window is the binding one", () => {
+    const t = noticeToToast(
+      {
+        ...base,
+        window: "weekly",
+        utilization: 0.99,
+        otherWindow: "5h",
+        otherUtilization: 0.2,
+      },
+      { showSuccess: false },
+    )
+    assert.match(t?.title ?? "", /weekly limit/)
+    assert.match(t?.message ?? "", /5h budget still has 80% left/)
+  })
+
+  it("degrades to a plain message when no window detail is available", () => {
+    const t = noticeToToast(base, { showSuccess: false })
+    assert.match(t?.title ?? "", /limit/)
+    assert.ok(!(t?.message ?? "").includes("undefined"))
+  })
+})

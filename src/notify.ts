@@ -57,6 +57,17 @@ export type Notice =
       soonestSource: string
       /** Unix seconds it frees up, when known. */
       resetsAt?: number
+      /** Which limit actually bound: "5h" or "7d". */
+      window?: string
+      /** Utilisation of the binding window, 0-1. */
+      utilization?: number
+      /**
+       * Headroom left on the OTHER window. Without this the message reads as
+       * "you are out of quota" when the weekly budget may be nearly untouched —
+       * which is exactly how a spent 5-hour window gets mistaken for a bug.
+       */
+      otherWindow?: string
+      otherUtilization?: number
     }
   | {
       /**
