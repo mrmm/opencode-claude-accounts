@@ -40,6 +40,15 @@ export type RequestEvent = {
   /** Utilisation observed on this response, when the headers carried it. */
   utilization_5h?: number
   utilization_7d?: number
+  /**
+   * The OpenCode session this request belonged to.
+   *
+   * Optional because every event written before this field existed lacks it,
+   * and because a request can reach the plugin without a session header (a
+   * title generation, a probe). Readers group those separately rather than
+   * inventing a session for them.
+   */
+  session?: string
 }
 
 /** One move between accounts. */
@@ -283,4 +292,79 @@ export function currentUsageIndex(
 export function resetUsageCache(): void {
   cachedIndex = {}
   cachedIndexAt = 0
+}
+
+/** One session's traffic, as the stats popup shows it. */
+export type SessionUsage = {
+  session: string
+  requests: number
+  errors: number
+  accounts: string[]
+  models: string[]
+  avg_ms: number
+  first_at: number
+  last_at: number
+}
+
+/**
+ * Per-session totals, newest first.
+ *
+ * Events with no session are collected under a single synthetic entry rather
+ * than dropped: they are real traffic, and silently omitting them would make
+ * the totals disagree with `pnpm usage` for no visible reason.
+ */
+export function summarizeSessions(
+  events: UsageEvent[],
+  unknownLabel = "(no session)",
+): SessionUsage[] {
+  const acc = new Map<
+    string,
+    SessionUsage & {
+      totalMs: number
+      accountSet: Set<string>
+      modelSet: Set<string>
+    }
+  >()
+
+  for (const e of events) {
+    if (e.kind !== "request") continue
+    const key = e.session ?? unknownLabel
+    let row = acc.get(key)
+    if (!row) {
+      row = {
+        session: key,
+        requests: 0,
+        errors: 0,
+        accounts: [],
+        models: [],
+        avg_ms: 0,
+        first_at: e.created_at,
+        last_at: e.created_at,
+        totalMs: 0,
+        accountSet: new Set(),
+        modelSet: new Set(),
+      }
+      acc.set(key, row)
+    }
+    row.requests += 1
+    if (e.status >= 400) row.errors += 1
+    row.totalMs += e.duration_ms
+    row.accountSet.add(e.account)
+    row.modelSet.add(e.model)
+    if (e.created_at < row.first_at) row.first_at = e.created_at
+    if (e.created_at > row.last_at) row.last_at = e.created_at
+  }
+
+  return [...acc.values()]
+    .map((r) => ({
+      session: r.session,
+      requests: r.requests,
+      errors: r.errors,
+      accounts: [...r.accountSet],
+      models: [...r.modelSet],
+      avg_ms: r.requests > 0 ? Math.round(r.totalMs / r.requests) : 0,
+      first_at: r.first_at,
+      last_at: r.last_at,
+    }))
+    .sort((a, b) => b.last_at - a.last_at)
 }

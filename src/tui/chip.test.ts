@@ -5,6 +5,9 @@ import {
   buildPickerOptions,
   formatChip,
   shortLabel,
+  ago,
+  sessionRows,
+  shortModel,
   sidebarLines,
   mostRecentlyObserved,
   utilisation,
@@ -283,5 +286,69 @@ describe("sidebarLines", () => {
     })
     assert.equal(rows.length, 0)
     assert.ok(heading.length > 0)
+  })
+})
+
+const sess = (over = {}) => ({
+  session: "ses_f55334270ffegZH7CzDNqTc4iN",
+  requests: 12,
+  errors: 0,
+  accounts: ["a1"],
+  models: ["claude-opus-5"],
+  avg_ms: 2400,
+  first_at: 0,
+  last_at: 1_000_000,
+  ...over,
+})
+
+describe("sessionRows", () => {
+  it("leads with the distinguishing tail of the id and the request count", () => {
+    const [row] = sessionRows([sess()], 1_000_000)
+    assert.match(row!.title, /DNqTc4iN/)
+    assert.match(row!.title, /12 req/)
+  })
+
+  it("mentions errors only when there are some", () => {
+    assert.ok(!sessionRows([sess()], 1_000_000)[0]!.title.includes("err"))
+    assert.match(
+      sessionRows([sess({ errors: 3 })], 1_000_000)[0]!.title,
+      /3 err/,
+    )
+  })
+
+  it("says how many accounts served the session", () => {
+    assert.match(sessionRows([sess()], 1_000_000)[0]!.description!, /1 account/)
+    assert.match(
+      sessionRows([sess({ accounts: ["a1", "a2", "a3"] })], 1_000_000)[0]!
+        .description!,
+      /3 accounts/,
+    )
+  })
+
+  it("keeps the value addressable as the session id", () => {
+    assert.equal(sessionRows([sess()], 1_000_000)[0]!.value, sess().session)
+  })
+
+  it("renders an empty log as no rows, not a placeholder row", () => {
+    assert.deepEqual(sessionRows([], 1_000_000), [])
+  })
+})
+
+describe("ago / shortModel", () => {
+  it("scales the unit to the distance", () => {
+    const now = 1_000_000_000
+    assert.equal(ago(now - 5_000, now), "5s ago")
+    assert.equal(ago(now - 120_000, now), "2m ago")
+    assert.equal(ago(now - 7_200_000, now), "2h ago")
+    assert.equal(ago(now - 172_800_000, now), "2d ago")
+  })
+
+  it("never reports a negative age from a clock skew", () => {
+    assert.equal(ago(1_000, 0), "0s ago")
+  })
+
+  it("drops the prefix every model shares", () => {
+    assert.equal(shortModel("claude-opus-5"), "opus-5")
+    assert.equal(shortModel("gpt-4"), "gpt-4")
   })
 })

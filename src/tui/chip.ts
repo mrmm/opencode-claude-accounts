@@ -10,7 +10,7 @@
  * a different process and shares state with it only through the selection file
  * and the quota cache on disk.
  */
-import type { QuotaCache } from "../balance/index.ts"
+import type { QuotaCache, SessionUsage } from "../balance/index.ts"
 
 export type ChipAccount = { source: string; label: string }
 
@@ -218,4 +218,47 @@ export function buildPickerOptions(input: {
   })
 
   return [...presets, auto, ...accounts]
+}
+
+/**
+ * Rows for the per-session stats popup.
+ *
+ * A DialogSelect rather than a bespoke table: it brings filtering and scrolling,
+ * and a stats list wants both once there is more than a screenful. Nothing is
+ * selectable in a meaningful sense, so the rows carry their whole story in
+ * `title` and `description`.
+ */
+export function sessionRows(
+  sessions: SessionUsage[],
+  now: number = Date.now(),
+): PickerOption[] {
+  return sessions.map((s) => {
+    const err = s.errors > 0 ? `, ${s.errors} err` : ""
+    const spread =
+      s.accounts.length > 1 ? `${s.accounts.length} accounts` : "1 account"
+    return {
+      // The id is long and the tail is what distinguishes one from another.
+      title: `${s.session.slice(-8)}  ${s.requests} req${err}`,
+      value: s.session,
+      description: `${spread} - ${s.models.map(shortModel).join(", ")} - avg ${fmtMs(s.avg_ms)} - ${ago(s.last_at, now)}`,
+    }
+  })
+}
+
+/** "claude-opus-5" reads as "opus-5" in a list where every row says claude. */
+export function shortModel(model: string): string {
+  return model.replace(/^claude-/, "")
+}
+
+function fmtMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
+}
+
+/** Relative time, coarse: the popup answers "recently?", not "when exactly". */
+export function ago(at: number, now: number = Date.now()): string {
+  const s = Math.max(0, Math.round((now - at) / 1000))
+  if (s < 60) return `${s}s ago`
+  if (s < 3600) return `${Math.round(s / 60)}m ago`
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`
+  return `${Math.round(s / 86400)}d ago`
 }

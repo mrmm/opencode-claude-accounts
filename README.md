@@ -402,7 +402,9 @@ It adds two things:
 
 - a chip beside the prompt showing which account is serving and both quota
   windows, refreshed every few seconds
-- `<leader>a`, or `/account`, opening a picker of presets, Auto and accounts
+- `<leader>a`, or `/cc-account`, opening a picker of presets, Auto and accounts
+- `<leader>s`, or `/cc-stats`, listing the last 24h of traffic per session:
+  requests, errors, how many accounts served it, which models, average latency
 
 Install by adding its absolute path to `~/.config/opencode/tui.json`:
 

@@ -33,12 +33,17 @@ import {
   saveAccountSource,
 } from "../dist/credentials.js"
 import { readQuotaCache } from "../dist/balance/quota.js"
-import { currentUsageIndex } from "../dist/balance/usage.js"
+import {
+  currentUsageIndex,
+  readUsage,
+  summarizeSessions,
+} from "../dist/balance/usage.js"
 import { getConfig } from "../dist/config.js"
 import {
   buildPickerOptions,
   formatChip,
   mostRecentlyObserved,
+  sessionRows,
   sidebarLines,
 } from "../dist/tui/chip.js"
 
@@ -193,9 +198,42 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           ))
         },
       },
+      {
+        name: "claude-auth.stats",
+        title: "Claude usage by session",
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "cc-stats",
+        run() {
+          // Read the log here rather than on the poll: this is a scan of the
+          // telemetry file, which is the one thing in this plugin too expensive
+          // to do every few seconds.
+          const since = Date.now() - 24 * 60 * 60_000
+          const rows = sessionRows(summarizeSessions(readUsage(since)))
+          api.ui.dialog.replace(() => (
+            <api.ui.DialogSelect
+              title={`Usage by session, last 24h (${rows.length})`}
+              options={
+                rows.length > 0
+                  ? rows
+                  : [
+                      {
+                        title: "No requests recorded in the last 24h",
+                        value: "",
+                        description:
+                          "Sessions appear here once the plugin has served a request for them.",
+                      },
+                    ]
+              }
+              onSelect={() => api.ui.dialog.clear()}
+            />
+          ))
+        },
+      },
     ],
     bindings: [
       { key: "<leader>a", cmd: "claude-auth.select", desc: "Claude account" },
+      { key: "<leader>s", cmd: "claude-auth.stats", desc: "Claude usage" },
     ],
   })
 }

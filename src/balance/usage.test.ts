@@ -10,6 +10,7 @@ import {
   record,
   recordRequest,
   summarize,
+  summarizeSessions,
   usageIndex,
 } from "./usage.ts"
 
@@ -136,5 +137,94 @@ describe("summarize", () => {
     const idx = usageIndex(summarize([req("a"), req("a"), req("b")]))
     assert.equal(idx["a"]!.requests, 2)
     assert.equal(idx["b"]!.requests, 1)
+  })
+})
+
+const sessionReq = (
+  session: string | undefined,
+  over: Partial<{
+    status: number
+    ms: number
+    account: string
+    model: string
+    at: number
+  }> = {},
+) => ({
+  kind: "request" as const,
+  timestamp: new Date(over.at ?? 1000).toISOString(),
+  created_at: over.at ?? 1000,
+  account: over.account ?? "a1",
+  model: over.model ?? "opus",
+  status: over.status ?? 200,
+  duration_ms: over.ms ?? 100,
+  ...(session ? { session } : {}),
+})
+
+describe("summarizeSessions", () => {
+  it("totals requests, errors and average duration per session", () => {
+    const rows = summarizeSessions([
+      sessionReq("s1", { ms: 100 }),
+      sessionReq("s1", { ms: 300, status: 400 }),
+      sessionReq("s2", { ms: 50 }),
+    ])
+    const s1 = rows.find((r) => r.session === "s1")!
+    assert.equal(s1.requests, 2)
+    assert.equal(s1.errors, 1)
+    assert.equal(s1.avg_ms, 200)
+    assert.equal(rows.find((r) => r.session === "s2")!.requests, 1)
+  })
+
+  it("lists the distinct accounts and models a session touched", () => {
+    const rows = summarizeSessions([
+      sessionReq("s1", { account: "a1", model: "opus" }),
+      sessionReq("s1", { account: "a2", model: "opus" }),
+      sessionReq("s1", { account: "a1", model: "haiku" }),
+    ])
+    assert.deepEqual(rows[0]!.accounts.sort(), ["a1", "a2"])
+    assert.deepEqual(rows[0]!.models.sort(), ["haiku", "opus"])
+  })
+
+  it("groups sessionless events instead of dropping them", () => {
+    // Events written before the field existed, and requests with no session
+    // header. Dropping them would make these totals disagree with `pnpm usage`.
+    const rows = summarizeSessions([
+      sessionReq(undefined),
+      sessionReq(undefined),
+      sessionReq("s1"),
+    ])
+    const unknown = rows.find((r) => r.session === "(no session)")!
+    assert.equal(unknown.requests, 2)
+  })
+
+  it("orders by most recent activity", () => {
+    const rows = summarizeSessions([
+      sessionReq("old", { at: 10 }),
+      sessionReq("new", { at: 900 }),
+      sessionReq("mid", { at: 500 }),
+    ])
+    assert.deepEqual(
+      rows.map((r) => r.session),
+      ["new", "mid", "old"],
+    )
+  })
+
+  it("ignores rotation events, which are not requests", () => {
+    const rows = summarizeSessions([
+      sessionReq("s1"),
+      {
+        kind: "rotation",
+        timestamp: new Date(1).toISOString(),
+        created_at: 1,
+        from: "a1",
+        to: "a2",
+        trigger: "quota-observed",
+      } as never,
+    ])
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0]!.requests, 1)
+  })
+
+  it("returns nothing for an empty log rather than throwing", () => {
+    assert.deepEqual(summarizeSessions([]), [])
   })
 })

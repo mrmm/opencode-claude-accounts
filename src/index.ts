@@ -1081,6 +1081,7 @@ const plugin: PluginWithOptions = async (
               recordRequest({
                 account: servedBy,
                 model: modelId,
+                ...(ocSessionId ? { session: ocSessionId } : {}),
                 status: response.status,
                 duration_ms: Date.now() - startedAt,
                 ...(observedQuota?.fiveHour
