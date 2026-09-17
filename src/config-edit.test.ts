@@ -12,6 +12,9 @@ import {
 } from "./config-edit.ts"
 import { DEFAULT_CONFIG, sanitize } from "./config.ts"
 
+const strip2 = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
+
 const strip = (s: string) =>
   s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
 
@@ -429,8 +432,6 @@ describe("setJsoncValue with structured values", () => {
   "configReloadInterval": "3s"
 }
 `
-  const strip2 = (s: string) =>
-    s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
 
   it("replaces an array without truncating it at its first comma", () => {
     const out = setJsoncValue(file, "accounts", '["x","y"]')!
