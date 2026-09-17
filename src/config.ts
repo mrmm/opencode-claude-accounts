@@ -176,6 +176,26 @@ export type Pool = {
  * parsing but matches no live account is dropped later, at selection time,
  * where the live account list is known.
  */
+/**
+ * A flat map of reference to display name. Anything that is not a string pair
+ * is dropped rather than rejected wholesale: one bad entry should not cost the
+ * others.
+ */
+export function parseAccountNames(
+  v: unknown,
+): Record<string, string> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof value !== "string") continue
+    const name = value.trim()
+    const ref = key.trim()
+    if (ref === "" || name === "") continue
+    out[ref] = name
+  }
+  return out
+}
+
 export function parsePools(v: unknown): Pool[] | undefined {
   if (!Array.isArray(v)) return undefined
   const out: Pool[] = []
@@ -354,6 +374,14 @@ export type ClaudeAuthConfig = {
    * that refuse prefill that turn cannot be sent at all, so the choice is
    * between losing it and a session that fails identically on every retry.
    */
+  /**
+   * Display names for accounts, keyed by the same references presets accept:
+   * an exact Keychain source, or a fragment of the account's label.
+   *
+   * Only the UI reads this. Nothing about routing changes, which is why a name
+   * here can be anything at all -- it is a label, not an identifier.
+   */
+  accountNames: Record<string, string>
   retryPrefillError: boolean
   captureRequests: CaptureLevel
   /** Named, switchable arrangements. Offered as rows in the switcher. */
@@ -395,6 +423,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   pinBlocksRotation: true,
   pools: [],
   ejectFor: 5 * 60_000,
+  accountNames: {},
   retryPrefillError: false,
   captureRequests: "off",
   presets: {},
@@ -569,6 +598,9 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
     )
   }
 
+  const names = parseAccountNames(r.accountNames)
+  if (names) out.accountNames = names
+
   if (typeof r.retryPrefillError === "boolean")
     out.retryPrefillError = r.retryPrefillError
 
@@ -679,6 +711,13 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   bindBy: (v) => v,
   pinBlocksRotation: (v) => v === "1",
   tools: (v) => v === "1",
+  accountNames: (v) => {
+    try {
+      return parseAccountNames(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
   retryPrefillError: (v) => v === "1",
   captureRequests: (v) => v,
   preset: (v) => v.trim(),

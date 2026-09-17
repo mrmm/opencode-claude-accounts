@@ -369,6 +369,31 @@ you, and no other level implies it.
 Blocks composed programmatically by OpenCode report as `unattributed`, which is
 the useful answer: no file is responsible for them.
 
+### Naming accounts
+
+Display names are derived from the Keychain label -- the number in it, where
+that is unambiguous -- which is a guess. `accountNames` overrides it:
+
+```jsonc
+{
+  "accountNames": {
+    "Acme 1": "Team A",
+    "Claude Code-credentials-340807bc": "Personal",
+  },
+}
+```
+
+Keys are the same references presets accept: an exact Keychain source, or a
+fragment of the label, resolved by the balancer's own matcher. The name is
+display only -- nothing about routing reads it -- so it can be anything.
+
+An explicit name is exempt from the collision rule that governs derived ones.
+Two guesses may not both claim "Team 1"; two names someone typed are a decision,
+not an accident.
+
+`Rename` rows in `/cc-accounts` write this key. An empty name clears the
+override and returns the account to its derived name.
+
 ### Getting back
 
 Every screen below the first carries a `← Back` row. That is not a stylistic

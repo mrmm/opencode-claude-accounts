@@ -779,3 +779,52 @@ describe("detailRows", () => {
     assert.ok(rows.some((r) => r.title.startsWith("cached")))
   })
 })
+
+const ACC = [
+  { source: "s1", label: "Claude Team - Acme 1 - Wings" },
+  { source: "s2", label: "Claude Team - Acme 2 - Survey" },
+]
+
+/** Stands in for the balancer's resolveRef, which the plugin passes in. */
+const byRef = (ref: string, list: typeof ACC) => {
+  const exact = list.find((a) => a.source === ref)
+  if (exact) return exact.source
+  const hits = list.filter((a) =>
+    a.label.toLowerCase().includes(ref.toLowerCase()),
+  )
+  return hits.length === 1 ? hits[0]!.source : undefined
+}
+
+describe("shortNames with overrides", () => {
+  it("uses a name keyed by the exact source", () => {
+    const names = shortNames(ACC, { s1: "Primary" }, byRef)
+    assert.equal(names.get("s1"), "Primary")
+  })
+
+  it("uses a name keyed by a label fragment, as presets are", () => {
+    const names = shortNames(ACC, { "Acme 2": "Backup" }, byRef)
+    assert.equal(names.get("s2"), "Backup")
+  })
+
+  it("leaves accounts without an override on the derived name", () => {
+    const names = shortNames(ACC, { s1: "Primary" }, byRef)
+    assert.equal(names.get("s2"), "Team 2")
+  })
+
+  it("honours an explicit name even when it collides", () => {
+    // The collision rule exists to stop two *guesses* claiming one name. A name
+    // someone typed is a decision, not a guess.
+    const names = shortNames(ACC, { s1: "Team 2" }, byRef)
+    assert.equal(names.get("s1"), "Team 2")
+    assert.equal(names.get("s2"), "Team 2")
+  })
+
+  it("ignores a name for an account that is not there", () => {
+    const names = shortNames(ACC, { nobody: "Ghost" }, byRef)
+    assert.equal([...names.values()].includes("Ghost"), false)
+  })
+
+  it("behaves as before when no overrides are given", () => {
+    assert.equal(shortNames(ACC).get("s1"), "Team 1")
+  })
+})

@@ -35,6 +35,7 @@ import {
 } from "../dist/credentials.js"
 import { readQuotaCache } from "../dist/balance/quota.js"
 import { readShapeFile } from "../dist/introspect.js"
+import { resolveRef } from "../dist/balance/index.js"
 import {
   indentJson,
   isEditable,
@@ -156,6 +157,18 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
    * navigation. No dialog-scoped keybinding is exposed either. A selectable row
    * is what remains, and it has the advantage of being visible.
    */
+  /**
+   * Display names, with the configured overrides applied.
+   *
+   * Keyed by the same references presets accept -- an exact source or a label
+   * fragment -- so a name can be written by hand the way the rest of the config
+   * is, and resolved by the balancer's own matcher rather than a second one.
+   */
+  const displayNames = () =>
+    shortNames(accounts, getConfig().accountNames, (ref, list) =>
+      resolveRef(ref, list as { source: string; label?: string }[]),
+    )
+
   const BACK = "__back__"
   const backRow = (where: string) => ({
     title: "\u2190 Back",
@@ -190,6 +203,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         const view = () =>
           sidebarLines({
             accounts: visible(),
+            names: displayNames(),
             hiddenCount: accounts.length - visible().length,
             thresholds: {
               warnAt: getConfig().quotaWarnAt,
@@ -328,7 +342,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               context = null
             }
             const rows = detailRows(detail, {
-              names: shortNames(accounts),
+              names: displayNames(),
               context,
             })
             api.ui.dialog.replace(() => (
@@ -458,10 +472,19 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     accounts,
                     cfg.accounts,
                     readQuotaCache(),
+                    displayNames(),
                   ),
+                  ...accounts.map((a) => ({
+                    title: `Rename ${displayNames().get(a.source) ?? a.source}`,
+                    value: `r:${a.source}`,
+                    description: a.label,
+                    category: "Rename",
+                  })),
                 ]}
                 onSelect={(row) => {
-                  if (String(row.value) === BACK) return menu()
+                  const rv = String(row.value)
+                  if (rv === BACK) return menu()
+                  if (rv.startsWith("r:")) return rename(rv.slice(2))
                   const next = toggleAccount(
                     accounts,
                     getConfig().accounts,
@@ -487,6 +510,35 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 }}
               />
             ))
+          }
+
+          const rename = (source: string) => {
+            const cfg = getConfig()
+            const current = displayNames().get(source) ?? ""
+            const prompt = (seed: string) =>
+              api.ui.dialog.replace(() => (
+                <api.ui.DialogPrompt
+                  title="Name for this account"
+                  placeholder="Team 1"
+                  value={seed}
+                  onConfirm={(value: string) => {
+                    const name = value.trim()
+                    const next = { ...cfg.accountNames }
+                    // An empty name removes the override rather than storing
+                    // one, so there is a way back to the derived name.
+                    if (name === "") delete next[source]
+                    else next[source] = name
+                    writeKey(
+                      "accountNames",
+                      indentJson(next, 2),
+                      name === "" ? "Name cleared." : `Now "${name}".`,
+                    )
+                    openAccounts()
+                  }}
+                  onCancel={() => openAccounts()}
+                />
+              ))
+            prompt(current)
           }
 
           const savePresets = (next: Record<string, unknown>, note: string) =>
@@ -515,7 +567,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               preset,
               accounts,
             )
-            const names = shortNames(accounts)
+            const names = displayNames()
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
                 title={`${name} - ${preset.strategy ?? "sticky"}`}

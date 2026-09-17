@@ -30,6 +30,12 @@ export type ChipInput = {
    */
   requests?: Record<string, number>
   /**
+   * Display names, already resolved. Passed in rather than derived here so the
+   * configured overrides apply everywhere at once and cannot drift between the
+   * chip, the sidebar and the pickers.
+   */
+  names?: Map<string, string>
+  /**
    * Warning thresholds, so the colouring matches the numbers the plugin would
    * warn about rather than a second opinion invented for the sidebar.
    */
@@ -170,14 +176,30 @@ export function teamName(label: string): string | null {
  * end in 1 cannot both be "Team 1", so both keep their longer name instead of
  * one silently shadowing the other.
  */
-export function shortNames(accounts: ChipAccount[]): Map<string, string> {
+export function shortNames(
+  accounts: ChipAccount[],
+  overrides: Record<string, string> = {},
+  resolve?: (ref: string, accounts: ChipAccount[]) => string | undefined,
+): Map<string, string> {
+  // An explicit name wins outright, and is not subject to the collision rule
+  // below: the derived names are guesses and deserve a guard, a name someone
+  // typed is a decision.
+  const named = new Map<string, string>()
+  for (const [ref, name] of Object.entries(overrides)) {
+    const source = resolve
+      ? resolve(ref, accounts)
+      : accounts.find((a) => a.source === ref)?.source
+    if (source) named.set(source, name)
+  }
+  const derived = accounts.filter((a) => !named.has(a.source))
+
   const count = new Map<string, number>()
-  for (const a of accounts) {
+  for (const a of derived) {
     const t = teamName(a.label)
     if (t) count.set(t, (count.get(t) ?? 0) + 1)
   }
-  const out = new Map<string, string>()
-  for (const a of accounts) {
+  const out = new Map(named)
+  for (const a of derived) {
     const t = teamName(a.label)
     const chosen = t && count.get(t) === 1 ? t : shortLabel(a.label)
     // A label can shorten to nothing -- an empty one, or one that is only the
@@ -280,7 +302,7 @@ export function sidebarLines(input: ChipInput): {
   const heading = hidden > 0 ? `${mode}${SEP}${hidden} off` : mode
 
   const total = Object.values(input.requests ?? {}).reduce((n, r) => n + r, 0)
-  const names = shortNames(input.accounts)
+  const names = input.names ?? shortNames(input.accounts)
 
   const rows = input.accounts.map((a) => {
     const quota = quotaText(input.quota, a.source)
@@ -322,6 +344,7 @@ export function buildPickerOptions(input: {
   presets: Record<string, { label?: string; strategy?: string }>
   quota: QuotaCache
   selection: string
+  names?: Map<string, string>
 }): PickerOption[] {
   const mark = (value: string, row: PickerOption): PickerOption =>
     input.selection === value ? { ...row, description: "active" } : row
@@ -340,7 +363,7 @@ export function buildPickerOptions(input: {
     category: "Balancing",
   })
 
-  const pickerNames = shortNames(input.accounts)
+  const pickerNames = input.names ?? shortNames(input.accounts)
   const accounts = input.accounts.map((a) => {
     const load = `${SEP}${quotaText(input.quota, a.source, { includeWeek: false })}`
     return mark(a.source, {
@@ -453,9 +476,9 @@ export function accountToggleRows(
   all: ChipAccount[],
   allowList: string[],
   quota: QuotaCache,
+  names: Map<string, string> = shortNames(all),
 ): PickerOption[] {
   const enabled = new Set(enabledSources(all, allowList))
-  const names = shortNames(all)
   return all.map((a) => {
     const state = enabled.has(a.source) ? "[x]" : "[ ]"
     const load = quotaText(quota, a.source)
