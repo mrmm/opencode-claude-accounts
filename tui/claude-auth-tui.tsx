@@ -51,8 +51,10 @@ import {
   buildPickerOptions,
   formatChip,
   mostRecentlyObserved,
+  accountToggleRows,
   sessionRows,
   sidebarLines,
+  toggleAccount,
 } from "../dist/tui/chip.js"
 
 /** Two small file reads. No Keychain, no network, so polling is cheap. */
@@ -239,6 +241,84 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         },
       },
       {
+        name: "claude-auth.accounts",
+        title: "Claude accounts in use",
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "cc-accounts",
+        run() {
+          const configFile = candidatePaths()[0]!
+
+          const open = () => {
+            const cfg = getConfig()
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title="Accounts the balancer may use"
+                options={accountToggleRows(
+                  accounts,
+                  cfg.accounts,
+                  readQuotaCache(),
+                )}
+                onSelect={(row) => flip(String(row.value))}
+              />
+            ))
+          }
+
+          const flip = (source: string) => {
+            const next = toggleAccount(accounts, getConfig().accounts, source)
+            if (!next) {
+              // Refused rather than obeyed: an empty allow-list means "all", so
+              // disabling the last account would re-enable every one of them.
+              api.ui.toast({
+                variant: "error",
+                title: "Not changed",
+                message: "At least one account has to stay enabled.",
+              })
+              open()
+              return
+            }
+            try {
+              const before = readFileSync(configFile, "utf8")
+              const after = setJsoncValue(
+                before,
+                "accounts",
+                JSON.stringify(next),
+              )
+              if (!after) {
+                api.ui.toast({
+                  variant: "error",
+                  title: "Not changed",
+                  message: "Could not edit accounts safely.",
+                })
+                return
+              }
+              const tmp = `${configFile}.tmp-${process.pid}`
+              writeFileSync(tmp, after, "utf8")
+              renameSync(tmp, configFile)
+              api.ui.toast({
+                variant: "success",
+                title: "Accounts",
+                message:
+                  next.length === 0
+                    ? "All accounts enabled."
+                    : `${next.length} of ${accounts.length} enabled.`,
+              })
+              setSnap(read())
+              open()
+            } catch (err) {
+              api.ui.toast({
+                variant: "error",
+                title: "Write failed",
+                message: err instanceof Error ? err.message : String(err),
+              })
+            }
+          }
+
+          accounts = loadAccounts()
+          open()
+        },
+      },
+      {
         name: "claude-auth.config",
         title: "Claude auth settings",
         category: "Claude Auth",
@@ -351,6 +431,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       { key: "<leader>a", cmd: "claude-auth.select", desc: "Claude account" },
       { key: "<leader>s", cmd: "claude-auth.stats", desc: "Claude usage" },
       { key: "<leader>c", cmd: "claude-auth.config", desc: "Claude settings" },
+      {
+        key: "<leader>A",
+        cmd: "claude-auth.accounts",
+        desc: "Claude accounts in use",
+      },
     ],
   })
 }

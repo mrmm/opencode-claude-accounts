@@ -60,6 +60,48 @@ export function shortLabel(label: string): string {
   return label.replace(/^Claude (Code|Team)\s*/i, "").trim() || label
 }
 
+/**
+ * "Team 3", when the label carries a number.
+ *
+ * Accounts are usually numbered by whoever set them up, and that number is what
+ * a person calls them. The rest of the label -- the vendor prefix, the
+ * organisation, the nickname -- is either shared by every account or too long
+ * for a sidebar column.
+ */
+export function teamName(label: string): string | null {
+  // The LAST number, because a label like "Claude Team - Acme 3 - Nickname"
+  // carries the vendor's word "Team" early and the meaningful index later.
+  const matches = label.match(/\d+/g)
+  if (!matches || matches.length === 0) return null
+  return `Team ${matches[matches.length - 1]}`
+}
+
+/**
+ * A display name per account, short where that is unambiguous.
+ *
+ * Naming is a function of the whole set rather than of one label, which is the
+ * only way a collision can be noticed at all: two accounts whose labels both
+ * end in 1 cannot both be "Team 1", so both keep their longer name instead of
+ * one silently shadowing the other.
+ */
+export function shortNames(accounts: ChipAccount[]): Map<string, string> {
+  const count = new Map<string, number>()
+  for (const a of accounts) {
+    const t = teamName(a.label)
+    if (t) count.set(t, (count.get(t) ?? 0) + 1)
+  }
+  const out = new Map<string, string>()
+  for (const a of accounts) {
+    const t = teamName(a.label)
+    const chosen = t && count.get(t) === 1 ? t : shortLabel(a.label)
+    // A label can shorten to nothing -- an empty one, or one that is only the
+    // vendor prefix. A blank row would be worse than a cryptic one, so the tail
+    // of the Keychain source stands in.
+    out.set(a.source, chosen || a.source.slice(-8))
+  }
+  return out
+}
+
 /** Whole percent, or undefined when nothing has been observed for that window. */
 function pct(v: number | undefined): number | undefined {
   return typeof v === "number" ? Math.round(v * 100) : undefined
@@ -109,7 +151,10 @@ export function mostRecentlyObserved(quota: QuotaCache): string | null {
  */
 export function formatChip(input: ChipInput): string {
   const active = input.accounts.find((a) => a.source === input.activeSource)
-  const name = active ? shortLabel(active.label) : "no account"
+  const name = active
+    ? (shortNames(input.accounts).get(active.source) ??
+      shortLabel(active.label))
+    : "no account"
   const { five, week, rejected } = utilisation(input.quota, input.activeSource)
 
   const load =
@@ -149,6 +194,7 @@ export function sidebarLines(input: ChipInput): {
       : "pinned"
 
   const total = Object.values(input.requests ?? {}).reduce((n, r) => n + r, 0)
+  const names = shortNames(input.accounts)
 
   const rows = input.accounts.map((a) => {
     const { five, week, rejected } = utilisation(input.quota, a.source)
@@ -164,7 +210,7 @@ export function sidebarLines(input: ChipInput): {
         : ""
 
     return {
-      name: shortLabel(a.label),
+      name: names.get(a.source) ?? shortLabel(a.label),
       detail: `${quota}${share}`,
       active: a.source === input.activeSource,
       rejected,
@@ -204,6 +250,7 @@ export function buildPickerOptions(input: {
     category: "Balancing",
   })
 
+  const pickerNames = shortNames(input.accounts)
   const accounts = input.accounts.map((a) => {
     const { five, week, rejected } = utilisation(input.quota, a.source)
     const load =
@@ -211,7 +258,7 @@ export function buildPickerOptions(input: {
         ? ""
         : ` [${five}%/${week ?? "-"}%${rejected ? " !" : ""}]`
     return mark(a.source, {
-      title: `${shortLabel(a.label)}${load}`,
+      title: `${pickerNames.get(a.source) ?? shortLabel(a.label)}${load}`,
       value: a.source,
       category: "Pin to one account",
     })
@@ -261,4 +308,71 @@ export function ago(at: number, now: number = Date.now()): string {
   if (s < 3600) return `${Math.round(s / 60)}m ago`
   if (s < 86400) return `${Math.round(s / 3600)}h ago`
   return `${Math.round(s / 86400)}d ago`
+}
+
+/**
+ * Which accounts the allow-list currently permits.
+ *
+ * `accounts: []` means every account, so an empty list has to be expanded
+ * before it can be reasoned about -- otherwise "is this one enabled" answers
+ * no for all of them while all of them are serving.
+ */
+export function enabledSources(
+  all: ChipAccount[],
+  allowList: string[],
+): string[] {
+  if (allowList.length === 0) return all.map((a) => a.source)
+  // An entry matching nothing is ignored rather than stranding the plugin, so
+  // the same is done here: the list is filtered against what actually exists.
+  const known = new Set(all.map((a) => a.source))
+  const kept = allowList.filter((s) => known.has(s))
+  return kept.length > 0 ? kept : all.map((a) => a.source)
+}
+
+/**
+ * The allow-list after including or excluding one account, or null to refuse.
+ *
+ * Refuses to remove the last one: an empty allow-list does not mean "no
+ * accounts", it means "all accounts", so disabling the final entry would
+ * silently re-enable everything -- the exact opposite of what was asked.
+ *
+ * Returns `[]` when everything ends up enabled, because that is how the config
+ * spells "all" and writing four entries that happen to be all of them would
+ * pin the set: an account added later would arrive disabled.
+ */
+export function toggleAccount(
+  all: ChipAccount[],
+  allowList: string[],
+  source: string,
+): string[] | null {
+  const enabled = new Set(enabledSources(all, allowList))
+  if (enabled.has(source)) {
+    if (enabled.size === 1) return null
+    enabled.delete(source)
+  } else {
+    enabled.add(source)
+  }
+  if (enabled.size === all.length) return []
+  // Preserve the configured order, which is preference order.
+  return all.map((a) => a.source).filter((s) => enabled.has(s))
+}
+
+/** Rows for the include/exclude dialog. */
+export function accountToggleRows(
+  all: ChipAccount[],
+  allowList: string[],
+  quota: QuotaCache,
+): PickerOption[] {
+  const enabled = new Set(enabledSources(all, allowList))
+  const names = shortNames(all)
+  return all.map((a) => {
+    const { five, week, rejected } = utilisation(quota, a.source)
+    const state = enabled.has(a.source) ? "[x]" : "[ ]"
+    const load = five === undefined ? "no reading" : `${five}%/${week ?? "-"}%`
+    return {
+      title: `${state} ${names.get(a.source) ?? a.source}`,
+      value: a.source,
+      description: `${rejected ? "refusing - " : ""}${load} - ${shortLabel(a.label)}`,
+    }
+  })
 }

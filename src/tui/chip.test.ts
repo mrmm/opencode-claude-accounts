@@ -5,7 +5,12 @@ import {
   buildPickerOptions,
   formatChip,
   shortLabel,
+  shortNames,
+  teamName,
+  accountToggleRows,
   ago,
+  enabledSources,
+  toggleAccount,
   sessionRows,
   shortModel,
   sidebarLines,
@@ -350,5 +355,112 @@ describe("ago / shortModel", () => {
   it("drops the prefix every model shares", () => {
     assert.equal(shortModel("claude-opus-5"), "opus-5")
     assert.equal(shortModel("gpt-4"), "gpt-4")
+  })
+})
+
+describe("teamName / shortNames", () => {
+  it("takes the last number, not the one in the vendor prefix", () => {
+    // "Claude Team - Acme 3 - Nickname": the word Team comes early, the index
+    // that identifies the account comes later.
+    assert.equal(teamName("Claude Team - Acme 3 - Scouting Legion"), "Team 3")
+    assert.equal(teamName("Claude Team 2: someone@example.com"), "Team 2")
+  })
+
+  it("answers null when there is no number to use", () => {
+    assert.equal(teamName("Claude Code credentials"), null)
+  })
+
+  it("names each account by its number when those are unique", () => {
+    const names = shortNames([
+      { source: "s1", label: "Claude Team - Acme 1 - Wings" },
+      { source: "s2", label: "Claude Team - Acme 2 - Survey" },
+      { source: "s3", label: "Claude Team - Acme 3 - Scouting" },
+    ])
+    assert.deepEqual(
+      [names.get("s1"), names.get("s2"), names.get("s3")],
+      ["Team 1", "Team 2", "Team 3"],
+    )
+  })
+
+  it("refuses to give two accounts the same short name", () => {
+    // Both end in 1. Calling both "Team 1" would make the sidebar lie about
+    // which account is serving, so both keep their distinguishing name.
+    const names = shortNames([
+      { source: "s1", label: "Claude Team 1: someone@example.com" },
+      { source: "s2", label: "Claude Team - Acme 1 - Wings of Freedom" },
+    ])
+    assert.notEqual(names.get("s1"), names.get("s2"))
+    assert.ok(!names.get("s2")!.startsWith("Team 1"))
+  })
+
+  it("falls back for an account with no number, leaving the others short", () => {
+    const names = shortNames([
+      { source: "s1", label: "Claude Code credentials" },
+      { source: "s2", label: "Claude Team - Acme 2 - Survey" },
+    ])
+    assert.equal(names.get("s1"), "credentials")
+    assert.equal(names.get("s2"), "Team 2")
+  })
+
+  it("gives every account a non-empty name", () => {
+    const names = shortNames([
+      { source: "s1", label: "" },
+      { source: "s2", label: "Team" },
+    ])
+    for (const v of names.values()) assert.ok(v.length > 0)
+  })
+})
+
+describe("account allow-list", () => {
+  const ALL: ChipAccount[] = [
+    { source: "s1", label: "Claude Team - Acme 1 - Wings" },
+    { source: "s2", label: "Claude Team - Acme 2 - Survey" },
+    { source: "s3", label: "Claude Team - Acme 3 - Scouting" },
+  ]
+
+  it("reads an empty list as every account, not none", () => {
+    assert.deepEqual(enabledSources(ALL, []), ["s1", "s2", "s3"])
+  })
+
+  it("ignores an entry for an account that no longer exists", () => {
+    assert.deepEqual(enabledSources(ALL, ["s2", "gone"]), ["s2"])
+  })
+
+  it("falls back to everything when the list matches nothing", () => {
+    // Mirrors the config's own rule: a stale list must not strand the plugin.
+    assert.deepEqual(enabledSources(ALL, ["gone"]), ["s1", "s2", "s3"])
+  })
+
+  it("excludes one account by listing the others", () => {
+    assert.deepEqual(toggleAccount(ALL, [], "s1"), ["s2", "s3"])
+  })
+
+  it("re-enabling everything writes the empty list, not all three", () => {
+    // [] is how the config spells "all". Writing the three explicitly would
+    // pin the set, so an account added later would arrive disabled.
+    assert.deepEqual(toggleAccount(ALL, ["s2", "s3"], "s1"), [])
+  })
+
+  it("refuses to disable the last one", () => {
+    // An empty allow-list means "all", so removing the final entry would
+    // silently re-enable everything -- the opposite of what was asked.
+    assert.equal(toggleAccount(ALL, ["s2"], "s2"), null)
+  })
+
+  it("keeps preference order rather than click order", () => {
+    assert.deepEqual(toggleAccount(ALL, ["s3"], "s1"), ["s1", "s3"])
+  })
+
+  it("marks each row with its state and short name", () => {
+    const rows = accountToggleRows(ALL, ["s2", "s3"], {} as QuotaCache)
+    assert.match(rows[0]!.title, /^\[ \] Team 1/)
+    assert.match(rows[1]!.title, /^\[x\] Team 2/)
+  })
+
+  it("says when an account is being refused, not just its quota", () => {
+    const rows = accountToggleRows(ALL, [], {
+      s1: q(1, 0.3, true),
+    } as QuotaCache)
+    assert.match(rows[0]!.description, /refusing/)
   })
 })

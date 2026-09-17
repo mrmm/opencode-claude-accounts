@@ -418,6 +418,10 @@ It adds two things:
 - `<leader>a`, or `/cc-account`, opening a picker of presets, Auto and accounts
 - `<leader>s`, or `/cc-stats`, listing the last 24h of traffic per session:
   requests, errors, how many accounts served it, which models, average latency
+- `<leader>A`, or `/cc-accounts`, including or excluding accounts. This writes
+  the `accounts` allow-list, where an empty list means "all" -- so disabling one
+  writes the others explicitly, re-enabling everything writes `[]` again, and
+  disabling the last one is refused rather than silently re-enabling all of them
 - `<leader>c`, or `/cc-config`, editing the settings that apply without a
   restart. Anything with a fixed vocabulary is chosen from a list; ratios and
   durations are typed and validated before the write. Keys that need a restart
