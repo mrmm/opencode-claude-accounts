@@ -417,7 +417,13 @@ It adds two things:
   windows, refreshed every few seconds
 - `<leader>a`, or `/cc-account`, opening a picker of presets, Auto and accounts
 - `<leader>s`, or `/cc-stats`, listing the last 24h of traffic per session:
-  requests, errors, how many accounts served it, which models, average latency
+  requests, errors, how many accounts served it, which models, average latency.
+  Selecting a session opens its detail -- rate, failures by status, slowest
+  request, per-account share, and how far each account's 5h window moved while
+  it ran. That last figure is an upper bound, not an attribution: the window is
+  shared with every other session. With `captureRequests` on it also reports
+  request size, split into system, tools and messages, so the fixed per-request
+  overhead is visible
 - `<leader>A`, or `/cc-accounts`, including or excluding accounts. This writes
   the `accounts` allow-list, where an empty list means "all" -- so disabling one
   writes the others explicitly, re-enabling everything writes `[]` again, and

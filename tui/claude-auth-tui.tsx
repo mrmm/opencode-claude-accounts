@@ -34,9 +34,11 @@ import {
   saveAccountSource,
 } from "../dist/credentials.js"
 import { readQuotaCache } from "../dist/balance/quota.js"
+import { readShapeFile } from "../dist/introspect.js"
 import {
   currentUsageIndex,
   readUsage,
+  sessionDetail,
   summarizeSessions,
 } from "../dist/balance/usage.js"
 import { candidatePaths, getConfig, resetConfigCache } from "../dist/config.js"
@@ -52,8 +54,11 @@ import {
   formatChip,
   mostRecentlyObserved,
   accountToggleRows,
+  contextSummary,
+  detailRows,
   enabledSources,
   sessionRows,
+  shortNames,
   sidebarLines,
   toggleAccount,
 } from "../dist/tui/chip.js"
@@ -250,29 +255,69 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         namespace: "palette",
         slashName: "cc-stats",
         run() {
-          // Read the log here rather than on the poll: this is a scan of the
-          // telemetry file, which is the one thing in this plugin too expensive
-          // to do every few seconds.
           const since = Date.now() - 24 * 60 * 60_000
-          const rows = sessionRows(summarizeSessions(readUsage(since)))
-          api.ui.dialog.replace(() => (
-            <api.ui.DialogSelect
-              title={`Usage by session, last 24h (${rows.length})`}
-              options={
-                rows.length > 0
-                  ? rows
-                  : [
-                      {
-                        title: "No requests recorded in the last 24h",
-                        value: "",
-                        description:
-                          "Sessions appear here once the plugin has served a request for them.",
-                      },
-                    ]
-              }
-              onSelect={() => api.ui.dialog.clear()}
-            />
-          ))
+          // Read once and reuse: this is the only file scan in the plugin, and
+          // the detail view would otherwise repeat it on every selection.
+          const events = readUsage(since)
+
+          const openList = () => {
+            const rows = sessionRows(summarizeSessions(events))
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={`Usage by session, last 24h (${rows.length})`}
+                options={
+                  rows.length > 0
+                    ? rows
+                    : [
+                        {
+                          title: "No requests recorded in the last 24h",
+                          value: "",
+                          description:
+                            "Sessions appear here once the plugin has served a request for them.",
+                        },
+                      ]
+                }
+                onSelect={(row) => {
+                  const id = String(row.value)
+                  if (id) openDetail(id)
+                }}
+              />
+            ))
+          }
+
+          const openDetail = (session: string) => {
+            const detail = sessionDetail(events, session)
+            if (!detail) return
+            // Context comes from the capture file, which is empty unless
+            // captureRequests is on. detailRows says so rather than showing an
+            // empty section.
+            let context = null
+            try {
+              context = contextSummary(
+                readShapeFile().filter(
+                  (sh: { sessionId: string | null }) =>
+                    sh.sessionId === session,
+                ),
+              )
+            } catch {
+              context = null
+            }
+            const rows = detailRows(detail, {
+              names: shortNames(accounts),
+              context,
+            })
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={`Session ${session.slice(-8)}`}
+                options={rows}
+                // Any row goes back: nothing here is selectable, and landing at
+                // the prompt after reading one number is not where you were.
+                onSelect={() => openList()}
+              />
+            ))
+          }
+
+          openList()
         },
       },
       {

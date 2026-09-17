@@ -8,6 +8,10 @@ import {
   shortNames,
   teamName,
   accountHealth,
+  approxTokens,
+  contextSummary,
+  detailRows,
+  fmtBytes,
   accountToggleRows,
   quotaText,
   SEP,
@@ -621,5 +625,157 @@ describe("accountHealth", () => {
         [false, "critical"],
       ],
     )
+  })
+})
+
+const DETAIL = {
+  session: "ses_abc",
+  requests: 10,
+  errors: 2,
+  byStatus: [
+    { status: 200, count: 8 },
+    { status: 429, count: 2 },
+  ],
+  byAccount: [
+    { account: "s1", requests: 7 },
+    { account: "s2", requests: 3 },
+  ],
+  byModel: [{ model: "claude-opus-5", requests: 10 }],
+  avg_ms: 2400,
+  max_ms: 9100,
+  first_at: 0,
+  last_at: 600_000,
+  quotaMoves: [{ account: "s1", from: 0.2, to: 0.35 }],
+}
+
+describe("fmtBytes / approxTokens", () => {
+  it("scales the unit", () => {
+    assert.equal(fmtBytes(512), "512 B")
+    assert.equal(fmtBytes(2048), "2 KB")
+    assert.equal(fmtBytes(2_097_152), "2.0 MB")
+  })
+
+  it("marks a token count as the estimate it is", () => {
+    // Four bytes per token is a rule of thumb that holds badly for code and
+    // JSON, which is most of a system prompt. The tilde is not decoration.
+    assert.match(approxTokens(40_000), /^~/)
+    assert.equal(approxTokens(40_000), "~10k tok")
+    assert.equal(approxTokens(400), "~100 tok")
+  })
+})
+
+const shape = (bytes: number) => ({
+  bytes,
+  systemBytes: 100,
+  toolBytes: 200,
+  messageBytes: bytes - 300,
+  cachedBytes: 50,
+})
+
+describe("contextSummary", () => {
+  it("answers null when nothing was captured", () => {
+    assert.equal(contextSummary([]), null)
+  })
+
+  it("averages rather than sums, since the question is request size", () => {
+    const c = contextSummary([shape(1000), shape(3000)])!
+    assert.equal(c.avgBytes, 2000)
+    assert.equal(c.maxBytes, 3000)
+    assert.equal(c.systemBytes, 100, "system is per-request, not cumulative")
+    assert.equal(c.captured, 2)
+  })
+})
+
+describe("detailRows", () => {
+  it("groups the report into sections", () => {
+    const sections = [
+      ...new Set(detailRows(DETAIL, { now: 600_000 }).map((r) => r.category)),
+    ]
+    assert.deepEqual(sections, [
+      "Traffic",
+      "Accounts",
+      "Models",
+      "Quota (5h)",
+      "Context",
+    ])
+  })
+
+  it("reports rate as well as count", () => {
+    const rows = detailRows(DETAIL, { now: 600_000 })
+    const traffic = rows.find((r) => r.title === "10 requests")!
+    assert.match(traffic.description, /10m/)
+    assert.match(traffic.description, /1\.0\/min/)
+  })
+
+  it("breaks failures down by status instead of just counting them", () => {
+    const rows = detailRows(DETAIL, { now: 600_000 })
+    assert.match(
+      rows.find((r) => r.title === "2 failed")!.description,
+      /2x 429/,
+    )
+  })
+
+  it("says nothing about failures when there were none", () => {
+    const rows = detailRows({ ...DETAIL, errors: 0 }, { now: 600_000 })
+    assert.ok(!rows.some((r) => r.title.includes("failed")))
+  })
+
+  it("reports the slowest request, not only the average", () => {
+    const rows = detailRows(DETAIL, { now: 600_000 })
+    assert.match(
+      rows.find((r) => r.title.startsWith("avg"))!.description,
+      /9\.1s/,
+    )
+  })
+
+  it("uses the short account names the rest of the UI uses", () => {
+    const names = new Map([["s1", "Team 1"]])
+    const rows = detailRows(DETAIL, { names, now: 600_000 })
+    assert.ok(
+      rows.some((r) => r.title === "Team 1" && r.category === "Accounts"),
+    )
+  })
+
+  it("states that quota movement is shared, not attributed", () => {
+    // The 5h window is consumed by every session at once, so this is an upper
+    // bound. Presenting it as this session's cost would be a lie.
+    const row = detailRows(DETAIL, { now: 600_000 }).find(
+      (r) => r.category === "Quota (5h)",
+    )!
+    assert.match(row.title, /20% -> 35%/)
+    assert.match(row.description, /shared/)
+  })
+
+  it("explains how to get context rather than showing a blank section", () => {
+    const row = detailRows(DETAIL, { now: 600_000 }).find(
+      (r) => r.category === "Context",
+    )!
+    assert.match(row.title, /not recorded/)
+    assert.match(row.description, /captureRequests/)
+  })
+
+  it("reports context when it was captured, marking the fixed overhead", () => {
+    const context = contextSummary([
+      {
+        bytes: 40_000,
+        systemBytes: 8_000,
+        toolBytes: 12_000,
+        messageBytes: 20_000,
+        cachedBytes: 6_000,
+      },
+    ])
+    const rows = detailRows(DETAIL, { context, now: 600_000 }).filter(
+      (r) => r.category === "Context",
+    )
+    assert.match(rows[0]!.title, /avg 39 KB/)
+    assert.ok(
+      rows.some(
+        (r) =>
+          r.title.startsWith("system") &&
+          r.description.includes("every request"),
+      ),
+      "system cost is paid per request and must say so",
+    )
+    assert.ok(rows.some((r) => r.title.startsWith("cached")))
   })
 })

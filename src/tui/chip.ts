@@ -10,7 +10,11 @@
  * a different process and shares state with it only through the selection file
  * and the quota cache on disk.
  */
-import type { QuotaCache, SessionUsage } from "../balance/index.ts"
+import type {
+  QuotaCache,
+  SessionDetail,
+  SessionUsage,
+} from "../balance/index.ts"
 
 export type ChipAccount = { source: string; label: string }
 
@@ -461,4 +465,163 @@ export function accountToggleRows(
       description: `${load}${SEP}${shortLabel(a.label)}`,
     }
   })
+}
+
+/** Bytes, at the precision a reader can act on. */
+export function fmtBytes(n: number): string {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`
+  return `${n} B`
+}
+
+/**
+ * A rough token count from a byte count.
+ *
+ * Four bytes per token is the usual rule of thumb for English prose and holds
+ * badly for code, JSON and non-Latin scripts -- which is most of what a system
+ * prompt contains. It is marked "~" everywhere it is shown and is here because
+ * a reader thinks in tokens; anyone needing the real number should read the
+ * response usage, which this plugin does not record.
+ */
+export function approxTokens(bytes: number): string {
+  const t = Math.round(bytes / 4)
+  return t >= 1000 ? `~${Math.round(t / 1000)}k tok` : `~${t} tok`
+}
+
+/** What the capture file says about one session's prompts. */
+export type ContextSummary = {
+  captured: number
+  avgBytes: number
+  maxBytes: number
+  systemBytes: number
+  toolBytes: number
+  messageBytes: number
+  cachedBytes: number
+}
+
+export function contextSummary(
+  shapes: {
+    bytes: number
+    systemBytes: number
+    toolBytes: number
+    messageBytes: number
+    cachedBytes: number
+  }[],
+): ContextSummary | null {
+  if (shapes.length === 0) return null
+  const sum = (pick: (s: (typeof shapes)[number]) => number) =>
+    shapes.reduce((n, sh) => n + pick(sh), 0)
+  return {
+    captured: shapes.length,
+    avgBytes: Math.round(sum((sh) => sh.bytes) / shapes.length),
+    maxBytes: Math.max(...shapes.map((sh) => sh.bytes)),
+    // Averaged, not summed: the question is how big a request is, not how many
+    // bytes crossed the wire in total.
+    systemBytes: Math.round(sum((sh) => sh.systemBytes) / shapes.length),
+    toolBytes: Math.round(sum((sh) => sh.toolBytes) / shapes.length),
+    messageBytes: Math.round(sum((sh) => sh.messageBytes) / shapes.length),
+    cachedBytes: Math.round(sum((sh) => sh.cachedBytes) / shapes.length),
+  }
+}
+
+/**
+ * The drill-down for one session, grouped.
+ *
+ * Rows are inert: this is a report rendered in a picker because a picker brings
+ * scrolling and filtering, not because anything here is selectable.
+ */
+export function detailRows(
+  d: SessionDetail,
+  opts: {
+    names?: Map<string, string>
+    context?: ContextSummary | null
+    now?: number
+  } = {},
+): PickerOption[] {
+  const now = opts.now ?? Date.now()
+  const name = (source: string) => opts.names?.get(source) ?? shortLabel(source)
+  const rows: PickerOption[] = []
+  const add = (category: string, title: string, description: string) =>
+    rows.push({ title, value: `${category}:${title}`, description, category })
+
+  const mins = Math.max(1, Math.round((d.last_at - d.first_at) / 60_000))
+  add(
+    "Traffic",
+    `${d.requests} requests`,
+    `over ${mins}m${SEP}${(d.requests / mins).toFixed(1)}/min${SEP}last ${ago(d.last_at, now)}`,
+  )
+  if (d.errors > 0) {
+    add(
+      "Traffic",
+      `${d.errors} failed`,
+      d.byStatus
+        .filter((r) => r.status >= 400)
+        .map((r) => `${r.count}x ${r.status}`)
+        .join(SEP),
+    )
+  }
+  add(
+    "Traffic",
+    `avg ${(d.avg_ms / 1000).toFixed(1)}s`,
+    `slowest ${(d.max_ms / 1000).toFixed(1)}s`,
+  )
+
+  for (const a of d.byAccount) {
+    const share = Math.round((a.requests / d.requests) * 100)
+    add("Accounts", name(a.account), `${a.requests} requests${SEP}${share}%`)
+  }
+  for (const m of d.byModel) {
+    add("Models", shortModel(m.model), `${m.requests} requests`)
+  }
+
+  for (const q of d.quotaMoves) {
+    const from = Math.round(q.from * 100)
+    const to = Math.round(q.to * 100)
+    add(
+      "Quota (5h)",
+      `${name(q.account)}: ${from}% -> ${to}%`,
+      // Said plainly: the window is shared, so this is an upper bound on what
+      // this session did, never an attribution.
+      `moved ${to - from > 0 ? "+" : ""}${to - from} points while this session ran${SEP}shared with other traffic`,
+    )
+  }
+
+  const c = opts.context
+  if (c) {
+    add(
+      "Context",
+      `avg ${fmtBytes(c.avgBytes)}`,
+      `${approxTokens(c.avgBytes)}${SEP}largest ${fmtBytes(c.maxBytes)}${SEP}from ${c.captured} captured`,
+    )
+    add(
+      "Context",
+      `system ${fmtBytes(c.systemBytes)}`,
+      `${approxTokens(c.systemBytes)}${SEP}paid on every request`,
+    )
+    add(
+      "Context",
+      `tools ${fmtBytes(c.toolBytes)}`,
+      `${approxTokens(c.toolBytes)}${SEP}paid on every request`,
+    )
+    add(
+      "Context",
+      `messages ${fmtBytes(c.messageBytes)}`,
+      approxTokens(c.messageBytes),
+    )
+    if (c.cachedBytes > 0) {
+      add(
+        "Context",
+        `cached ${fmtBytes(c.cachedBytes)}`,
+        `${Math.round((c.cachedBytes / Math.max(1, c.avgBytes)) * 100)}% of an average request`,
+      )
+    }
+  } else {
+    add(
+      "Context",
+      "not recorded",
+      `set captureRequests to shape or full, then reopen${SEP}nothing is captured by default`,
+    )
+  }
+
+  return rows
 }
