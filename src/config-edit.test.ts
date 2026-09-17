@@ -413,3 +413,62 @@ describe("validateValue is stricter than the config parsers", () => {
     assert.equal(validateValue(duration, "0.95").ok, false)
   })
 })
+
+describe("setJsoncValue with structured values", () => {
+  // The bug this exists for: the value's depth was compared against, and for an
+  // array that is also the depth of the commas between its elements. The value
+  // was cut at the first of them, the rest of the array was orphaned, no
+  // terminator matched afterwards, and the write ran to end of file -- deleting
+  // every setting below it. Scalars were unaffected, so nothing caught it.
+  const file = `{
+  "accounts": ["a", "b", "c"],
+  "strategy": "sticky",
+  "presets": {
+    "rr-12": { "accounts": ["a", "b"] }
+  },
+  "configReloadInterval": "3s"
+}
+`
+  const strip2 = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
+
+  it("replaces an array without truncating it at its first comma", () => {
+    const out = setJsoncValue(file, "accounts", '["x","y"]')!
+    const parsed = JSON.parse(strip2(out))
+    assert.deepEqual(parsed.accounts, ["x", "y"])
+  })
+
+  it("leaves every later key intact", () => {
+    // The corruption swallowed the rest of the document.
+    const out = setJsoncValue(file, "accounts", '["x"]')!
+    const parsed = JSON.parse(strip2(out))
+    assert.equal(parsed.strategy, "sticky")
+    assert.equal(parsed.configReloadInterval, "3s")
+    assert.deepEqual(parsed.presets["rr-12"].accounts, ["a", "b"])
+  })
+
+  it("survives being applied repeatedly, which is how it was found", () => {
+    // The first write inserted the key and worked; the second replaced it and
+    // destroyed the file. Anything less than two passes would have missed it.
+    let out = file
+    for (const v of ['["a"]', '["a","b"]', "[]", '["c"]']) {
+      out = setJsoncValue(out, "accounts", v)!
+      assert.ok(out, `write of ${v} was refused`)
+      const parsed = JSON.parse(strip2(out))
+      assert.deepEqual(parsed.accounts, JSON.parse(v))
+      assert.equal(parsed.strategy, "sticky", `lost strategy after ${v}`)
+    }
+  })
+
+  it("replaces a nested object value whole", () => {
+    const out = setJsoncValue(file, "presets", '{"solo":{"accounts":["a"]}}')!
+    const parsed = JSON.parse(strip2(out))
+    assert.deepEqual(Object.keys(parsed.presets), ["solo"])
+    assert.equal(parsed.configReloadInterval, "3s")
+  })
+
+  it("refuses rather than writing to the end of an unterminated document", () => {
+    // Refusing loses an edit. Not refusing lost the file.
+    assert.equal(setJsoncValue('{\n  "accounts": ["a"', "accounts", "[]"), null)
+  })
+})

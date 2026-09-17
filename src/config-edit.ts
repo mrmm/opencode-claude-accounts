@@ -332,21 +332,32 @@ export function setJsoncValue(
     j++
     while (j < text.length && /\s/.test(text[j]!)) j++
 
-    // The value runs to the next comma at this depth, or to the brace that
-    // closes the object holding it. depthAt records the depth *after* the
-    // character, so a closing brace reads one shallower than its contents --
-    // which is why the last member, the one with no trailing comma, needs the
-    // second test rather than the first.
+    // The value ends at the next comma belonging to the OBJECT that holds it,
+    // or at that object's closing brace.
+    //
+    // The depth to compare against is the key's, not the value's. Taking it at
+    // the value read 2 for an array, which is also the depth of the commas
+    // *between its elements* -- so `"accounts": ["a","b","c"]` was truncated at
+    // the comma after "a", leaving the rest of the array orphaned and, because
+    // no terminator then matched, swallowing the remainder of the file. Scalars
+    // were unaffected, which is why every earlier test passed.
+    //
+    // depthAt records the depth after each character, so a closing brace reads
+    // one shallower than its contents: that is why the second test subtracts.
     let end = j
-    const valueDepth = depthAt[j] ?? 1
+    const keyDepth = depthAt[i] ?? 1
     while (end < text.length) {
       const c = text[end]!
       if (codeAt[end]) {
-        if (c === "," && depthAt[end] === valueDepth) break
-        if (c === "}" && depthAt[end] === valueDepth - 1) break
+        if (c === "," && depthAt[end] === keyDepth) break
+        if (c === "}" && depthAt[end] === keyDepth - 1) break
       }
       end++
     }
+    // A key that never terminates means the scan misread the document. Refusing
+    // is the only safe answer: the alternative is what just happened -- writing
+    // from here to EOF and destroying everything after it.
+    if (end >= text.length) return null
     while (end > j && /\s/.test(text[end - 1]!)) end--
 
     return text.slice(0, j) + literal + text.slice(end)
