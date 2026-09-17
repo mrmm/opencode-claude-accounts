@@ -7,6 +7,7 @@ import {
   shortLabel,
   shortNames,
   teamName,
+  accountHealth,
   accountToggleRows,
   quotaText,
   SEP,
@@ -538,5 +539,87 @@ describe("display vocabulary", () => {
     for (const value of ["haiku-4-5", "rr-123", "Wings of Freedom"]) {
       assert.ok(!value.includes(SEP.trim()), `${value} contains the separator`)
     }
+  })
+})
+
+describe("accountHealth", () => {
+  const TH = { warnAt: 0.9, weeklyWarnAt: 0.85 }
+
+  it("is unknown when nothing has been observed", () => {
+    assert.equal(accountHealth({} as QuotaCache, "s1", TH), "unknown")
+  })
+
+  it("is ok well below the thresholds", () => {
+    assert.equal(
+      accountHealth({ s1: q(0.2, 0.3) } as QuotaCache, "s1", TH),
+      "ok",
+    )
+  })
+
+  it("warns from the configured threshold, not a number of its own", () => {
+    // The colouring has to agree with the figure the plugin would warn about,
+    // or the sidebar is a second opinion that quietly disagrees with the toast.
+    assert.equal(
+      accountHealth({ s1: q(0.89, 0.1) } as QuotaCache, "s1", TH),
+      "ok",
+    )
+    assert.equal(
+      accountHealth({ s1: q(0.9, 0.1) } as QuotaCache, "s1", TH),
+      "warn",
+    )
+    assert.equal(
+      accountHealth({ s1: q(0.89, 0.1) } as QuotaCache, "s1", {
+        warnAt: 0.5,
+        weeklyWarnAt: 0.85,
+      }),
+      "warn",
+      "a lower configured threshold must colour sooner",
+    )
+  })
+
+  it("warns on the weekly window too, not only the 5h one", () => {
+    assert.equal(
+      accountHealth({ s1: q(0.1, 0.9) } as QuotaCache, "s1", TH),
+      "warn",
+    )
+  })
+
+  it("is critical at the window itself, not merely past the warning line", () => {
+    assert.equal(
+      accountHealth({ s1: q(1, 0.1) } as QuotaCache, "s1", TH),
+      "critical",
+    )
+    assert.equal(
+      accountHealth({ s1: q(1.04, 0.5) } as QuotaCache, "s1", TH),
+      "critical",
+    )
+  })
+
+  it("treats being refused as critical whatever the numbers say", () => {
+    // Refused outranks any reading: requests are failing right now.
+    assert.equal(
+      accountHealth({ s1: q(0.1, 0.1, true) } as QuotaCache, "s1", TH),
+      "critical",
+    )
+  })
+
+  it("gives the sidebar a health per row, distinct from which one is serving", () => {
+    // The old rendering coloured by "is it serving", so a healthy idle account
+    // and an exhausted idle account looked the same -- the one comparison this
+    // list exists to support.
+    const { rows } = sidebarLines({
+      accounts: ACCOUNTS,
+      quota: { s1: q(0.2, 0.2), s2: q(1.04, 0.9, true) } as QuotaCache,
+      selection: "__auto__",
+      activeSource: "s1",
+      thresholds: TH,
+    })
+    assert.deepEqual(
+      rows.map((r) => [r.active, r.health]),
+      [
+        [true, "ok"],
+        [false, "critical"],
+      ],
+    )
   })
 })

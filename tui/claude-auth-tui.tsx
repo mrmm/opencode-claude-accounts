@@ -117,6 +117,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       return accounts.filter((a) => allowed.has(a.source))
     })()
 
+  /**
+   * Hue means load, and only load.
+   *
+   * "unknown" is muted rather than green: no reading is not good news, it is
+   * an absence of news, and colouring it as healthy would claim something the
+   * plugin does not know.
+   */
+  const healthColour = (h: "unknown" | "ok" | "warn" | "critical") =>
+    h === "critical"
+      ? api.theme.current.error
+      : h === "warn"
+        ? api.theme.current.warning
+        : h === "ok"
+          ? api.theme.current.success
+          : api.theme.current.textMuted
+
   const [snap, setSnap] = createSignal(read())
   const timer = setInterval(() => setSnap(read()), POLL_MS)
   onCleanup(() => clearInterval(timer))
@@ -145,6 +161,10 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           sidebarLines({
             accounts: visible(),
             hiddenCount: accounts.length - visible().length,
+            thresholds: {
+              warnAt: getConfig().quotaWarnAt,
+              weeklyWarnAt: getConfig().quotaWeeklyWarnAt,
+            },
             ...snap(),
           })
         return (
@@ -159,27 +179,21 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             <For each={view().rows}>
               {(row) => (
                 <box flexDirection="row" gap={1}>
-                  <text
-                    flexShrink={0}
-                    style={{
-                      fg: row.rejected
-                        ? api.theme.current.error
-                        : row.active
-                          ? api.theme.current.success
-                          : api.theme.current.textMuted,
-                    }}
-                  >
-                    {row.active ? "*" : "\u00b7"}
+                  <text flexShrink={0} style={{ fg: healthColour(row.health) }}>
+                    {row.active ? "\u25cf" : "\u00b7"}
                   </text>
                   <text
                     style={{
+                      // Brightness says which account is serving; hue says how
+                      // it is doing. Two facts, two channels -- the previous
+                      // rendering put both on hue and could show neither.
                       fg: row.active
                         ? api.theme.current.text
                         : api.theme.current.textMuted,
                     }}
                   >
                     {row.name}
-                    <span style={{ fg: api.theme.current.textMuted }}>
+                    <span style={{ fg: healthColour(row.health) }}>
                       {"  "}
                       {row.detail}
                     </span>
@@ -434,7 +448,10 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                         return
                       }
                       write(key, checked.literal)
-                      api.ui.dialog.clear()
+                      // Back to the list, not out to the prompt: changing one
+                      // setting is rarely the whole errand, and dialog.clear()
+                      // drops the entire stack.
+                      openList()
                     }}
                     onCancel={() => openList()}
                   />
@@ -450,7 +467,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 onSelect={(choice) => {
                   const checked = validateValue(meta, String(choice.value))
                   if (checked.ok) write(key, checked.literal)
-                  api.ui.dialog.clear()
+                  openList()
                 }}
               />
             ))

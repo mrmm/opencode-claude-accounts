@@ -26,6 +26,11 @@ export type ChipInput = {
    */
   requests?: Record<string, number>
   /**
+   * Warning thresholds, so the colouring matches the numbers the plugin would
+   * warn about rather than a second opinion invented for the sidebar.
+   */
+  thresholds?: { warnAt: number; weeklyWarnAt: number }
+  /**
    * Accounts excluded by the allow-list and therefore not listed.
    *
    * Reported rather than ignored: an account silently missing from a list of
@@ -103,6 +108,38 @@ export function quotaText(
   // not, and this is the one state that means requests are failing right now.
   if (rejected) parts.unshift("refused")
   return parts.join(SEP)
+}
+
+/**
+ * How an account is doing, as one of four states.
+ *
+ * Colour carries this and nothing else. The previous rendering used colour for
+ * two unrelated facts at once -- red for refusing, green for serving, muted for
+ * everything else -- so a healthy idle account and an exhausted idle account
+ * were the same colour, which is the one comparison a list of accounts exists
+ * to make. Which account is serving is now a marker and a brightness; hue is
+ * free to mean load.
+ */
+export type Health = "unknown" | "ok" | "warn" | "critical"
+
+export function accountHealth(
+  quota: QuotaCache,
+  source: string | null,
+  thresholds: { warnAt: number; weeklyWarnAt: number },
+): Health {
+  const { five, week, rejected } = utilisation(quota, source)
+  // Being refused outranks any reading: requests are failing right now.
+  if (rejected) return "critical"
+  if (five === undefined && week === undefined) return "unknown"
+  // At or past the window itself, not merely past the warning line.
+  if ((five ?? 0) >= 100 || (week ?? 0) >= 100) return "critical"
+  if (
+    (five ?? 0) >= Math.round(thresholds.warnAt * 100) ||
+    (week ?? 0) >= Math.round(thresholds.weeklyWarnAt * 100)
+  ) {
+    return "warn"
+  }
+  return "ok"
 }
 
 /**
@@ -227,7 +264,7 @@ export function sidebarLines(input: ChipInput): {
     name: string
     detail: string
     active: boolean
-    rejected: boolean
+    health: Health
   }[]
 } {
   const mode = input.selection.startsWith(PRESET)
@@ -243,9 +280,11 @@ export function sidebarLines(input: ChipInput): {
 
   const rows = input.accounts.map((a) => {
     const quota = quotaText(input.quota, a.source)
-    // Still needed as a flag, not as text: the caller colours the row with it,
-    // while quotaText says it in words.
-    const { rejected } = utilisation(input.quota, a.source)
+    const health = accountHealth(
+      input.quota,
+      a.source,
+      input.thresholds ?? { warnAt: 0.9, weeklyWarnAt: 0.85 },
+    )
 
     // Share of requests, not of quota: it answers "is the balancer actually
     // spreading load", which the quota percentages do not -- two accounts can
@@ -260,7 +299,7 @@ export function sidebarLines(input: ChipInput): {
       name: names.get(a.source) ?? shortLabel(a.label),
       detail: `${quota}${share}`,
       active: a.source === input.activeSource,
-      rejected,
+      health,
     }
   })
 
