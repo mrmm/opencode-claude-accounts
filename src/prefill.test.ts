@@ -32,24 +32,36 @@ describe("isPrefillError", () => {
 })
 
 describe("stripTrailingAssistant", () => {
+  it("reports how many turns it dropped", () => {
+    assert.equal(
+      stripTrailingAssistant(body(["user", "assistant"]))!.dropped,
+      1,
+    )
+  })
+
   it("drops the trailing assistant turn", () => {
     const out = stripTrailingAssistant(
       body(["user", "assistant", "user", "assistant"]),
     )
-    const roles = JSON.parse(out!).messages.map((m: { role: string }) => m.role)
+    const roles = JSON.parse(out!.body).messages.map(
+      (m: { role: string }) => m.role,
+    )
     assert.deepEqual(roles, ["user", "assistant", "user"])
   })
 
   it("drops a run of trailing assistant turns, not just one", () => {
     const out = stripTrailingAssistant(body(["user", "assistant", "assistant"]))
     assert.deepEqual(
-      JSON.parse(out!).messages.map((m: { role: string }) => m.role),
+      JSON.parse(out!.body).messages.map((m: { role: string }) => m.role),
       ["user"],
     )
+    assert.equal(out!.dropped, 2, "the count is what makes the log actionable")
   })
 
   it("preserves every other field of the request", () => {
-    const out = JSON.parse(stripTrailingAssistant(body(["user", "assistant"]))!)
+    const out = JSON.parse(
+      stripTrailingAssistant(body(["user", "assistant"]))!.body,
+    )
     assert.equal(out.model, "claude-opus-5")
     assert.equal(out.max_tokens, 100)
   })

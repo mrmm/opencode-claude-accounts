@@ -210,6 +210,13 @@ export function noticeToToast(
       }
     }
 
+    case "prefill-recovered":
+      return {
+        variant: "warning",
+        title: "Prefill not supported",
+        message: `${notice.model} refused the trailing assistant turn. Dropped ${notice.dropped} and retried.`,
+      }
+
     case "selection-changed":
       // Always shown. The provider name in the status line is written once at
       // config load and cannot be rewritten mid-session, so without this a
@@ -271,6 +278,8 @@ export function noticeKey(notice: Notice): string {
       return `failed:${notice.source}`
     case "account-switched":
       return `switched:${notice.failedSource}->${notice.usedSource}`
+    case "prefill-recovered":
+      return `prefill-recovered:${notice.model}`
     case "selection-changed":
       // Keyed on the selection, so each distinct change speaks even if another
       // came minutes earlier; the cooldown only suppresses the identical one.

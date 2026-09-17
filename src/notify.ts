@@ -71,6 +71,18 @@ export type Notice =
     }
   | {
       /**
+       * A model refused an assistant prefill and the plugin recovered by
+       * dropping the trailing turn. Worth surfacing for the same reason as a
+       * silent account switch: the request that succeeded is not the request
+       * that was sent, and nothing else in the session says so.
+       */
+      kind: "prefill-recovered"
+      model: string
+      /** Assistant turns dropped to make the request acceptable. */
+      dropped: number
+    }
+  | {
+      /**
        * The selection changed — a different preset, Auto, or a pinned account.
        * Distinct from account-rotated, which reports the balancer moving within
        * an arrangement; this is the arrangement itself being swapped.

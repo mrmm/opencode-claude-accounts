@@ -386,6 +386,19 @@ turn the model was being asked to continue is dropped. On a model that refuses
 prefill that turn cannot be sent at all, so the choice is between losing it and
 a session that cannot proceed.
 
+Every outcome is logged, because the request that succeeded is not the request
+the session composed and nothing else says so:
+
+| event                   | level | meaning                                                                          |
+| ----------------------- | ----- | -------------------------------------------------------------------------------- |
+| `prefill_detected`      | warn  | the 400 was seen and matched                                                     |
+| `prefill_recovered`     | warn  | retried without the trailing turn and it worked; carries `droppedAssistantTurns` |
+| `prefill_retry_failed`  | error | retried and the model still refused; carries the new status                      |
+| `prefill_retry_skipped` | error | nothing safe to strip, with the reason                                           |
+
+A recovery also raises a toast, for the same reason a silent account switch
+does: it changes what was sent.
+
 It refuses to act when there is nothing safe to do: a body it cannot parse, one
 that does not actually end with an assistant turn, or one that is _only_
 assistant turns, where stripping would send an empty conversation and trade a

@@ -29,7 +29,7 @@ import crypto from "node:crypto"
 import { config } from "./model-config.ts"
 import { readAllClaudeAccounts, type ClaudeAccount } from "./keychain.ts"
 import { initLogger, log } from "./logger.ts"
-import { setNoticeSink } from "./notify.ts"
+import { emitNotice, setNoticeSink } from "./notify.ts"
 import { getConfig, primeConfig } from "./config.ts"
 import {
   addExcludedBeta,
@@ -925,14 +925,19 @@ const plugin: PluginWithOptions = async (
               const cloned = response.clone()
               const errorBody = await cloned.text()
               if (isPrefillError(errorBody)) {
+                // Loud on purpose. This rewrites the request before it is sent
+                // again, so the conversation the model answered is not the one
+                // the session composed -- that must never be inferable only
+                // from a 400 that stopped appearing.
+                log("prefill_detected", { level: "warn", modelId, status: 400 })
                 const trimmed =
                   typeof body === "string" ? stripTrailingAssistant(body) : null
                 if (trimmed) {
-                  log("prefill_retry", { modelId })
                   const creds = getCachedCredentials()
+                  const before = Date.now()
                   response = await fetchWithRetry(requestUrl, {
                     ...requestInit,
-                    body: trimmed,
+                    body: trimmed.body,
                     headers: buildRequestHeaders(
                       input,
                       requestInit,
@@ -941,10 +946,36 @@ const plugin: PluginWithOptions = async (
                       getExcludedBetas(modelId),
                     ),
                   })
+                  const recovered = response.status < 400
+                  log(
+                    recovered ? "prefill_recovered" : "prefill_retry_failed",
+                    {
+                      level: recovered ? "warn" : "error",
+                      modelId,
+                      droppedAssistantTurns: trimmed.dropped,
+                      status: response.status,
+                      durationMs: Date.now() - before,
+                    },
+                  )
+                  if (recovered) {
+                    emitNotice({
+                      kind: "prefill-recovered",
+                      model: modelId,
+                      dropped: trimmed.dropped,
+                    })
+                  }
                 } else {
-                  // Nothing safe to strip: say so, rather than leaving a bare
-                  // 400 that looks like the retry silently did nothing.
-                  log("prefill_retry_skipped", { modelId })
+                  // Nothing safe to strip. Said out loud with the reason, so
+                  // this does not read as the retry having silently done
+                  // nothing.
+                  log("prefill_retry_skipped", {
+                    level: "error",
+                    modelId,
+                    reason:
+                      typeof body === "string"
+                        ? "no trailing assistant turn to drop, or dropping would empty the conversation"
+                        : "request body was not a string",
+                  })
                 }
               }
             }

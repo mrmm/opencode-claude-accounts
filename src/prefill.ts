@@ -24,15 +24,21 @@ export function isPrefillError(responseBody: string): boolean {
 type Message = { role?: unknown }
 
 /**
- * The same body with trailing assistant messages removed, or null when there is
- * nothing safe to do.
+ * The same body with trailing assistant messages removed, plus how many were
+ * dropped -- or null when there is nothing safe to do.
+ *
+ * The count is returned rather than recomputed by the caller because it is the
+ * one number that makes the log entry actionable: "recovered" says the session
+ * continued, "dropped 1" says what it cost.
  *
  * Returns null -- rather than a mangled body -- when the payload will not parse,
  * carries no message array, does not actually end with an assistant turn, or
  * consists only of assistant turns. The last case matters: stripping it would
  * send an empty conversation, trading a clear 400 for a confusing one.
  */
-export function stripTrailingAssistant(body: string): string | null {
+export function stripTrailingAssistant(
+  body: string,
+): { body: string; dropped: number } | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(body)
@@ -52,5 +58,8 @@ export function stripTrailingAssistant(body: string): string | null {
   while (end > 0 && messages[end - 1]?.role === "assistant") end--
   if (end === 0) return null
 
-  return JSON.stringify({ ...payload, messages: messages.slice(0, end) })
+  return {
+    body: JSON.stringify({ ...payload, messages: messages.slice(0, end) }),
+    dropped: messages.length - end,
+  }
 }
