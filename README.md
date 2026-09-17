@@ -855,10 +855,63 @@ export ANTHROPIC_CLI_VERSION=2.2.0
 - If credentials aren't OAuth-based, the auth loader returns `{}` and falls through to API key auth
 - If credentials are unavailable or unreadable, the plugin disables itself and OpenCode continues without Claude auth
 
+## Credits and lineage
+
+This is a fork, and most of what it is rests on other people's work.
+
+**[griffinmartin/opencode-claude-auth](https://github.com/griffinmartin/opencode-claude-auth)**
+by **Griffin Martin** is the original and the upstream. It is where the idea and
+the whole credential path come from: reading Claude Code's own OAuth tokens out
+of the Keychain, refreshing them, and presenting them to OpenCode as a provider.
+MIT licensed, actively maintained, and the reason this plugin exists at all.
+
+This fork inherits **153 commits** from it and adds **86**. It currently sits
+**25 commits behind** upstream, and the fork link on GitHub is kept deliberately
+so those can still be pulled and anything generally useful can go back.
+
+**[robbash/opencode-claude-auth](https://github.com/robbash/opencode-claude-auth)**
+by **Robert Sternberg** contributed the piece this fork leans on hardest: reading
+the Keychain *comment* for an entry, via `security dump-keychain`, so an account
+has a name a person recognises instead of a hex suffix. Everything here that
+talks about "Team 2" or resolves a preset reference like `"Acme 1"` is standing
+on that. It survives in `src/keychain.ts` and was explicitly preserved across an
+upstream merge.
+
+The inherited history carries commits from:
+
+- Griffin Martin
+- Minzi ✨
+- 이주형 JhinLee
+- Ehsanur Rahman Rhythm
+- Finn Kumkar
+- FranzCh
+- Hristo Karamanliev
+- JaeHyeonKim
+- Kieran Bond
+- Kunaldeep Singh
+- Nandana Dileep
+- Robert Sternberg
+- SeaL773
+- Xuan Guo
+
+...along with several contributors whose commits carry only a handle.
+
+### What this fork added
+
+Multi-account load balancing with eight strategies, pools and named presets;
+per-session account binding; quota tracking from the rate-limit headers; usage
+telemetry and reporting; request introspection for understanding prompt cost;
+recovery from assistant-prefill refusals; and a TUI plugin for seeing and
+changing all of it without leaving OpenCode.
+
+None of that would have been worth building without a credential layer that
+already worked.
+
 ## Disclaimer
 
 This plugin uses Claude Code's OAuth credentials to authenticate with Anthropic's API. Anthropic's Terms of Service state that Claude Pro/Max subscription tokens should only be used with official Anthropic clients. This plugin exists as a community workaround and may stop working if Anthropic changes their OAuth infrastructure. Use at your own discretion.
 
 ## License
 
-MIT
+MIT, and the copyright notice in `LICENSE` is upstream's, unchanged. See
+[Credits and lineage](#credits-and-lineage).
