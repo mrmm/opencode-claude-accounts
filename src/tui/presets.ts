@@ -8,12 +8,23 @@
  * a one-line dialog editing that becomes a worse text editor than the one
  * already open. Those are shown, marked, and left alone.
  *
- * Account references are written as Keychain sources rather than the label
- * fragments a human would type. A fragment is resolved by substring match and
- * an ambiguous one is refused, which is a fine trade when a person is choosing
- * the words; here the UI already knows exactly which account was picked, so
- * writing anything less exact would be throwing information away.
+ * A preset's accounts are REFERENCES, not sources: a hand-written config says
+ * "Acme 1" and the balancer resolves that by substring against the account
+ * labels. So membership cannot be tested by comparing against a Keychain
+ * source -- doing exactly that is what made every account render unticked in a
+ * preset that plainly had three.
+ *
+ * Resolution is delegated to the balancer's own resolveRef rather than repeated
+ * here. A second implementation that disagreed with it would tick boxes the
+ * balancer does not honour, which is worse than not ticking them at all.
+ *
+ * What is WRITTEN depends on what was there: removing an account drops the
+ * reference that resolved to it, so the hand-written "Acme 1" spellings
+ * survive being edited around; adding one appends the exact source, since the
+ * UI knows precisely which account was chosen and a fragment would be throwing
+ * that away.
  */
+import { resolveRef } from "../balance/index.ts"
 
 export type Preset = {
   label?: string
@@ -29,6 +40,35 @@ export function isEditable(p: Preset): boolean {
   return !Array.isArray(p.pools)
 }
 
+export type Member = { source: string; label?: string }
+
+/**
+ * Which accounts a preset actually contains, and which of its references go
+ * nowhere.
+ *
+ * `unresolved` is returned rather than dropped: a reference that matches no
+ * account, or matches two and is therefore refused, makes the preset quietly
+ * smaller than it reads. That is worth showing.
+ */
+export function presetMembership(
+  preset: Preset,
+  members: readonly Member[],
+): { sources: Set<string>; refFor: Map<string, string>; unresolved: string[] } {
+  const sources = new Set<string>()
+  const refFor = new Map<string, string>()
+  const unresolved: string[] = []
+  for (const ref of preset.accounts ?? []) {
+    const source = resolveRef(ref, members)
+    if (!source) {
+      unresolved.push(ref)
+      continue
+    }
+    sources.add(source)
+    if (!refFor.has(source)) refFor.set(source, ref)
+  }
+  return { sources, refFor, unresolved }
+}
+
 /**
  * Add or remove one account, returning the new preset.
  *
@@ -38,11 +78,16 @@ export function isEditable(p: Preset): boolean {
 export function togglePresetAccount(
   preset: Preset,
   source: string,
+  members: readonly Member[],
 ): Preset | null {
+  const { sources, refFor } = presetMembership(preset, members)
   const current = preset.accounts ?? []
-  if (current.includes(source)) {
-    if (current.length === 1) return null
-    return { ...preset, accounts: current.filter((s) => s !== source) }
+
+  if (sources.has(source)) {
+    if (sources.size === 1) return null
+    // Drop the reference that resolved to it, whatever spelling it used.
+    const ref = refFor.get(source)
+    return { ...preset, accounts: current.filter((r) => r !== ref) }
   }
   return { ...preset, accounts: [...current, source] }
 }

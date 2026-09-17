@@ -4,6 +4,7 @@ import { describe, it } from "node:test"
 import {
   indentJson,
   isEditable,
+  presetMembership,
   presetRows,
   togglePresetAccount,
   validatePresetName,
@@ -31,25 +32,76 @@ describe("isEditable", () => {
   })
 })
 
-describe("togglePresetAccount", () => {
-  it("adds an account not in the set", () => {
-    const out = togglePresetAccount(PRESETS["rr-12"]!, "s3")!
-    assert.deepEqual(out.accounts, ["s1", "s2", "s3"])
+const MEMBERS = [
+  { source: "s1", label: "Claude Team - Acme 1 - Wings" },
+  { source: "s2", label: "Claude Team - Acme 2 - Survey" },
+  { source: "s3", label: "Claude Team - Acme 3 - Scouting" },
+]
+
+describe("presetMembership", () => {
+  it("resolves label fragments, which is how a hand-written config reads", () => {
+    // The bug: membership was tested against Keychain sources, so a preset
+    // written as ["Acme 1","Acme 2"] rendered with nothing ticked at all.
+    const m = presetMembership({ accounts: ["Acme 1", "Acme 2"] }, MEMBERS)
+    assert.deepEqual([...m.sources].sort(), ["s1", "s2"])
   })
 
-  it("removes one that is", () => {
-    const out = togglePresetAccount(PRESETS["rr-12"]!, "s1")!
-    assert.deepEqual(out.accounts, ["s2"])
+  it("resolves exact sources too", () => {
+    const m = presetMembership({ accounts: ["s3"] }, MEMBERS)
+    assert.deepEqual([...m.sources], ["s3"])
+  })
+
+  it("remembers which spelling resolved to which account", () => {
+    const m = presetMembership({ accounts: ["Acme 1"] }, MEMBERS)
+    assert.equal(m.refFor.get("s1"), "Acme 1")
+  })
+
+  it("reports references that go nowhere instead of dropping them", () => {
+    // A reference matching nothing -- or matching two, which resolveRef
+    // refuses -- makes the preset quietly smaller than it reads.
+    const m = presetMembership(
+      { accounts: ["Acme 1", "gone", "Acme"] },
+      MEMBERS,
+    )
+    assert.deepEqual([...m.sources], ["s1"])
+    assert.deepEqual(m.unresolved, ["gone", "Acme"])
+  })
+})
+
+describe("togglePresetAccount", () => {
+  it("adds an account not in the set, as an exact source", () => {
+    const out = togglePresetAccount({ accounts: ["Acme 1"] }, "s3", MEMBERS)!
+    assert.deepEqual(out.accounts, ["Acme 1", "s3"])
+  })
+
+  it("removes by the spelling that resolved to it", () => {
+    // The hand-written fragments of the others have to survive the edit.
+    const out = togglePresetAccount(
+      { accounts: ["Acme 1", "Acme 2"] },
+      "s1",
+      MEMBERS,
+    )!
+    assert.deepEqual(out.accounts, ["Acme 2"])
   })
 
   it("refuses to empty the set", () => {
-    // A preset matching nothing is fallen through silently rather than
-    // reported, so it reads as a balancer bug rather than an empty preset.
-    assert.equal(togglePresetAccount({ accounts: ["s1"] }, "s1"), null)
+    assert.equal(
+      togglePresetAccount({ accounts: ["Acme 1"] }, "s1", MEMBERS),
+      null,
+    )
+  })
+
+  it("counts resolved membership, not the raw list, before refusing", () => {
+    // Two references, one of which resolves nowhere: removing the only real
+    // one still empties the preset.
+    assert.equal(
+      togglePresetAccount({ accounts: ["Acme 1", "gone"] }, "s1", MEMBERS),
+      null,
+    )
   })
 
   it("leaves the label and strategy alone", () => {
-    const out = togglePresetAccount(PRESETS["rr-12"]!, "s3")!
+    const out = togglePresetAccount(PRESETS["rr-12"]!, "s3", MEMBERS)!
     assert.equal(out.label, "LB round-robin Team 1,2")
     assert.equal(out.strategy, "round-robin")
   })

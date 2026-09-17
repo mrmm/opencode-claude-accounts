@@ -38,6 +38,7 @@ import { readShapeFile } from "../dist/introspect.js"
 import {
   indentJson,
   isEditable,
+  presetMembership,
   presetRows,
   togglePresetAccount,
   validatePresetName,
@@ -506,7 +507,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               })
               return menu()
             }
-            const inSet = new Set(preset.accounts ?? [])
+            // A preset's accounts are references ("Acme 1"), not Keychain
+            // sources, so membership has to be resolved the way the balancer
+            // resolves it. Comparing against the source directly is what made
+            // every box render empty in a preset that plainly had three.
+            const { sources: inSet, unresolved } = presetMembership(
+              preset,
+              accounts,
+            )
             const names = shortNames(accounts)
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
@@ -517,6 +525,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     title: `${inSet.has(a.source) ? "[x]" : "[ ]"} ${names.get(a.source) ?? a.source}`,
                     value: `a:${a.source}`,
                     description: quotaText(readQuotaCache(), a.source),
+                    category: "Accounts in this preset",
+                  })),
+                  ...unresolved.map((ref) => ({
+                    // Shown rather than dropped: a reference matching nothing,
+                    // or matching two and therefore refused, makes the preset
+                    // quietly smaller than it reads.
+                    title: `[?] ${ref}`,
+                    value: `u:${ref}`,
+                    description: "matches no account, or more than one",
                     category: "Accounts in this preset",
                   })),
                   {
@@ -535,8 +552,29 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 onSelect={(row) => {
                   const v = String(row.value)
                   if (v === BACK) return menu()
+                  if (v.startsWith("u:")) {
+                    // Drop a reference that resolves to nothing.
+                    const ref = v.slice(2)
+                    savePresets(
+                      {
+                        ...cfg.presets,
+                        [name]: {
+                          ...preset,
+                          accounts: (preset.accounts ?? []).filter(
+                            (r: string) => r !== ref,
+                          ),
+                        },
+                      },
+                      `Removed the reference ${ref}.`,
+                    )
+                    return openPreset(name)
+                  }
                   if (v.startsWith("a:")) {
-                    const next = togglePresetAccount(preset, v.slice(2))
+                    const next = togglePresetAccount(
+                      preset,
+                      v.slice(2),
+                      accounts,
+                    )
                     if (!next) {
                       api.ui.toast({
                         variant: "error",
