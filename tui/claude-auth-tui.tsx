@@ -36,6 +36,13 @@ import {
 import { readQuotaCache } from "../dist/balance/quota.js"
 import { readShapeFile } from "../dist/introspect.js"
 import {
+  indentJson,
+  isEditable,
+  presetRows,
+  togglePresetAccount,
+  validatePresetName,
+} from "../dist/tui/presets.js"
+import {
   currentUsageIndex,
   readUsage,
   sessionDetail,
@@ -57,6 +64,7 @@ import {
   contextSummary,
   detailRows,
   enabledSources,
+  quotaText,
   sessionRows,
   shortNames,
   sidebarLines,
@@ -329,7 +337,100 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         run() {
           const configFile = candidatePaths()[0]!
 
-          const open = () => {
+          /**
+           * One surgical write, then drop the config cache.
+           *
+           * Every screen here re-reads getConfig() when it opens, and that read
+           * is served from a cache held for configReloadInterval -- so without
+           * the reset the screen redraws showing what was there before.
+           */
+          const writeKey = (key: string, literal: string, note: string) => {
+            try {
+              const before = readFileSync(configFile, "utf8")
+              const after = setJsoncValue(before, key, literal)
+              if (!after) {
+                api.ui.toast({
+                  variant: "error",
+                  title: "Not changed",
+                  message: `Could not edit ${key} safely. The file was left alone.`,
+                })
+                return false
+              }
+              const tmp = `${configFile}.tmp-${process.pid}`
+              writeFileSync(tmp, after, "utf8")
+              renameSync(tmp, configFile)
+              resetConfigCache()
+              setSnap(read())
+              api.ui.toast({ variant: "success", title: key, message: note })
+              return true
+            } catch (err) {
+              api.ui.toast({
+                variant: "error",
+                title: "Write failed",
+                message: err instanceof Error ? err.message : String(err),
+              })
+              return false
+            }
+          }
+
+          const menu = () => {
+            const cfg = getConfig()
+            const enabled = enabledSources(accounts, cfg.accounts).length
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title="Claude accounts"
+                options={[
+                  {
+                    title: `Accounts in use: ${enabled} of ${accounts.length}`,
+                    value: "__accounts__",
+                    description: "include or exclude an account",
+                    category: "Accounts",
+                  },
+                  {
+                    title: "Re-read the Keychain",
+                    value: "__refresh__",
+                    description:
+                      "pick up an account added or removed since this session started",
+                    category: "Accounts",
+                  },
+                  ...presetRows(cfg.presets, selectionOf()),
+                  {
+                    title: "New preset",
+                    value: "__new__",
+                    description: "a name, a strategy and a set of accounts",
+                    category: "Presets",
+                  },
+                ]}
+                onSelect={(row) => {
+                  const v = String(row.value)
+                  if (v === "__accounts__") openAccounts()
+                  else if (v === "__refresh__") {
+                    accounts = loadAccounts()
+                    api.ui.toast({
+                      variant: "success",
+                      title: "Accounts",
+                      message: `${accounts.length} found in the Keychain.`,
+                    })
+                    menu()
+                  } else if (v === "__new__") newPreset()
+                  else openPreset(v)
+                }}
+              />
+            ))
+          }
+
+          const selectionOf = () => {
+            try {
+              return readFileSync(
+                `${process.env.XDG_DATA_HOME ?? `${process.env.HOME}/.local/share`}/opencode/claude-account-source.txt`,
+                "utf8",
+              ).trim()
+            } catch {
+              return "__auto__"
+            }
+          }
+
+          const openAccounts = () => {
             const cfg = getConfig()
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
@@ -339,69 +440,181 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   cfg.accounts,
                   readQuotaCache(),
                 )}
-                onSelect={(row) => flip(String(row.value))}
+                onSelect={(row) => {
+                  const next = toggleAccount(
+                    accounts,
+                    getConfig().accounts,
+                    String(row.value),
+                  )
+                  if (!next) {
+                    api.ui.toast({
+                      variant: "error",
+                      title: "Not changed",
+                      message: "At least one account has to stay enabled.",
+                    })
+                    openAccounts()
+                    return
+                  }
+                  writeKey(
+                    "accounts",
+                    JSON.stringify(next),
+                    next.length === 0
+                      ? "All accounts enabled."
+                      : `${next.length} of ${accounts.length} enabled.`,
+                  )
+                  openAccounts()
+                }}
               />
             ))
           }
 
-          const flip = (source: string) => {
-            const next = toggleAccount(accounts, getConfig().accounts, source)
-            if (!next) {
-              // Refused rather than obeyed: an empty allow-list means "all", so
-              // disabling the last account would re-enable every one of them.
+          const savePresets = (next: Record<string, unknown>, note: string) =>
+            // Indented so the block still reads as part of the file. Safe to
+            // rewrite whole because a preset carries no comments inside it --
+            // the explanatory comment sits above the key, outside the value.
+            writeKey("presets", indentJson(next, 2), note)
+
+          const openPreset = (name: string) => {
+            const cfg = getConfig()
+            const preset = cfg.presets[name]
+            if (!preset) return menu()
+            if (!isEditable(preset)) {
               api.ui.toast({
-                variant: "error",
-                title: "Not changed",
-                message: "At least one account has to stay enabled.",
+                variant: "warning",
+                title: name,
+                message: "Tiered presets are edited in the config file.",
               })
-              open()
-              return
+              return menu()
             }
-            try {
-              const before = readFileSync(configFile, "utf8")
-              const after = setJsoncValue(
-                before,
-                "accounts",
-                JSON.stringify(next),
-              )
-              if (!after) {
-                api.ui.toast({
-                  variant: "error",
-                  title: "Not changed",
-                  message: "Could not edit accounts safely.",
-                })
-                return
-              }
-              const tmp = `${configFile}.tmp-${process.pid}`
-              writeFileSync(tmp, after, "utf8")
-              renameSync(tmp, configFile)
-              // getConfig() holds its answer for configReloadInterval and will
-              // not re-stat before then, so re-reading here would hand back the
-              // config as it was a moment ago -- the write lands and the dialog
-              // redraws unchanged. Dropping the cache makes the next read the
-              // file.
-              resetConfigCache()
-              api.ui.toast({
-                variant: "success",
-                title: "Accounts",
-                message:
-                  next.length === 0
-                    ? "All accounts enabled."
-                    : `${next.length} of ${accounts.length} enabled.`,
-              })
-              setSnap(read())
-              open()
-            } catch (err) {
-              api.ui.toast({
-                variant: "error",
-                title: "Write failed",
-                message: err instanceof Error ? err.message : String(err),
-              })
-            }
+            const inSet = new Set(preset.accounts ?? [])
+            const names = shortNames(accounts)
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={`${name} - ${preset.strategy ?? "sticky"}`}
+                options={[
+                  ...accounts.map((a) => ({
+                    title: `${inSet.has(a.source) ? "[x]" : "[ ]"} ${names.get(a.source) ?? a.source}`,
+                    value: `a:${a.source}`,
+                    description: quotaText(readQuotaCache(), a.source),
+                    category: "Accounts in this preset",
+                  })),
+                  {
+                    title: `Strategy: ${preset.strategy ?? "sticky"}`,
+                    value: "__strategy__",
+                    description: "how it picks among these accounts",
+                    category: "Settings",
+                  },
+                  {
+                    title: "Delete this preset",
+                    value: "__delete__",
+                    description: "removes it from the config",
+                    category: "Settings",
+                  },
+                ]}
+                onSelect={(row) => {
+                  const v = String(row.value)
+                  if (v.startsWith("a:")) {
+                    const next = togglePresetAccount(preset, v.slice(2))
+                    if (!next) {
+                      api.ui.toast({
+                        variant: "error",
+                        title: "Not changed",
+                        message: "A preset needs at least one account.",
+                      })
+                      return openPreset(name)
+                    }
+                    savePresets(
+                      { ...cfg.presets, [name]: next },
+                      `${(next.accounts ?? []).length} accounts in ${name}.`,
+                    )
+                    return openPreset(name)
+                  }
+                  if (v === "__delete__") {
+                    const rest = { ...cfg.presets }
+                    delete rest[name]
+                    savePresets(rest, `${name} removed.`)
+                    return menu()
+                  }
+                  pickStrategy(name, preset)
+                }}
+              />
+            ))
+          }
+
+          const STRATEGIES = [
+            "sticky",
+            "priority",
+            "least-loaded",
+            "least-used",
+            "round-robin",
+            "weighted",
+            "random",
+            "p2c",
+          ]
+
+          const pickStrategy = (
+            name: string,
+            preset: { strategy?: string },
+          ) => {
+            const cfg = getConfig()
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={`Strategy for ${name}`}
+                current={preset.strategy ?? "sticky"}
+                options={STRATEGIES.map((v) => ({ title: v, value: v }))}
+                onSelect={(row) => {
+                  savePresets(
+                    {
+                      ...cfg.presets,
+                      [name]: { ...preset, strategy: String(row.value) },
+                    },
+                    `${name} now ${String(row.value)}.`,
+                  )
+                  openPreset(name)
+                }}
+              />
+            ))
+          }
+
+          const newPreset = () => {
+            const cfg = getConfig()
+            const prompt = (seed: string) =>
+              api.ui.dialog.replace(() => (
+                <api.ui.DialogPrompt
+                  title="Name for the new preset"
+                  placeholder="rr-13"
+                  value={seed}
+                  onConfirm={(value: string) => {
+                    const checked = validatePresetName(value, cfg.presets)
+                    if (!checked.ok) {
+                      api.ui.toast({
+                        variant: "error",
+                        title: "Not created",
+                        message: checked.reason,
+                      })
+                      return prompt(value)
+                    }
+                    // Starts from every enabled account: a preset of none
+                    // cannot be saved, and this is the set already in use.
+                    const seeded = {
+                      label: checked.name,
+                      strategy: "round-robin",
+                      accounts: enabledSources(accounts, cfg.accounts),
+                    }
+                    savePresets(
+                      { ...cfg.presets, [checked.name]: seeded },
+                      `${checked.name} created.`,
+                    )
+                    openPreset(checked.name)
+                  }}
+                  onCancel={() => menu()}
+                />
+              ))
+            prompt("")
           }
 
           accounts = loadAccounts()
-          open()
+          menu()
         },
       },
       {

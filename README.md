@@ -424,7 +424,13 @@ It adds two things:
   shared with every other session. With `captureRequests` on it also reports
   request size, split into system, tools and messages, so the fixed per-request
   overhead is visible
-- `<leader>A`, or `/cc-accounts`, including or excluding accounts. This writes
+- `<leader>A`, or `/cc-accounts`, managing accounts and the named arrangements
+  they belong to: include or exclude an account, re-read the Keychain without
+  restarting, and create, edit or delete a preset (its accounts, its strategy).
+  Presets built from `pools` are listed and marked read-only -- tiered failover
+  is a list of groups each with its own strategy, and editing that in a dialog
+  would be a worse text editor than the one already open. Including or excluding
+  an account writes
   the `accounts` allow-list, where an empty list means "all" -- so disabling one
   writes the others explicitly, re-enabling everything writes `[]` again, and
   disabling the last one is refused rather than silently re-enabling all of them
