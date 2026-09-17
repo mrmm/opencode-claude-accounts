@@ -32,7 +32,12 @@ import { parseDuration, parseRatio } from "./config.ts"
 export type EditableKind = "boolean" | "enum" | "preset" | "number"
 
 export type Editable = {
+  /** The config key, shown alongside the label so the file stays searchable. */
   key: string
+  /** What a reader calls it. */
+  label: string
+  /** Heading it sits under in the dialog. */
+  section: string
   kind: EditableKind
   /** Allowed values, for `enum`. Absent for the other kinds. */
   options?: string[]
@@ -47,6 +52,8 @@ export type Editable = {
 export const EDITABLE: Editable[] = [
   {
     key: "strategy",
+    label: "Strategy",
+    section: "Balancing",
     kind: "enum",
     hint: "how the balancer picks",
     options: [
@@ -60,10 +67,24 @@ export const EDITABLE: Editable[] = [
       "p2c",
     ],
   },
-  { key: "preset", kind: "preset", hint: "named arrangement in force" },
-  { key: "autoSwitch", kind: "boolean", hint: "move off an account by itself" },
+  {
+    key: "preset",
+    label: "Preset",
+    section: "Balancing",
+    kind: "preset",
+    hint: "named arrangement in force",
+  },
+  {
+    key: "autoSwitch",
+    label: "Auto-switch",
+    section: "Balancing",
+    kind: "boolean",
+    hint: "move off an account by itself",
+  },
   {
     key: "switchAt",
+    label: "Switch at",
+    section: "Balancing",
     kind: "number",
     numeric: "ratio",
     example: "0.95",
@@ -71,43 +92,54 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "switchWindow",
+    label: "Switch window",
+    section: "Balancing",
     kind: "enum",
     options: ["5h", "7d", "binding"],
     hint: "which window switchAt reads",
   },
-  { key: "switchOn429", kind: "boolean", hint: "move when refused" },
+  {
+    key: "switchOn429",
+    label: "Switch when refused",
+    section: "Balancing",
+    kind: "boolean",
+    hint: "move when refused",
+  },
   {
     key: "bindBy",
+    label: "Bind sessions",
+    section: "Balancing",
     kind: "enum",
     options: ["none", "session"],
     hint: "keep a session on one account",
   },
   {
     key: "pinBlocksRotation",
+    label: "Pin blocks rotation",
+    section: "Balancing",
     kind: "boolean",
     hint: "a pin disables balancing",
   },
   {
     key: "ejectFor",
+    label: "Eject a failing account for",
+    section: "Balancing",
     kind: "number",
     numeric: "duration",
     example: "5m",
     hint: "how long a failing account sits out",
   },
   {
-    key: "retryPrefillError",
+    key: "quotaProbe",
+    label: "Probe quota in background",
+    section: "Quota",
     kind: "boolean",
-    hint: "recover from prefill refusals",
+    hint: "probe quota in the background",
   },
-  {
-    key: "captureRequests",
-    kind: "enum",
-    options: ["off", "shape", "full", "messages"],
-    hint: "record requests (messages = conversation on disk)",
-  },
-  { key: "quotaProbe", kind: "boolean", hint: "probe quota in the background" },
   {
     key: "quotaWarnAt",
+    label: "Warn at (5h)",
+    section: "Quota",
     kind: "number",
     numeric: "ratio",
     example: "0.8",
@@ -115,6 +147,8 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "quotaWeeklyWarnAt",
+    label: "Warn at (weekly)",
+    section: "Quota",
     kind: "number",
     numeric: "ratio",
     example: "0.8",
@@ -122,6 +156,8 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "quotaAlternativeAt",
+    label: "Suggest another below",
+    section: "Quota",
     kind: "number",
     numeric: "ratio",
     example: "0.7",
@@ -129,6 +165,8 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "quotaMaxAge",
+    label: "Ignore readings older than",
+    section: "Quota",
     kind: "number",
     numeric: "duration",
     example: "12h",
@@ -136,6 +174,8 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "quotaProbeMaxAge",
+    label: "Re-probe after",
+    section: "Quota",
     kind: "number",
     numeric: "duration",
     example: "10m",
@@ -143,6 +183,8 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "refreshCheckInterval",
+    label: "Check tokens every",
+    section: "Tokens",
     kind: "number",
     numeric: "duration",
     example: "60s",
@@ -150,13 +192,32 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "refreshBeforeExpiry",
+    label: "Refresh before expiry by",
+    section: "Tokens",
     kind: "number",
     numeric: "duration",
     example: "5m",
     hint: "refresh this long before expiry",
   },
   {
+    key: "retryPrefillError",
+    label: "Recover prefill refusals",
+    section: "Diagnostics",
+    kind: "boolean",
+    hint: "recover from prefill refusals",
+  },
+  {
+    key: "captureRequests",
+    label: "Record requests",
+    section: "Diagnostics",
+    kind: "enum",
+    options: ["off", "shape", "full", "messages"],
+    hint: "record requests (messages = conversation on disk)",
+  },
+  {
     key: "noticeCooldown",
+    label: "Quiet period between toasts",
+    section: "Diagnostics",
     kind: "number",
     numeric: "duration",
     example: "10m",
@@ -164,6 +225,8 @@ export const EDITABLE: Editable[] = [
   },
   {
     key: "configReloadInterval",
+    label: "Re-read this file every",
+    section: "Diagnostics",
     kind: "number",
     numeric: "duration",
     example: "3s",
@@ -295,14 +358,26 @@ export function setJsoncValue(
   return `${text.slice(0, open + 1)}\n  "${key}": ${literal},${text.slice(open + 1)}`
 }
 
-/** A row per editable key, showing what it is set to now. */
-export function configRows(
-  current: Record<string, unknown>,
-): { title: string; value: string; description: string }[] {
+/**
+ * The settings list, grouped.
+ *
+ * `category` is what DialogSelect groups by, so the sections are real headings
+ * rather than a naming convention. Each row carries three different things a
+ * reader needs and which one line cannot hold: what it is called, what it is
+ * set to, and what it does -- plus the config key itself, so anything seen here
+ * can be found in the file afterwards.
+ */
+export function configRows(current: Record<string, unknown>): {
+  title: string
+  value: string
+  description: string
+  category: string
+}[] {
   return EDITABLE.map((e) => ({
-    title: e.key,
+    title: `${e.label}: ${display(current[e.key])}`,
     value: e.key,
-    description: `${display(current[e.key])} - ${e.hint}`,
+    description: `${e.hint}  (${e.key})`,
+    category: e.section,
   }))
 }
 

@@ -303,7 +303,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               const prompt = (seed: string) =>
                 api.ui.dialog.replace(() => (
                   <api.ui.DialogPrompt
-                    title={`${key} - ${meta.hint}`}
+                    title={`${meta.label} (${key})`}
                     placeholder={meta.example}
                     value={seed}
                     onConfirm={(value: string) => {
@@ -332,7 +332,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
 
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
-                title={`${key} - ${meta.hint}`}
+                title={`${meta.label} (${key})`}
                 options={optionsFor(meta, current, getConfig().presets)}
                 onSelect={(choice) => {
                   const checked = validateValue(meta, String(choice.value))

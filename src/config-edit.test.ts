@@ -213,11 +213,49 @@ describe("display", () => {
 })
 
 describe("configRows", () => {
-  it("shows one row per editable key, with its current value", () => {
+  it("shows one row per editable key, named and valued", () => {
     const rows = configRows({ ...DEFAULT_CONFIG })
     assert.equal(rows.length, EDITABLE.length)
-    const strategy = rows.find((r) => r.title === "strategy")!
-    assert.match(strategy.description, new RegExp(DEFAULT_CONFIG.strategy))
+    const strategy = rows.find((r) => r.value === "strategy")!
+    assert.match(strategy.title, /^Strategy: /, "row is not labelled")
+    assert.match(
+      strategy.title,
+      new RegExp(DEFAULT_CONFIG.strategy),
+      "value missing",
+    )
+  })
+
+  it("keeps the config key visible so the file stays searchable", () => {
+    // A label alone leaves a reader unable to find the setting in the file.
+    for (const row of configRows({ ...DEFAULT_CONFIG })) {
+      assert.match(row.description, new RegExp(`\\(${row.value}\\)$`))
+    }
+  })
+
+  it("groups every row under a section", () => {
+    const rows = configRows({ ...DEFAULT_CONFIG })
+    for (const row of rows)
+      assert.ok(row.category.length > 0, `${row.value} has no section`)
+    const sections = [...new Set(rows.map((r) => r.category))]
+    assert.deepEqual(sections, ["Balancing", "Quota", "Tokens", "Diagnostics"])
+  })
+
+  it("orders rows so a section is contiguous, not interleaved", () => {
+    // DialogSelect groups by category, but a reader scanning the raw list
+    // should not see a section reappear further down.
+    const seen: string[] = []
+    for (const row of configRows({ ...DEFAULT_CONFIG })) {
+      if (seen[seen.length - 1] !== row.category) seen.push(row.category)
+    }
+    assert.deepEqual(seen, [...new Set(seen)], "a section is split in two")
+  })
+
+  it("gives every key a distinct human label", () => {
+    const labels = EDITABLE.map((e) => e.label)
+    assert.equal(new Set(labels).size, labels.length, "duplicate label")
+    for (const e of EDITABLE) {
+      assert.notEqual(e.label, e.key, `${e.key} has no real label`)
+    }
   })
 
   it("never renders a raw millisecond count at the user", () => {
