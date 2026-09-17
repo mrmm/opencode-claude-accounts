@@ -26,6 +26,7 @@ import type {
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui"
 import { createSignal, For, onCleanup } from "solid-js"
+import { readFileSync, renameSync, writeFileSync } from "node:fs"
 
 import {
   loadPersistedAccountSource,
@@ -38,7 +39,14 @@ import {
   readUsage,
   summarizeSessions,
 } from "../dist/balance/usage.js"
-import { getConfig } from "../dist/config.js"
+import { candidatePaths, getConfig } from "../dist/config.js"
+import {
+  configRows,
+  EDITABLE,
+  optionsFor,
+  setJsoncValue,
+  validateValue,
+} from "../dist/config-edit.js"
 import {
   buildPickerOptions,
   formatChip,
@@ -230,10 +238,119 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           ))
         },
       },
+      {
+        name: "claude-auth.config",
+        title: "Claude auth settings",
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "cc-config",
+        run() {
+          const configFile = candidatePaths()[0]!
+
+          const openList = () => {
+            const cfg = getConfig() as unknown as Record<string, unknown>
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title="Claude auth settings (no restart needed)"
+                options={configRows(cfg)}
+                onSelect={(row) => editKey(String(row.value))}
+              />
+            ))
+          }
+
+          // Surgical write: this file is JSONC and its comments are the only
+          // documentation at the point of use, so a parse-and-serialise round
+          // trip would delete every one. Temp file then rename, so a crash
+          // cannot leave half a config where a whole one was.
+          const write = (key: string, literal: string) => {
+            try {
+              const before = readFileSync(configFile, "utf8")
+              const after = setJsoncValue(before, key, literal)
+              if (!after) {
+                api.ui.toast({
+                  variant: "error",
+                  title: "Not changed",
+                  message: `Could not edit ${key} safely. The file was left alone.`,
+                })
+                return
+              }
+              const tmp = `${configFile}.tmp-${process.pid}`
+              writeFileSync(tmp, after, "utf8")
+              renameSync(tmp, configFile)
+              api.ui.toast({
+                variant: "success",
+                title: key,
+                message: `Now ${literal}. Live within the reload interval.`,
+              })
+            } catch (err) {
+              api.ui.toast({
+                variant: "error",
+                title: "Write failed",
+                message: err instanceof Error ? err.message : String(err),
+              })
+            }
+          }
+
+          const editKey = (key: string) => {
+            const meta = EDITABLE.find((e) => e.key === key)
+            if (!meta) return
+            const cfg = getConfig() as unknown as Record<string, unknown>
+            const current = cfg[key]
+
+            // Only ratios and durations are typed; everything with a fixed
+            // vocabulary is chosen, so a typo is not expressible there.
+            if (meta.kind === "number") {
+              const prompt = (seed: string) =>
+                api.ui.dialog.replace(() => (
+                  <api.ui.DialogPrompt
+                    title={`${key} - ${meta.hint}`}
+                    placeholder={meta.example}
+                    value={seed}
+                    onConfirm={(value: string) => {
+                      const checked = validateValue(meta, value)
+                      if (!checked.ok) {
+                        // Refuse and stay put with what was typed, rather than
+                        // writing a value the config layer would quietly
+                        // replace with its default.
+                        api.ui.toast({
+                          variant: "error",
+                          title: `${key} unchanged`,
+                          message: checked.reason,
+                        })
+                        prompt(value)
+                        return
+                      }
+                      write(key, checked.literal)
+                      api.ui.dialog.clear()
+                    }}
+                    onCancel={() => openList()}
+                  />
+                ))
+              prompt(current === undefined ? "" : String(current))
+              return
+            }
+
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={`${key} - ${meta.hint}`}
+                options={optionsFor(meta, current, getConfig().presets)}
+                onSelect={(choice) => {
+                  const checked = validateValue(meta, String(choice.value))
+                  if (checked.ok) write(key, checked.literal)
+                  api.ui.dialog.clear()
+                }}
+              />
+            ))
+          }
+
+          openList()
+        },
+      },
     ],
     bindings: [
       { key: "<leader>a", cmd: "claude-auth.select", desc: "Claude account" },
       { key: "<leader>s", cmd: "claude-auth.stats", desc: "Claude usage" },
+      { key: "<leader>c", cmd: "claude-auth.config", desc: "Claude settings" },
     ],
   })
 }

@@ -418,6 +418,12 @@ It adds two things:
 - `<leader>a`, or `/cc-account`, opening a picker of presets, Auto and accounts
 - `<leader>s`, or `/cc-stats`, listing the last 24h of traffic per session:
   requests, errors, how many accounts served it, which models, average latency
+- `<leader>c`, or `/cc-config`, editing the settings that apply without a
+  restart. Anything with a fixed vocabulary is chosen from a list; ratios and
+  durations are typed and validated before the write. Keys that need a restart
+  are not offered at all, because an editor that appears to work and changes
+  nothing is worse than no editor. Edits are surgical, so the comments in your
+  config survive
 
 Install by adding its absolute path to `~/.config/opencode/tui.json`:
 
