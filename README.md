@@ -369,6 +369,29 @@ you, and no other level implies it.
 Blocks composed programmatically by OpenCode report as `unattributed`, which is
 the useful answer: no file is responsible for them.
 
+### Assistant prefill refusals
+
+Some models answer 400 `This model does not support assistant message prefill.
+The conversation must end with a user message.` OpenCode sends a trailing
+assistant message when a turn was interrupted, so the next request inherits it
+and the session wedges: each retry rebuilds the same body and fails identically.
+
+```jsonc
+{ "retryPrefillError": true }
+```
+
+Once enabled, that specific 400 -- and no other -- triggers one retry with the
+trailing assistant turn removed. Off by default because it is lossy: the partial
+turn the model was being asked to continue is dropped. On a model that refuses
+prefill that turn cannot be sent at all, so the choice is between losing it and
+a session that cannot proceed.
+
+It refuses to act when there is nothing safe to do: a body it cannot parse, one
+that does not actually end with an assistant turn, or one that is _only_
+assistant turns, where stripping would send an empty conversation and trade a
+clear error for a baffling one. Those cases log `prefill_retry_skipped` rather
+than failing quietly.
+
 ### Account chip and picker in the TUI (optional)
 
 The server plugin cannot draw anything -- `PluginInput.tui` is `never`. Drawing

@@ -345,6 +345,16 @@ export type ClaudeAuthConfig = {
    * turning off again. It is hot-reloadable like every other key, so it can be
    * switched on and off without restarting anything.
    */
+  /**
+   * Retry once, without the trailing assistant message, when a model refuses an
+   * assistant prefill with 400.
+   *
+   * Off by default because the recovery is lossy: it drops the partial
+   * assistant turn OpenCode was asking the model to continue. On the models
+   * that refuse prefill that turn cannot be sent at all, so the choice is
+   * between losing it and a session that fails identically on every retry.
+   */
+  retryPrefillError: boolean
   captureRequests: CaptureLevel
   /** Named, switchable arrangements. Offered as rows in the switcher. */
   presets: Record<string, Preset>
@@ -385,6 +395,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   pinBlocksRotation: true,
   pools: [],
   ejectFor: 5 * 60_000,
+  retryPrefillError: false,
   captureRequests: "off",
   presets: {},
   preset: "",
@@ -558,6 +569,9 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
     )
   }
 
+  if (typeof r.retryPrefillError === "boolean")
+    out.retryPrefillError = r.retryPrefillError
+
   return out
 }
 
@@ -665,6 +679,7 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   bindBy: (v) => v,
   pinBlocksRotation: (v) => v === "1",
   tools: (v) => v === "1",
+  retryPrefillError: (v) => v === "1",
   captureRequests: (v) => v,
   preset: (v) => v.trim(),
   accounts: (v) => parseAccounts(v.split(",")),

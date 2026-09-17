@@ -69,6 +69,7 @@ export {
   LONG_CONTEXT_BETAS,
 } from "./betas.ts"
 export { resetExcludedBetas } from "./betas.ts"
+import { isPrefillError, stripTrailingAssistant } from "./prefill.ts"
 export {
   stripToolPrefix,
   SYSTEM_IDENTITY,
@@ -912,6 +913,39 @@ const plugin: PluginWithOptions = async (
                 })
               } else {
                 preserveResponseUnchanged = true
+              }
+            }
+
+            // A model that refuses an assistant prefill fails the same way on
+            // every retry, because the body is rebuilt identically each time.
+            // Dropping the trailing assistant turn is the only thing that
+            // changes the outcome -- and it is lossy, so it happens once, only
+            // on this specific 400, and only when asked for.
+            if (response.status === 400 && getConfig().retryPrefillError) {
+              const cloned = response.clone()
+              const errorBody = await cloned.text()
+              if (isPrefillError(errorBody)) {
+                const trimmed =
+                  typeof body === "string" ? stripTrailingAssistant(body) : null
+                if (trimmed) {
+                  log("prefill_retry", { modelId })
+                  const creds = getCachedCredentials()
+                  response = await fetchWithRetry(requestUrl, {
+                    ...requestInit,
+                    body: trimmed,
+                    headers: buildRequestHeaders(
+                      input,
+                      requestInit,
+                      creds?.accessToken ?? latest.accessToken,
+                      modelId,
+                      getExcludedBetas(modelId),
+                    ),
+                  })
+                } else {
+                  // Nothing safe to strip: say so, rather than leaving a bare
+                  // 400 that looks like the retry silently did nothing.
+                  log("prefill_retry_skipped", { modelId })
+                }
               }
             }
 

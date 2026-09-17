@@ -122,15 +122,18 @@ export function describeSelection(
   /** The pinned account's label. A pin names an account, so name it. */
   pinnedLabel?: string,
 ): string {
-  if (persisted === AUTO_SOURCE) return `LB: balancing, ${cfg.strategy}`
+  // Short on purpose. This string becomes the provider name, which OpenCode
+  // renders under the prompt and writes exactly once per instance -- it cannot
+  // be refreshed, so it must not imply live state. The preset's own name says
+  // which policy is in force without spending a line on describing it; the
+  // account, both quota windows and the request share are live in the sidebar,
+  // which is where a reader should look for anything that changes.
+  if (persisted === AUTO_SOURCE) return "LB: auto"
   if (persisted?.startsWith(PRESET_PREFIX)) {
-    const name = persisted.slice(PRESET_PREFIX.length)
-    const text = cfg.presets[name]?.label ?? name
-    return `LB: ${text.replace(/^LB\s+/i, "")}`
+    return `LB: ${persisted.slice(PRESET_PREFIX.length)}`
   }
   if (cfg.preset) {
-    const text = cfg.presets[cfg.preset]?.label ?? cfg.preset
-    return `LB: ${text.replace(/^LB\s+/i, "")}`
+    return `LB: ${cfg.preset}`
   }
   return pinnedLabel ?? "one account"
 }

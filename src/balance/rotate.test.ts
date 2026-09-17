@@ -301,11 +301,21 @@ describe("describeSelection", () => {
     strategy: "least-loaded",
   })
 
-  it("names the arrangement when a preset is selected", () => {
-    assert.equal(
-      describeSelection(withPresets, "preset:rr-123"),
-      "LB: round-robin Team 1,2,3",
-    )
+  it("names the preset, briefly", () => {
+    // The preset's own name, not its description. This becomes the provider
+    // name under the prompt, which is written once per instance and cannot be
+    // refreshed -- a long string there implies live detail it cannot deliver.
+    assert.equal(describeSelection(withPresets, "preset:rr-123"), "LB: rr-123")
+  })
+
+  it("stays short enough to sit in a status line", () => {
+    for (const sel of ["preset:rr-123", "__auto__", null]) {
+      const out = describeSelection(
+        cfg({ ...withPresets, preset: "rr-123" }),
+        sel,
+      )
+      assert.ok(out.length <= 24, `too long: ${out}`)
+    }
   })
 
   it("does not stutter when the preset label already says LB", () => {
@@ -319,11 +329,10 @@ describe("describeSelection", () => {
     assert.equal(describeSelection(withPresets, "preset:bare"), "LB: bare")
   })
 
-  it("names the strategy for auto", () => {
-    assert.equal(
-      describeSelection(withPresets, "__auto__"),
-      "LB: balancing, least-loaded",
-    )
+  it("says auto without naming the strategy", () => {
+    // The strategy can change under the label without the label being rewritten,
+    // so stating it would be a claim this string cannot keep.
+    assert.equal(describeSelection(withPresets, "__auto__"), "LB: auto")
   })
 
   it("names the account for a pin, since a pin names an account", () => {
@@ -336,7 +345,7 @@ describe("describeSelection", () => {
   it("honours a preset configured rather than selected", () => {
     assert.equal(
       describeSelection(cfg({ ...withPresets, preset: "rr-123" }), null),
-      "LB: round-robin Team 1,2,3",
+      "LB: rr-123",
     )
   })
 

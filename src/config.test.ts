@@ -409,6 +409,7 @@ describe("config surface coverage", () => {
     bindBy: "none",
     pinBlocksRotation: "0",
     tools: "0",
+    retryPrefillError: "1",
     captureRequests: "messages",
     preset: "rr-12",
     accounts: "alpha,beta",
