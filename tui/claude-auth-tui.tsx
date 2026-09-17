@@ -33,6 +33,7 @@ import {
   saveAccountSource,
 } from "../dist/credentials.js"
 import { readQuotaCache } from "../dist/balance/quota.js"
+import { currentUsageIndex } from "../dist/balance/usage.js"
 import { getConfig } from "../dist/config.js"
 import {
   buildPickerOptions,
@@ -46,8 +47,16 @@ const POLL_MS = 4000
 
 function read() {
   const quota = readQuotaCache()
+  // currentUsageIndex caches on a 30s TTL, so polling it every few seconds
+  // costs a map lookup rather than a scan of the telemetry log.
+  const index = currentUsageIndex()
+  const requests: Record<string, number> = {}
+  for (const [source, entry] of Object.entries(index)) {
+    requests[source] = (entry as { requests: number }).requests
+  }
   return {
     quota,
+    requests,
     selection: loadPersistedAccountSource() ?? "__auto__",
     activeSource: mostRecentlyObserved(quota),
   }
@@ -133,7 +142,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                         : api.theme.current.textMuted,
                     }}
                   >
-                    {row.text}
+                    {row.name}
+                    <span style={{ fg: api.theme.current.textMuted }}>
+                      {"  "}
+                      {row.detail}
+                    </span>
                   </text>
                 </box>
               )}

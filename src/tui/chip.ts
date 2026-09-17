@@ -20,6 +20,11 @@ export type ChipInput = {
   /** Selection file contents: `preset:<name>`, `__auto__`, or a source. */
   selection: string
   activeSource: string | null
+  /**
+   * Requests served per account, for the share column. Optional because the
+   * chip is useful without it and the caller may not have paid for the read.
+   */
+  requests?: Record<string, number>
   now?: number
 }
 
@@ -130,7 +135,12 @@ export function formatChip(input: ChipInput): string {
  */
 export function sidebarLines(input: ChipInput): {
   heading: string
-  rows: { text: string; active: boolean; rejected: boolean }[]
+  rows: {
+    name: string
+    detail: string
+    active: boolean
+    rejected: boolean
+  }[]
 } {
   const heading = input.selection.startsWith(PRESET)
     ? `balancing - ${input.selection.slice(PRESET.length)}`
@@ -138,12 +148,24 @@ export function sidebarLines(input: ChipInput): {
       ? "balancing - auto"
       : "pinned"
 
+  const total = Object.values(input.requests ?? {}).reduce((n, r) => n + r, 0)
+
   const rows = input.accounts.map((a) => {
     const { five, week, rejected } = utilisation(input.quota, a.source)
-    const load =
-      five === undefined ? "no reading" : `${five}% / ${week ?? "-"}%`
+    const quota = five === undefined ? "no reading" : `${five}%/${week ?? "-"}%`
+
+    // Share of requests, not of quota: it answers "is the balancer actually
+    // spreading load", which the quota percentages do not -- two accounts can
+    // sit at the same utilisation while one serves everything.
+    const served = input.requests?.[a.source]
+    const share =
+      total > 0 && served !== undefined
+        ? ` - ${Math.round((served / total) * 100)}% reqs`
+        : ""
+
     return {
-      text: `${shortLabel(a.label)}  ${load}`,
+      name: shortLabel(a.label),
+      detail: `${quota}${share}`,
       active: a.source === input.activeSource,
       rejected,
     }

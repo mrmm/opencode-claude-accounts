@@ -253,8 +253,25 @@ describe("sidebarLines", () => {
 
   it("says so when an account has no reading, rather than implying 0%", () => {
     const { rows } = sidebarLines({ ...base, selection: "__auto__" })
-    assert.match(rows[0]!.text, /41% \/ 45%/)
-    assert.match(rows[1]!.text, /no reading/)
+    assert.match(rows[0]!.detail, /41%\/45%/)
+    assert.match(rows[1]!.detail, /no reading/)
+  })
+
+  it("shows each account's share of requests when it is known", () => {
+    const { rows } = sidebarLines({
+      ...base,
+      selection: "__auto__",
+      requests: { s1: 75, s2: 25 },
+    })
+    assert.match(rows[0]!.detail, /75% reqs/)
+    assert.match(rows[1]!.detail, /25% reqs/)
+  })
+
+  it("omits the share rather than printing 0% when nothing is known", () => {
+    const { rows } = sidebarLines({ ...base, selection: "__auto__" })
+    assert.ok(!rows[0]!.detail.includes("reqs"))
+    const zero = sidebarLines({ ...base, selection: "__auto__", requests: {} })
+    assert.ok(!zero.rows[0]!.detail.includes("reqs"))
   })
 
   it("renders with no accounts at all instead of throwing", () => {
