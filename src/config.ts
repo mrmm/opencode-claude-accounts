@@ -201,6 +201,10 @@ export function parseAccountNames(
  * entries are dropped rather than rejecting the whole map: one bad weight
  * should not silently flatten the others back to 1.
  */
+/** Sentinels: a parser that falls back is indistinguishable from one that parsed. */
+const UNSET_RATIO = -1
+const UNSET_DURATION = -1
+
 export function parseWeights(v: unknown): Record<string, number> | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
   const out: Record<string, number> = {}
@@ -257,6 +261,20 @@ export type Preset = {
    * when `pools` is set, where each tier carries its own.
    */
   weights?: Record<string, number>
+  /**
+   * Behaviour this arrangement overrides.
+   *
+   * The top-level settings are the defaults; anything a preset names replaces
+   * them while that preset is selected, and anything it omits is inherited. A
+   * preset is a complete description of how to balance, so the knobs that
+   * change balancing belong to it -- an arrangement that needs to switch at 80%
+   * should not require editing the global before selecting it, and back again
+   * afterwards.
+   */
+  autoSwitch?: boolean
+  switchAt?: number
+  switchWindow?: SwitchWindow
+  ejectFor?: number
   /** Failover tiers, for a preset that needs more than one. */
   pools?: Pool[]
 }
@@ -277,6 +295,22 @@ export function parsePresets(v: unknown): Record<string, Preset> | undefined {
     if (pools && pools.length > 0) preset.pools = pools
     const weights = parseWeights(r.weights)
     if (weights) preset.weights = weights
+
+    // Behaviour overrides, each optional and each inherited when absent. Parsed
+    // with the same functions the top level uses, so a value legal there is
+    // legal here and no second notion of validity exists.
+    if (typeof r.autoSwitch === "boolean") preset.autoSwitch = r.autoSwitch
+    const at = parseRatio(
+      r.switchAt as string | number | undefined,
+      UNSET_RATIO,
+    )
+    if (at !== UNSET_RATIO) preset.switchAt = at
+    if (isSwitchWindow(r.switchWindow)) preset.switchWindow = r.switchWindow
+    const eject = parseDuration(
+      r.ejectFor as string | number | undefined,
+      UNSET_DURATION,
+    )
+    if (eject !== UNSET_DURATION) preset.ejectFor = eject
     // A preset that names no accounts and no pools would silently mean "all of
     // them", which is not what anyone writes a preset for.
     if (!preset.accounts && !preset.pools) continue

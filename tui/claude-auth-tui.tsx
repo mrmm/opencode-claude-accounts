@@ -39,6 +39,7 @@ import { resolveRef } from "../dist/balance/index.js"
 import {
   indentJson,
   isEditable,
+  knobRows,
   presetMembership,
   presetRows,
   togglePresetAccount,
@@ -53,6 +54,7 @@ import {
 import { candidatePaths, getConfig, resetConfigCache } from "../dist/config.js"
 import {
   configRows,
+  display,
   EDITABLE,
   STRATEGY_NAMES,
   optionsFor,
@@ -650,12 +652,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     description: "matches no account, or more than one",
                     category: "Accounts in this preset",
                   })),
-                  {
-                    title: `Strategy: ${preset.strategy ?? "sticky"}`,
-                    value: "__strategy__",
-                    description: "how it picks among these accounts",
-                    category: "Settings",
-                  },
+                  ...knobRows(
+                    preset,
+                    cfg as unknown as Record<string, unknown>,
+                    (key, v) =>
+                      key === "weights"
+                        ? `${Object.keys((v ?? {}) as object).length} set`
+                        : display(v),
+                  ),
                   {
                     title: "Delete this preset",
                     value: "__delete__",
@@ -703,6 +707,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     )
                     return openPreset(name)
                   }
+                  if (v.startsWith("k:"))
+                    return editKnob(name, preset, v.slice(2))
                   if (v === "__delete__") {
                     const doomed = cfg.presets[name]
                     const count = (doomed?.accounts ?? []).length
@@ -718,38 +724,157 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                       () => openPreset(name),
                     )
                   }
-                  pickStrategy(name, preset)
                 }}
               />
             ))
           }
 
-          const pickStrategy = (
+          /**
+           * Edit one override, or clear it back to the default.
+           *
+           * Clearing is offered on every knob: without it a value set once can
+           * only be changed and never returned to inheriting, so the preset
+           * quietly stops tracking a default that later moves.
+           */
+          const editKnob = (
             name: string,
-            preset: { strategy?: string },
+            preset: Record<string, unknown>,
+            key: string,
           ) => {
-            const cfg = getConfig()
-            api.ui.dialog.replace(() => (
-              <api.ui.DialogSelect
-                title={`Strategy for ${name}`}
-                current={preset.strategy ?? "sticky"}
-                options={[
-                  backRow(name),
-                  ...STRATEGY_NAMES.map((v) => ({ title: v, value: v })),
-                ]}
-                onSelect={(row) => {
-                  if (String(row.value) === BACK) return openPreset(name)
-                  savePresets(
-                    {
-                      ...cfg.presets,
-                      [name]: { ...preset, strategy: String(row.value) },
-                    },
-                    `${name} now ${String(row.value)}.`,
-                  )
-                  openPreset(name)
-                }}
-              />
-            ))
+            const defaults = getConfig() as unknown as Record<string, unknown>
+            const save = (value: unknown) => {
+              const next = { ...preset }
+              if (value === undefined) delete next[key]
+              else next[key] = value
+              savePresets(
+                { ...getConfig().presets, [name]: next },
+                value === undefined
+                  ? `${key} back to the default.`
+                  : `${key} set for ${name}.`,
+              )
+              openPreset(name)
+            }
+
+            if (key === "weights") return editWeights(name, preset)
+
+            const clearRow = {
+              title: `Use the default (${display(defaults[key])})`,
+              value: "__clear__",
+              description: "stop overriding it here",
+            }
+            const choices =
+              key === "strategy"
+                ? STRATEGY_NAMES.map((v) => ({ title: v, value: v }))
+                : key === "switchWindow"
+                  ? ["5h", "7d", "binding"].map((v) => ({ title: v, value: v }))
+                  : key === "autoSwitch"
+                    ? [
+                        { title: "on", value: "true" },
+                        { title: "off", value: "false" },
+                      ]
+                    : null
+
+            if (choices) {
+              return api.ui.dialog.replace(
+                () => (
+                  <api.ui.DialogSelect
+                    title={`${key} for ${name}`}
+                    options={[backRow(name), clearRow, ...choices]}
+                    onSelect={(row) => {
+                      const val = String(row.value)
+                      if (val === BACK) return openPreset(name)
+                      if (val === "__clear__") return save(undefined)
+                      save(key === "autoSwitch" ? val === "true" : val)
+                    }}
+                  />
+                ),
+                escapeTo(() => openPreset(name)),
+              )
+            }
+
+            // switchAt and ejectFor are typed, validated by the same rules the
+            // settings editor uses rather than a second opinion about them.
+            const meta = EDITABLE.find((e) => e.key === key)
+            const prompt = (seed: string) =>
+              api.ui.dialog.replace(
+                () => (
+                  <api.ui.DialogPrompt
+                    title={`${key} for ${name} (empty = default)`}
+                    placeholder={meta?.example}
+                    value={seed}
+                    onConfirm={(value: string) => {
+                      if (value.trim() === "") return save(undefined)
+                      const checked = meta
+                        ? validateValue(meta, value)
+                        : ({ ok: false, reason: "unknown setting" } as const)
+                      if (!checked.ok) {
+                        api.ui.toast({
+                          variant: "error",
+                          title: `${key} unchanged`,
+                          message: checked.reason,
+                        })
+                        return prompt(value)
+                      }
+                      save(JSON.parse(checked.literal))
+                    }}
+                    onCancel={() => openPreset(name)}
+                  />
+                ),
+                escapeTo(() => openPreset(name)),
+              )
+            prompt(preset[key] === undefined ? "" : String(preset[key]))
+          }
+
+          /** Cycle each account's weight; 1 is the default and is not stored. */
+          const editWeights = (
+            name: string,
+            preset: Record<string, unknown>,
+          ) => {
+            const weights = (preset.weights ?? {}) as Record<string, number>
+            const names = displayNames()
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title={`Weights for ${name}`}
+                  options={[
+                    backRow(name),
+                    ...accounts.map((a) => ({
+                      title: `${names.get(a.source) ?? a.source}: ${weights[a.source] ?? 1}`,
+                      value: `w:${a.source}`,
+                      description:
+                        weights[a.source] === undefined
+                          ? "weighs 1 by default - select to cycle"
+                          : "select to cycle 1 / 2 / 3 / 5",
+                    })),
+                  ]}
+                  onSelect={(row) => {
+                    const val = String(row.value)
+                    if (val === BACK) return openPreset(name)
+                    const src = val.slice(2)
+                    const cycle = [1, 2, 3, 5]
+                    const now = weights[src] ?? 1
+                    const next =
+                      cycle[(cycle.indexOf(now) + 1) % cycle.length] ?? 1
+                    const updated: Record<string, number> = {
+                      ...weights,
+                      [src]: next,
+                    }
+                    // Storing the default weight adds a line the reader has to
+                    // recognise as meaningless.
+                    if (next === 1) delete updated[src]
+                    const body: Record<string, unknown> = { ...preset }
+                    if (Object.keys(updated).length) body.weights = updated
+                    else delete body.weights
+                    savePresets(
+                      { ...getConfig().presets, [name]: body },
+                      `${names.get(src) ?? src} weighs ${next}.`,
+                    )
+                    editWeights(name, body)
+                  }}
+                />
+              ),
+              escapeTo(() => openPreset(name)),
+            )
           }
 
           const newPreset = () => {

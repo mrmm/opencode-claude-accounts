@@ -26,11 +26,46 @@
  */
 import { resolveRef } from "../balance/index.ts"
 
+/** A behaviour knob a preset may override, and how it is edited. */
+export type PresetKnob = {
+  key:
+    | "strategy"
+    | "autoSwitch"
+    | "switchAt"
+    | "switchWindow"
+    | "ejectFor"
+    | "weights"
+  label: string
+  /** Shown when the preset does not name it, so inherited reads as inherited. */
+  inheritsFrom: string
+}
+
+/**
+ * What a preset may override, in the order the editor shows it.
+ *
+ * `weights` is listed but only offered when the strategy is `weighted`: a
+ * ratio for a strategy that does not read one is a setting that appears to do
+ * something and does not.
+ */
+export const PRESET_KNOBS: PresetKnob[] = [
+  { key: "strategy", label: "Strategy", inheritsFrom: "strategy" },
+  { key: "weights", label: "Weights", inheritsFrom: "weights" },
+  { key: "autoSwitch", label: "Auto-switch", inheritsFrom: "autoSwitch" },
+  { key: "switchAt", label: "Switch at", inheritsFrom: "switchAt" },
+  { key: "switchWindow", label: "Switch window", inheritsFrom: "switchWindow" },
+  { key: "ejectFor", label: "Eject for", inheritsFrom: "ejectFor" },
+]
+
 export type Preset = {
   label?: string
   strategy?: string
   accounts?: string[]
   pools?: unknown[]
+  weights?: Record<string, number>
+  autoSwitch?: boolean
+  switchAt?: number
+  switchWindow?: string
+  ejectFor?: number
 }
 
 export type PresetMap = Record<string, Preset>
@@ -143,4 +178,34 @@ export function presetRows(
     }
   })
   return rows
+}
+
+/**
+ * One row per knob: what this preset does, and whether it said so itself.
+ *
+ * The distinction is the point. "Switch at: 0.95" is ambiguous between a
+ * deliberate 0.95 and an inherited one, and the two behave differently when the
+ * default later changes.
+ */
+export function knobRows(
+  preset: Preset,
+  defaults: Record<string, unknown>,
+  render: (key: string, value: unknown) => string,
+): { title: string; value: string; description: string; category: string }[] {
+  const strategy = (preset.strategy ?? defaults.strategy) as string
+  return PRESET_KNOBS.filter(
+    (k) => k.key !== "weights" || strategy === "weighted",
+  ).map((k) => {
+    const own = (preset as Record<string, unknown>)[k.key]
+    const inherited = own === undefined
+    const effective = inherited ? defaults[k.inheritsFrom] : own
+    return {
+      title: `${k.label}: ${render(k.key, effective)}`,
+      value: `k:${k.key}`,
+      description: inherited
+        ? "inherited from the defaults"
+        : "set by this preset",
+      category: "Behaviour",
+    }
+  })
 }

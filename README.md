@@ -592,14 +592,40 @@ by the account list. The rest read something:
 }
 ```
 
-Weights live on the preset because the strategy does: a preset is a strategy
-plus the accounts it runs over, and a weight means nothing without both. Keys
-are the same references the accounts list accepts. A missing account weighs 1,
-so only the ones that differ need naming.
+### Defaults and overrides
 
-A preset that sets no weights does not inherit the top-level ones. Otherwise the
-ratio would come from a setting the preset never mentions, which is the same
-class of surprise as a pool inheriting accounts.
+The top-level settings are defaults. A preset overrides what it names and
+inherits the rest, so an arrangement that needs to switch at 80% does not
+require editing the global before selecting it and again afterwards:
+
+```jsonc
+{
+  "switchAt": 0.95,
+  "presets": {
+    "careful": {
+      "strategy": "weighted",
+      "accounts": ["Acme 1", "Acme 2"],
+      "weights": { "Acme 1": 3 },
+      "switchAt": 0.8,
+    },
+  },
+}
+```
+
+A preset may override `strategy`, `weights`, `autoSwitch`, `switchAt`,
+`switchWindow` and `ejectFor`. Anything it does not name is inherited, including
+weights -- one rule, no exceptions to remember. Its own weights _replace_ the
+defaults rather than merging, so the ratio can be read from the preset alone.
+
+`/cc-accounts` -> a preset shows each of these with its value and whether the
+preset set it or inherited it. That distinction matters: "Switch at: 0.95"
+alone cannot tell a deliberate 0.95 from an inherited one, and the two diverge
+the moment the default changes. Every knob can be cleared back to inheriting.
+
+Weights are edited per account as a `1 / 2 / 3 / 5` cycle, offered only when the
+strategy is `weighted` -- a ratio beside a strategy that ignores it is a control
+that appears to do something and does not. Weight 1 is the default and is not
+stored.
 
 Pool-based presets keep their own per-tier weights, unchanged.
 

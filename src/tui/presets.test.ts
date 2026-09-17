@@ -4,7 +4,9 @@ import { describe, it } from "node:test"
 import {
   indentJson,
   isEditable,
+  knobRows,
   presetMembership,
+  PRESET_KNOBS,
   presetRows,
   togglePresetAccount,
   validatePresetName,
@@ -161,5 +163,68 @@ describe("presetRows", () => {
   it("says which presets it will not edit, rather than hiding them", () => {
     const rows = presetRows(PRESETS, "__auto__")
     assert.match(rows[1]!.description, /read only/)
+  })
+})
+
+/** Stands in for the TUI's value formatter. */
+const render = (_k: string, v: unknown) => String(v)
+
+describe("knobRows", () => {
+  const defaults = {
+    strategy: "sticky",
+    autoSwitch: true,
+    switchAt: 0.95,
+    switchWindow: "binding",
+    ejectFor: 300_000,
+    weights: {},
+  }
+
+  it("marks what the preset set apart from what it inherited", () => {
+    // "Switch at: 0.95" alone cannot distinguish a deliberate 0.95 from an
+    // inherited one, and the two diverge the moment the default changes.
+    const rows = knobRows({ accounts: ["a"], switchAt: 0.8 }, defaults, render)
+    const at = rows.find((r) => r.value === "k:switchAt")!
+    assert.match(at.title, /0\.8/)
+    assert.equal(at.description, "set by this preset")
+    assert.equal(
+      rows.find((r) => r.value === "k:switchWindow")!.description,
+      "inherited from the defaults",
+    )
+  })
+
+  it("shows the inherited value, not a blank", () => {
+    const rows = knobRows({ accounts: ["a"] }, defaults, render)
+    assert.match(rows.find((r) => r.value === "k:switchAt")!.title, /0\.95/)
+  })
+
+  it("offers weights only when the strategy actually reads them", () => {
+    // A ratio beside a strategy that ignores it is a control that appears to do
+    // something and does not.
+    const plain = knobRows({ accounts: ["a"] }, defaults, render)
+    assert.ok(!plain.some((r) => r.value === "k:weights"))
+    const weighted = knobRows(
+      { accounts: ["a"], strategy: "weighted" },
+      defaults,
+      render,
+    )
+    assert.ok(weighted.some((r) => r.value === "k:weights"))
+  })
+
+  it("sees a strategy inherited from the defaults too", () => {
+    const rows = knobRows(
+      { accounts: ["a"] },
+      { ...defaults, strategy: "weighted" },
+      render,
+    )
+    assert.ok(rows.some((r) => r.value === "k:weights"))
+  })
+
+  it("covers every knob a preset may carry", () => {
+    const rows = knobRows(
+      { accounts: ["a"], strategy: "weighted" },
+      defaults,
+      render,
+    )
+    assert.equal(rows.length, PRESET_KNOBS.length)
   })
 })

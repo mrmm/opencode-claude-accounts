@@ -371,26 +371,97 @@ describe("preset weights", () => {
     assert.deepEqual(out.cfg.weights, { a: 4 })
   })
 
-  it("a preset without weights clears any inherited ones", () => {
-    // Otherwise a top-level weight silently applies to a preset that never
-    // mentioned it, and the ratio comes from a setting the preset does not show.
+  it("a preset without weights inherits the default ones", () => {
+    // One rule for every override: the top level is the default and a preset
+    // replaces what it names. A weight for an account the preset does not use
+    // never applies anyway, so inheriting costs nothing and avoids an exception
+    // nobody would remember.
     const plain = {
       ...DEFAULT_CONFIG,
       weights: { a: 9 },
       presets: { plain: { accounts: ["a", "b"] } },
     }
-    assert.deepEqual(resolveActiveConfig(plain, "preset:plain").cfg.weights, {})
+    assert.deepEqual(resolveActiveConfig(plain, "preset:plain").cfg.weights, {
+      a: 9,
+    })
   })
 
-  it("a pool-based preset does not inherit flat weights either", () => {
-    const tiered = {
+  it("a preset's own weights replace the defaults rather than merging", () => {
+    // Merging would leave an account weighted by a setting the preset does not
+    // mention, so the ratio could not be read from the preset alone.
+    const own = {
       ...DEFAULT_CONFIG,
-      weights: { a: 9 },
-      presets: { tiered: { pools: [{ name: "p", accounts: ["a"] }] } },
+      weights: { a: 9, b: 9 },
+      presets: { own: { accounts: ["a", "b"], weights: { a: 2 } } },
     }
-    assert.deepEqual(
-      resolveActiveConfig(tiered, "preset:tiered").cfg.weights,
-      {},
+    assert.deepEqual(resolveActiveConfig(own, "preset:own").cfg.weights, {
+      a: 2,
+    })
+  })
+})
+
+describe("preset behaviour overrides", () => {
+  const base = {
+    ...DEFAULT_CONFIG,
+    switchAt: 0.95,
+    switchWindow: "binding" as const,
+    autoSwitch: true,
+    ejectFor: 300_000,
+  }
+
+  it("a preset replaces only what it names", () => {
+    const careful = {
+      ...base,
+      presets: { careful: { accounts: ["a"], switchAt: 0.8 } },
+    }
+    const out = resolveActiveConfig(careful, "preset:careful").cfg
+    assert.equal(out.switchAt, 0.8, "the override did not apply")
+    assert.equal(
+      out.switchWindow,
+      "binding",
+      "an unnamed setting was not inherited",
     )
+    assert.equal(out.autoSwitch, true)
+    assert.equal(out.ejectFor, 300_000)
+  })
+
+  it("overrides every behaviour knob a preset may carry", () => {
+    const loud = {
+      ...base,
+      presets: {
+        loud: {
+          accounts: ["a"],
+          autoSwitch: false,
+          switchAt: 0.5,
+          switchWindow: "7d" as const,
+          ejectFor: 60_000,
+        },
+      },
+    }
+    const out = resolveActiveConfig(loud, "preset:loud").cfg
+    assert.deepEqual(
+      [out.autoSwitch, out.switchAt, out.switchWindow, out.ejectFor],
+      [false, 0.5, "7d", 60_000],
+    )
+  })
+
+  it("honours false, which is a value and not an absence", () => {
+    // `preset.autoSwitch ? ... : {}` would drop this one silently.
+    const offCfg = {
+      ...base,
+      presets: { off: { accounts: ["a"], autoSwitch: false } },
+    }
+    assert.equal(
+      resolveActiveConfig(offCfg, "preset:off").cfg.autoSwitch,
+      false,
+    )
+  })
+
+  it("leaves the defaults alone when no preset is selected", () => {
+    const noSel = {
+      ...base,
+      presets: { p: { accounts: ["a"], switchAt: 0.1 } },
+    }
+    assert.equal(resolveActiveConfig(noSel, null).cfg.switchAt, 0.95)
   })
 })

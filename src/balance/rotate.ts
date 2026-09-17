@@ -98,20 +98,33 @@ export function resolveActiveConfig(
     cfg: {
       ...cfg,
       ...(preset.strategy ? { strategy: preset.strategy } : {}),
+      // Behaviour overrides: named on the preset, inherited when absent. The
+      // top level is the default, not a floor -- a preset that says 0.8 means
+      // 0.8 while it is selected, and says nothing about the rest of the time.
+      ...(preset.autoSwitch === undefined
+        ? {}
+        : { autoSwitch: preset.autoSwitch }),
+      ...(preset.switchAt === undefined ? {} : { switchAt: preset.switchAt }),
+      ...(preset.switchWindow === undefined
+        ? {}
+        : { switchWindow: preset.switchWindow }),
+      ...(preset.ejectFor === undefined ? {} : { ejectFor: preset.ejectFor }),
       // A preset declares either a flat list or tiers, never a mix: letting a
       // preset's accounts sit alongside inherited pools would make the effective
       // set depend on settings the preset never mentioned.
       ...(preset.pools
-        ? { pools: preset.pools, accounts: [], weights: {} }
+        ? { pools: preset.pools, accounts: [] }
         : {
             accounts: preset.accounts ?? [],
             pools: [],
             // Carried through so `weighted` means something on a flat preset:
             // without it the synthesised pool has no weights, every account
             // weighs 1, and the strategy is round-robin reporting itself as
-            // weighted. Reset rather than inherited, so a top-level weight
-            // cannot silently set the ratio for a preset that never named it.
-            weights: preset.weights ?? {},
+            // weighted. Inherited when the preset names none, like every other
+            // override here -- a weight for an account the preset does not use
+            // simply never applies, so inheriting costs nothing and keeps one
+            // rule instead of an exception.
+            ...(preset.weights ? { weights: preset.weights } : {}),
           }),
     },
     preset: chosen,
