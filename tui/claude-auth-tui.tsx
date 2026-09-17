@@ -25,11 +25,11 @@ import type {
   TuiPluginApi,
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui"
-import { createSignal, onCleanup, Show } from "solid-js"
+import { createSignal, For, onCleanup } from "solid-js"
 
 import {
-  listAccounts,
   loadPersistedAccountSource,
+  refreshAccountsList,
   saveAccountSource,
 } from "../dist/credentials.js"
 import { readQuotaCache } from "../dist/balance/quota.js"
@@ -38,6 +38,7 @@ import {
   buildPickerOptions,
   formatChip,
   mostRecentlyObserved,
+  sidebarLines,
 } from "../dist/tui/chip.js"
 
 /** Two small file reads. No Keychain, no network, so polling is cheap. */
@@ -53,17 +54,28 @@ function read() {
 }
 
 const tui: TuiPlugin = async (api: TuiPluginApi) => {
-  // Labels come from the Keychain, one subprocess per account. They do not
-  // change while the TUI is open, so this is read once rather than per poll.
-  let accounts: { source: string; label: string }[] = []
-  try {
-    accounts = listAccounts().map((a: { source: string; label: string }) => ({
-      source: a.source,
-      label: a.label,
-    }))
-  } catch {
-    // Nothing readable: the chip renders nothing rather than an error string.
+  // refreshAccountsList(), not listAccounts(): the latter returns the list
+  // already in memory, and this is a different process from the plugin that
+  // fills it, so it is always empty here. That is what made the chip invisible
+  // -- it rendered, with nothing to render.
+  //
+  // Re-reading the Keychain costs one subprocess per account, which is why the
+  // balancer avoids it per request. Here it happens once at start and again
+  // when the picker opens, which is also how the account switcher behaves.
+  const loadAccounts = (): { source: string; label: string }[] => {
+    try {
+      return refreshAccountsList().map(
+        (a: { source: string; label: string }) => ({
+          source: a.source,
+          label: a.label,
+        }),
+      )
+    } catch {
+      return []
+    }
   }
+
+  let accounts = loadAccounts()
 
   const [snap, setSnap] = createSignal(read())
   const timer = setInterval(() => setSnap(read()), POLL_MS)
@@ -73,12 +85,60 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     order: 200,
     slots: {
       session_prompt_right() {
+        // No Show gate. Selection and quota come from files and are useful
+        // even when the Keychain gives no labels; gating on labels is exactly
+        // what made this render as nothing.
         return (
-          <Show when={accounts.length > 0}>
-            <text fg={api.theme.current.textMuted}>
-              {formatChip({ accounts, ...snap() })}
+          <text fg={api.theme.current.textMuted}>
+            {formatChip({ accounts, ...snap() })}
+          </text>
+        )
+      },
+    },
+  })
+
+  api.slots.register({
+    order: 210,
+    slots: {
+      sidebar_content() {
+        const view = () => sidebarLines({ accounts, ...snap() })
+        return (
+          <box>
+            <text fg={api.theme.current.text}>
+              <b>Claude Auth</b>
+              <span style={{ fg: api.theme.current.textMuted }}>
+                {" "}
+                ({view().heading})
+              </span>
             </text>
-          </Show>
+            <For each={view().rows}>
+              {(row) => (
+                <box flexDirection="row" gap={1}>
+                  <text
+                    flexShrink={0}
+                    style={{
+                      fg: row.rejected
+                        ? api.theme.current.error
+                        : row.active
+                          ? api.theme.current.success
+                          : api.theme.current.textMuted,
+                    }}
+                  >
+                    {row.active ? "*" : "\u00b7"}
+                  </text>
+                  <text
+                    style={{
+                      fg: row.active
+                        ? api.theme.current.text
+                        : api.theme.current.textMuted,
+                    }}
+                  >
+                    {row.text}
+                  </text>
+                </box>
+              )}
+            </For>
+          </box>
         )
       },
     },
@@ -93,6 +153,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         namespace: "palette",
         slashName: "cc-account",
         run() {
+          // Notice an account added since start-up, the way the switcher does.
+          accounts = loadAccounts()
           const current = snap()
           const options = buildPickerOptions({
             accounts,

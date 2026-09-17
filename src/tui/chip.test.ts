@@ -5,6 +5,7 @@ import {
   buildPickerOptions,
   formatChip,
   shortLabel,
+  sidebarLines,
   mostRecentlyObserved,
   utilisation,
   type ChipAccount,
@@ -219,5 +220,51 @@ describe("mostRecentlyObserved", () => {
   it("ignores entries with no timestamp instead of ranking them first", () => {
     const cache = { s1: {}, s2: { observedAt: 5 } } as unknown as QuotaCache
     assert.equal(mostRecentlyObserved(cache), "s2")
+  })
+})
+
+describe("sidebarLines", () => {
+  const base = {
+    accounts: ACCOUNTS,
+    quota: { s1: q(0.41, 0.45) } as QuotaCache,
+    activeSource: "s1",
+  }
+
+  it("names the mode in the heading", () => {
+    assert.match(
+      sidebarLines({ ...base, selection: "preset:rr-123" }).heading,
+      /rr-123/,
+    )
+    assert.match(
+      sidebarLines({ ...base, selection: "__auto__" }).heading,
+      /auto/,
+    )
+    assert.equal(sidebarLines({ ...base, selection: "s1" }).heading, "pinned")
+  })
+
+  it("lists every account, marking the one serving", () => {
+    const { rows } = sidebarLines({ ...base, selection: "__auto__" })
+    assert.equal(rows.length, ACCOUNTS.length)
+    assert.deepEqual(
+      rows.map((r) => r.active),
+      [true, false],
+    )
+  })
+
+  it("says so when an account has no reading, rather than implying 0%", () => {
+    const { rows } = sidebarLines({ ...base, selection: "__auto__" })
+    assert.match(rows[0]!.text, /41% \/ 45%/)
+    assert.match(rows[1]!.text, /no reading/)
+  })
+
+  it("renders with no accounts at all instead of throwing", () => {
+    const { rows, heading } = sidebarLines({
+      accounts: [],
+      quota: {} as QuotaCache,
+      selection: "__auto__",
+      activeSource: null,
+    })
+    assert.equal(rows.length, 0)
+    assert.ok(heading.length > 0)
   })
 })

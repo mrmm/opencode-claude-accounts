@@ -122,6 +122,37 @@ export function formatChip(input: ChipInput): string {
 }
 
 /**
+ * The sidebar block: a heading line plus one line per account.
+ *
+ * The prompt-right chip has to fit beside an input box; the sidebar has a
+ * column to itself, so this is where the full picture goes -- every account,
+ * both windows, and which one is serving.
+ */
+export function sidebarLines(input: ChipInput): {
+  heading: string
+  rows: { text: string; active: boolean; rejected: boolean }[]
+} {
+  const heading = input.selection.startsWith(PRESET)
+    ? `balancing - ${input.selection.slice(PRESET.length)}`
+    : input.selection === AUTO
+      ? "balancing - auto"
+      : "pinned"
+
+  const rows = input.accounts.map((a) => {
+    const { five, week, rejected } = utilisation(input.quota, a.source)
+    const load =
+      five === undefined ? "no reading" : `${five}% / ${week ?? "-"}%`
+    return {
+      text: `${shortLabel(a.label)}  ${load}`,
+      active: a.source === input.activeSource,
+      rejected,
+    }
+  })
+
+  return { heading, rows }
+}
+
+/**
  * Picker rows: presets first, then Auto, then individual accounts.
  *
  * Deliberately the same ordering as the `/connect` switcher, so the two do not
