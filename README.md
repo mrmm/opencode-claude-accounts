@@ -369,42 +369,6 @@ you, and no other level implies it.
 Blocks composed programmatically by OpenCode report as `unattributed`, which is
 the useful answer: no file is responsible for them.
 
-### Naming accounts
-
-Display names are derived from the Keychain label -- the number in it, where
-that is unambiguous -- which is a guess. `accountNames` overrides it:
-
-```jsonc
-{
-  "accountNames": {
-    "Acme 1": "Team A",
-    "Claude Code-credentials-340807bc": "Personal",
-  },
-}
-```
-
-Keys are the same references presets accept: an exact Keychain source, or a
-fragment of the label, resolved by the balancer's own matcher. The name is
-display only -- nothing about routing reads it -- so it can be anything.
-
-An explicit name is exempt from the collision rule that governs derived ones.
-Two guesses may not both claim "Team 1"; two names someone typed are a decision,
-not an accident.
-
-`Rename` rows in `/cc-accounts` write this key. An empty name clears the
-override and returns the account to its derived name.
-
-### Getting back
-
-Every screen below the first carries a `← Back` row. That is not a stylistic
-choice: `TuiDialogStack.replace()` discards the stack and installs a single
-item, and fires every existing `onClose` _before_ doing so -- so `onClose`
-cannot distinguish "escaped" from "moved forward", and there is no stack to pop.
-No dialog-scoped keybinding is exposed either. A selectable row is the mechanism
-that exists, and it has the advantage of being visible rather than remembered.
-
-`esc` still closes outright, from anywhere.
-
 ### Assistant prefill refusals
 
 Some models answer 400 `This model does not support assistant message prefill.
@@ -441,63 +405,6 @@ assistant turns, where stripping would send an empty conversation and trade a
 clear error for a baffling one. Those cases log `prefill_retry_skipped` rather
 than failing quietly.
 
-### Account chip and picker in the TUI (optional)
-
-The server plugin cannot draw anything -- `PluginInput.tui` is `never`. Drawing
-is a separate plugin kind, loaded from a separate config file, running in the
-TUI process. `tui/claude-auth-tui.tsx` is that module.
-
-It adds two things:
-
-- a chip beside the prompt showing which account is serving and both quota
-  windows, refreshed every few seconds
-- `<leader>a`, or `/cc-account`, opening a picker of presets, Auto and accounts
-- `<leader>s`, or `/cc-stats`, listing the last 24h of traffic per session:
-  requests, errors, how many accounts served it, which models, average latency.
-  Selecting a session opens its detail -- rate, failures by status, slowest
-  request, per-account share, and how far each account's 5h window moved while
-  it ran. That last figure is an upper bound, not an attribution: the window is
-  shared with every other session. With `captureRequests` on it also reports
-  request size, split into system, tools and messages, so the fixed per-request
-  overhead is visible
-- `<leader>A`, or `/cc-accounts`, managing accounts and the named arrangements
-  they belong to: include or exclude an account, re-read the Keychain without
-  restarting, and create, edit or delete a preset (its accounts, its strategy).
-  Presets built from `pools` are listed and marked read-only -- tiered failover
-  is a list of groups each with its own strategy, and editing that in a dialog
-  would be a worse text editor than the one already open. Including or excluding
-  an account writes
-  the `accounts` allow-list, where an empty list means "all" -- so disabling one
-  writes the others explicitly, re-enabling everything writes `[]` again, and
-  disabling the last one is refused rather than silently re-enabling all of them
-- `<leader>c`, or `/cc-config`, editing the settings that apply without a
-  restart. Anything with a fixed vocabulary is chosen from a list; ratios and
-  durations are typed and validated before the write. Keys that need a restart
-  are not offered at all, because an editor that appears to work and changes
-  nothing is worse than no editor. Edits are surgical, so the comments in your
-  config survive
-
-Install by adding its absolute path to `~/.config/opencode/tui.json`:
-
-```jsonc
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["/absolute/path/to/tui/claude-auth-tui.tsx"],
-}
-```
-
-Picking here writes the selection file and nothing else -- the same thing
-`pnpm lb` and `claude_auth_select` do. No `authorize()`, no `auth.json` rewrite.
-The provider auth flow (`opencode auth login`) remains the only path that
-re-runs authentication.
-
-Two honest limits. The TUI is a different process from the balancer and cannot
-see its in-memory choice, so "serving now" is inferred from the newest quota
-observation; before a session's first response it names whichever account served
-last. And this module imports `@opentui/solid`, which the TUI host provides --
-the server plugin keeps its zero runtime dependencies, because the two never
-share a module.
-
 ### When an account is spent
 
 Health is derived from the rate-limit headers Anthropic returns on every
@@ -523,6 +430,195 @@ be rewritten mid-session — without the toast the switch would be invisible.
 A rotation is deliberately **not** persisted. The file behind the switcher holds
 the account _you_ chose; letting one OpenCode window's exhaustion rewrite it
 would move every other window too, and would erase a pin you set on purpose.
+
+## In the TUI
+
+The plugin that owns the accounts cannot draw anything: `PluginInput.tui` is
+`never`. Drawing is a separate plugin kind, loaded from its own config file into
+the TUI process, so `tui/claude-auth-tui.tsx` is a second entry point. The two
+share state only through files on disk -- the selection file, the quota cache,
+the telemetry log and the config -- which is why nothing here needs the server
+plugin to be running in the same process.
+
+Install by adding its absolute path to `~/.config/opencode/tui.json`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": ["/absolute/path/to/tui/claude-auth-tui.tsx"]
+}
+```
+
+It uses the host's `@opentui/solid`; the server plugin keeps its zero runtime
+dependencies, because the two never share a module.
+
+### Always on screen
+
+A chip beside the prompt:
+
+```
+⇄ rr-123 · Team 2 · 5h 24%
+```
+
+The arrangement in force, the account that actually served last, and its 5-hour
+utilisation. Only the 5h window: it is the one that moves during a session, and
+this sits next to an input box.
+
+A section in the sidebar, where there is room for the rest:
+
+```
+Claude Auth (balancing - rr-123 · 1 off)
+  ●  Team 2   5h 24% · wk 57% · 44% reqs
+  ·  Team 1   refused · 5h 104% · wk 57% · 28% reqs
+  ·  Team 3   5h 24% · wk 57% · 27% reqs
+```
+
+Colour means load and nothing else -- green below the warning threshold, yellow
+at it, red at the window or while being refused, muted when nothing has been
+read. Which account is serving is the filled marker and the brighter name. Two
+facts on two channels: colouring by "is it serving" made a healthy idle account
+and an exhausted one look identical, which is the one comparison this list
+exists to support.
+
+The thresholds are the configured `quotaWarnAt` and `quotaWeeklyWarnAt`, so the
+colour cannot disagree with the toast the plugin would raise.
+
+Request share is there because quota percentages cannot answer "is the balancer
+actually spreading load": two accounts can sit at the same utilisation while one
+serves everything.
+
+Both refresh every four seconds, from two small file reads. The Keychain is
+touched at start-up and when a picker opens, never on the poll.
+
+### Commands
+
+| command | default key | what it is for |
+| --- | --- | --- |
+| `/cc-account` | `<leader>a` | choose a preset, Auto, or pin one account |
+| `/cc-accounts` | `<leader>A` | manage accounts and the arrangements they belong to |
+| `/cc-config` | `<leader>c` | the settings that apply without a restart |
+| `/cc-stats` | `<leader>s` | usage per session, last 24h |
+
+### /cc-account
+
+Presets, then Auto, then the individual accounts, each with its quota. Picking
+one writes the selection file and nothing else -- no `authorize()`, no
+`auth.json` rewrite, no provider rebuild. That is the whole reason it exists
+next to the provider auth flow, which does all three.
+
+### /cc-accounts
+
+- **Accounts in use** -- include or exclude an account. This writes the
+  `accounts` allow-list, where an empty list means "all": disabling one writes
+  the others explicitly, re-enabling everything writes `[]` again rather than
+  pinning today's set, and disabling the last one is refused, because obeying it
+  would empty the list and re-enable everything.
+- **Re-read the Keychain** -- pick up an account added or removed since the
+  session started, without restarting.
+- **Rename** -- writes `accountNames`. An empty name clears the override and
+  returns the account to its derived name.
+- **Presets** -- create, delete, change the strategy, and toggle which accounts
+  belong. A preset's accounts are *references*, resolved the way the balancer
+  resolves them, so a hand-written `"Acme 1"` is understood and preserved;
+  references that resolve to nothing are listed as `[?]` and can be removed.
+  Presets built from `pools` are listed and marked read-only -- tiered failover
+  is a list of groups each with its own strategy, and a one-line dialog editing
+  that would be a worse text editor than the one already open.
+
+### /cc-config
+
+Twenty-one settings in four sections -- Balancing, Quota, Tokens, Diagnostics --
+each row carrying its label, current value, description and config key, so
+anything seen here can still be found in the file.
+
+Keys with a fixed vocabulary are chosen from a list, so a typo is not
+expressible. Ratios and durations are typed and validated before the write, and
+the validation is strict on purpose: `sanitize()` never rejects, it falls back
+to the default, so asking it "did you keep this" answers yes to everything and
+would write `switchAt: "abc"` as 0.95 while reporting success.
+
+Keys that need a restart are not offered at all. An editor that appears to work
+and changes nothing until restart is worse than no editor.
+
+### /cc-stats
+
+Sessions from the last 24 hours, newest first. Selecting one opens its detail:
+rate as well as count, failures broken down by status, the slowest request
+alongside the average, per-account share, and how far each account's 5h window
+moved while it ran.
+
+That last figure is labelled an upper bound rather than a cost. The window is
+consumed by every session at once, so attributing its movement to one of them
+would be a lie.
+
+With `captureRequests` on it also reports request size split into system, tools
+and messages, which separates the overhead paid on every request from the
+conversation. Token figures are shown as `~`, from four bytes each -- a rule of
+thumb that holds badly for code and JSON, which is most of a system prompt.
+
+### Writes
+
+Every screen writes the same way: surgically into the JSONC, via a temp file and
+a rename, then the config cache is dropped so the next read is the file rather
+than the answer it gave a moment ago.
+
+Surgical because this file is JSONC and its comments are the only documentation
+at the point of use; a parse-and-serialise round trip would delete every one.
+The writer tracks strings, line and block comments and brace depth, so a key
+named inside a comment, or nested inside `presets`, is never mistaken for the
+top-level one. A scan that reaches end of file is refused rather than written.
+
+### Getting back
+
+Select screens carry a `← Back` row. Escape in a text box returns to the screen
+that opened it; escape in a list closes outright.
+
+The asymmetry is the API's rather than a preference. `TuiDialogStack.replace()`
+discards the stack and installs one item, and fires every existing `onClose`
+*before* doing so -- so `onClose` cannot distinguish "escaped" from "moved
+forward", there is nothing to pop, and no dialog-scoped keybinding is exposed.
+Text boxes get escape-to-return through `onClose` with two guards (one
+suppressing deliberate navigation, one making each handler single-shot, since
+without either it is a loop). Lists get a visible row instead, which needs no
+guards and can be seen rather than remembered.
+
+### What the TUI cannot do
+
+- **Change the provider label under the prompt.** `Anthropic (LB: rr-123)` is
+  the provider name, written once per instance by the `config` hook, and
+  `TuiState.provider` is `readonly` with no setter. It is a start-up snapshot,
+  which is why the chip and the sidebar exist. It also describes the *policy*,
+  never the account serving -- under a preset that changes constantly.
+- **Edit `pools`.** See above.
+- **Edit the keys consumed once at start-up**: `debug`, `logLevel`,
+  `logEvents`, `logMaxSize`, `logKeep`, `tools`, `accountLabel`.
+
+## OpenCode integration points
+
+What this plugin attaches to, and the constraint each surface turned out to
+carry. Recorded because several of them are not documented and cost a
+measurement to establish.
+
+| surface | used for | constraint |
+| --- | --- | --- |
+| `auth.loader` | supplying credentials per request | — |
+| `auth.methods[].authorize` | the account switcher in `opencode auth login` | its callback returns credentials, which OpenCode persists; the server does **not** dispose anything on success (`provider/auth.ts` → `Auth.set` → `writeJson`, no event) |
+| `config` hook | decorating the provider name with the active arrangement | runs once per instance. Never invents a provider entry: doing so crashed every provider on 1.18.30 |
+| `chat.headers` | stamping the session id so a session can keep one account | the marker is stripped centrally before the request leaves |
+| custom `fetch` | routing, telemetry, quota reading, the prefill retry | the only place that sees a response, so every measurement originates here |
+| `tool` | `claude_auth_status`, `claude_auth_select`, `claude_auth_usage` | loaded by dynamic import: a static one cancels 28 node:test subtests |
+| `event` | idle-time rotation | — |
+| TUI `slots` | the chip and the sidebar section | `session_prompt_right` and `sidebar_content`; a separate plugin kind, `PluginInput.tui` is `never` |
+| TUI `keymap.registerLayer` | the four commands and their keys | global commands only; no dialog-scoped binding exists |
+| TUI `ui.dialog` | every screen | `replace`/`clear`, not `open`/`close`; replaces the stack rather than pushing |
+| TUI `ui.DialogPrompt` | the three text boxes | declares `onCancel` and never calls it; escape is the stack's, via `onClose` |
+| TUI `ui.DialogSelect` | every list | option text is `title`, not `label`; `category` renders as a real heading |
+| TUI `theme.current` | the health colours | `success`, `warning`, `error`, `text`, `textMuted` |
+
+The SDK is pinned to the running binary's exact version. Three different
+versions were in play at one point -- the lockfile held 1.2.27, a sibling
+checkout 1.17.1, the binary 1.18.31 -- so the TUI entry had been written against
+types matching nothing that runs.
 
 ## Troubleshooting
 
