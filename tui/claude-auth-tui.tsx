@@ -52,6 +52,7 @@ import {
   formatChip,
   mostRecentlyObserved,
   accountToggleRows,
+  enabledSources,
   sessionRows,
   sidebarLines,
   toggleAccount,
@@ -101,6 +102,21 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
 
   let accounts = loadAccounts()
 
+  /**
+   * The accounts the balancer may actually use.
+   *
+   * The sidebar and the chip show this, not every account in the Keychain: an
+   * account excluded by the allow-list can never serve, so listing it beside
+   * the ones that can is a list of four things where only three are true. The
+   * toggle dialog deliberately shows the full set, since you cannot re-enable
+   * something you cannot see.
+   */
+  const visible = () =>
+    (() => {
+      const allowed = new Set(enabledSources(accounts, getConfig().accounts))
+      return accounts.filter((a) => allowed.has(a.source))
+    })()
+
   const [snap, setSnap] = createSignal(read())
   const timer = setInterval(() => setSnap(read()), POLL_MS)
   onCleanup(() => clearInterval(timer))
@@ -114,7 +130,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         // what made this render as nothing.
         return (
           <text fg={api.theme.current.textMuted}>
-            {formatChip({ accounts, ...snap() })}
+            {formatChip({ accounts: visible(), ...snap() })}
           </text>
         )
       },
@@ -125,7 +141,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     order: 210,
     slots: {
       sidebar_content() {
-        const view = () => sidebarLines({ accounts, ...snap() })
+        const view = () =>
+          sidebarLines({
+            accounts: visible(),
+            hiddenCount: accounts.length - visible().length,
+            ...snap(),
+          })
         return (
           <box>
             <text fg={api.theme.current.text}>
@@ -185,7 +206,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           accounts = loadAccounts()
           const current = snap()
           const options = buildPickerOptions({
-            accounts,
+            accounts: visible(),
             presets: getConfig().presets,
             quota: current.quota,
             selection: current.selection,

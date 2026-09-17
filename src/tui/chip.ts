@@ -25,6 +25,13 @@ export type ChipInput = {
    * chip is useful without it and the caller may not have paid for the read.
    */
   requests?: Record<string, number>
+  /**
+   * Accounts excluded by the allow-list and therefore not listed.
+   *
+   * Reported rather than ignored: an account silently missing from a list of
+   * accounts is indistinguishable from one the plugin failed to see.
+   */
+  hiddenCount?: number
   now?: number
 }
 
@@ -187,11 +194,13 @@ export function sidebarLines(input: ChipInput): {
     rejected: boolean
   }[]
 } {
-  const heading = input.selection.startsWith(PRESET)
+  const mode = input.selection.startsWith(PRESET)
     ? `balancing - ${input.selection.slice(PRESET.length)}`
     : input.selection === AUTO
       ? "balancing - auto"
       : "pinned"
+  const hidden = input.hiddenCount ?? 0
+  const heading = hidden > 0 ? `${mode}, ${hidden} off` : mode
 
   const total = Object.values(input.requests ?? {}).reduce((n, r) => n + r, 0)
   const names = shortNames(input.accounts)

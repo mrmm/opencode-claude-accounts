@@ -282,6 +282,30 @@ describe("sidebarLines", () => {
     assert.ok(!zero.rows[0]!.detail.includes("reqs"))
   })
 
+  it("says how many accounts are excluded, rather than just omitting them", () => {
+    // An account missing from a list of accounts is otherwise indistinguishable
+    // from one the plugin failed to see.
+    const { heading } = sidebarLines({
+      ...base,
+      selection: "preset:rr-123",
+      hiddenCount: 2,
+    })
+    assert.match(heading, /rr-123/)
+    assert.match(heading, /2 off/)
+  })
+
+  it("stays quiet when nothing is excluded", () => {
+    const { heading } = sidebarLines({ ...base, selection: "__auto__" })
+    assert.ok(!heading.includes("off"))
+    assert.ok(
+      !sidebarLines({
+        ...base,
+        selection: "__auto__",
+        hiddenCount: 0,
+      }).heading.includes("off"),
+    )
+  })
+
   it("renders with no accounts at all instead of throwing", () => {
     const { rows, heading } = sidebarLines({
       accounts: [],
