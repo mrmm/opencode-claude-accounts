@@ -91,7 +91,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         title: "Claude account",
         category: "Claude Auth",
         namespace: "palette",
-        slashName: "account",
+        slashName: "cc-account",
         run() {
           const current = snap()
           const options = buildPickerOptions({
