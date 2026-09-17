@@ -9,7 +9,9 @@ import {
   toLiteral,
   optionsFor,
   validateValue,
+  STRATEGY_NAMES,
 } from "./config-edit.ts"
+import { STRATEGIES } from "./balance/index.ts"
 import { DEFAULT_CONFIG, sanitize } from "./config.ts"
 
 const strip2 = (s: string) =>
@@ -471,5 +473,33 @@ describe("setJsoncValue with structured values", () => {
   it("refuses rather than writing to the end of an unterminated document", () => {
     // Refusing loses an edit. Not refusing lost the file.
     assert.equal(setJsoncValue('{\n  "accounts": ["a"', "accounts", "[]"), null)
+  })
+})
+
+describe("strategy list", () => {
+  it("offers exactly what the balancer implements", () => {
+    // Two hand-maintained copies of this list existed and could drift in
+    // silence: each type-checks alone, so a strategy added to the balancer
+    // simply never appeared in the UI, and one removed still did.
+    assert.deepEqual(STRATEGY_NAMES, Object.keys(STRATEGIES))
+  })
+
+  it("is what the settings editor offers for `strategy`", () => {
+    const strategy = EDITABLE.find((e) => e.key === "strategy")!
+    assert.deepEqual(strategy.options, Object.keys(STRATEGIES))
+  })
+
+  it("offers every one of them as a value sanitize() keeps", () => {
+    for (const name of STRATEGY_NAMES) {
+      assert.equal(
+        sanitize({ strategy: name }).strategy,
+        name,
+        `${name} is implemented but the config layer rejects it`,
+      )
+    }
+  })
+
+  it("covers all eight, so a silent truncation is visible", () => {
+    assert.equal(STRATEGY_NAMES.length, 8)
   })
 })

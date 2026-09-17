@@ -445,7 +445,7 @@ Install by adding its absolute path to `~/.config/opencode/tui.json`:
 ```jsonc
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["/absolute/path/to/tui/claude-auth-tui.tsx"]
+  "plugin": ["/absolute/path/to/tui/claude-auth-tui.tsx"],
 }
 ```
 
@@ -492,12 +492,12 @@ touched at start-up and when a picker opens, never on the poll.
 
 ### Commands
 
-| command | default key | what it is for |
-| --- | --- | --- |
-| `/cc-account` | `<leader>a` | choose a preset, Auto, or pin one account |
+| command        | default key | what it is for                                      |
+| -------------- | ----------- | --------------------------------------------------- |
+| `/cc-account`  | `<leader>a` | choose a preset, Auto, or pin one account           |
 | `/cc-accounts` | `<leader>A` | manage accounts and the arrangements they belong to |
-| `/cc-config` | `<leader>c` | the settings that apply without a restart |
-| `/cc-stats` | `<leader>s` | usage per session, last 24h |
+| `/cc-config`   | `<leader>c` | the settings that apply without a restart           |
+| `/cc-stats`    | `<leader>s` | usage per session, last 24h                         |
 
 ### /cc-account
 
@@ -518,7 +518,7 @@ next to the provider auth flow, which does all three.
 - **Rename** -- writes `accountNames`. An empty name clears the override and
   returns the account to its derived name.
 - **Presets** -- create, delete, change the strategy, and toggle which accounts
-  belong. A preset's accounts are *references*, resolved the way the balancer
+  belong. A preset's accounts are _references_, resolved the way the balancer
   resolves them, so a hand-written `"Acme 1"` is understood and preserved;
   references that resolve to nothing are listed as `[?]` and can be removed.
   Presets built from `pools` are listed and marked read-only -- tiered failover
@@ -568,6 +568,18 @@ The writer tracks strings, line and block comments and brace depth, so a key
 named inside a comment, or nested inside `presets`, is never mistaken for the
 top-level one. A scan that reaches end of file is refused rather than written.
 
+### Irreversible actions
+
+Deleting a preset asks first, naming what goes with it. Everything else in the
+TUI is one selection away from being put back -- a toggled account, a rename, a
+changed strategy -- so only the delete is gated. A confirmation on a reversible
+action is noise that teaches the eye to skip confirmations.
+
+Two refusals are not confirmations but hard stops, because obeying them would do
+the opposite of what was asked: disabling the last enabled account (an empty
+allow-list means "all") and removing the last account from a preset (a preset
+matching nothing is fallen through silently).
+
 ### Getting back
 
 Select screens carry a `← Back` row. Escape in a text box returns to the screen
@@ -575,7 +587,7 @@ that opened it; escape in a list closes outright.
 
 The asymmetry is the API's rather than a preference. `TuiDialogStack.replace()`
 discards the stack and installs one item, and fires every existing `onClose`
-*before* doing so -- so `onClose` cannot distinguish "escaped" from "moved
+_before_ doing so -- so `onClose` cannot distinguish "escaped" from "moved
 forward", there is nothing to pop, and no dialog-scoped keybinding is exposed.
 Text boxes get escape-to-return through `onClose` with two guards (one
 suppressing deliberate navigation, one making each handler single-shot, since
@@ -587,7 +599,7 @@ guards and can be seen rather than remembered.
 - **Change the provider label under the prompt.** `Anthropic (LB: rr-123)` is
   the provider name, written once per instance by the `config` hook, and
   `TuiState.provider` is `readonly` with no setter. It is a start-up snapshot,
-  which is why the chip and the sidebar exist. It also describes the *policy*,
+  which is why the chip and the sidebar exist. It also describes the _policy_,
   never the account serving -- under a preset that changes constantly.
 - **Edit `pools`.** See above.
 - **Edit the keys consumed once at start-up**: `debug`, `logLevel`,
@@ -599,21 +611,21 @@ What this plugin attaches to, and the constraint each surface turned out to
 carry. Recorded because several of them are not documented and cost a
 measurement to establish.
 
-| surface | used for | constraint |
-| --- | --- | --- |
-| `auth.loader` | supplying credentials per request | — |
-| `auth.methods[].authorize` | the account switcher in `opencode auth login` | its callback returns credentials, which OpenCode persists; the server does **not** dispose anything on success (`provider/auth.ts` → `Auth.set` → `writeJson`, no event) |
-| `config` hook | decorating the provider name with the active arrangement | runs once per instance. Never invents a provider entry: doing so crashed every provider on 1.18.30 |
-| `chat.headers` | stamping the session id so a session can keep one account | the marker is stripped centrally before the request leaves |
-| custom `fetch` | routing, telemetry, quota reading, the prefill retry | the only place that sees a response, so every measurement originates here |
-| `tool` | `claude_auth_status`, `claude_auth_select`, `claude_auth_usage` | loaded by dynamic import: a static one cancels 28 node:test subtests |
-| `event` | idle-time rotation | — |
-| TUI `slots` | the chip and the sidebar section | `session_prompt_right` and `sidebar_content`; a separate plugin kind, `PluginInput.tui` is `never` |
-| TUI `keymap.registerLayer` | the four commands and their keys | global commands only; no dialog-scoped binding exists |
-| TUI `ui.dialog` | every screen | `replace`/`clear`, not `open`/`close`; replaces the stack rather than pushing |
-| TUI `ui.DialogPrompt` | the three text boxes | declares `onCancel` and never calls it; escape is the stack's, via `onClose` |
-| TUI `ui.DialogSelect` | every list | option text is `title`, not `label`; `category` renders as a real heading |
-| TUI `theme.current` | the health colours | `success`, `warning`, `error`, `text`, `textMuted` |
+| surface                    | used for                                                        | constraint                                                                                                                                                               |
+| -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `auth.loader`              | supplying credentials per request                               | —                                                                                                                                                                        |
+| `auth.methods[].authorize` | the account switcher in `opencode auth login`                   | its callback returns credentials, which OpenCode persists; the server does **not** dispose anything on success (`provider/auth.ts` → `Auth.set` → `writeJson`, no event) |
+| `config` hook              | decorating the provider name with the active arrangement        | runs once per instance. Never invents a provider entry: doing so crashed every provider on 1.18.30                                                                       |
+| `chat.headers`             | stamping the session id so a session can keep one account       | the marker is stripped centrally before the request leaves                                                                                                               |
+| custom `fetch`             | routing, telemetry, quota reading, the prefill retry            | the only place that sees a response, so every measurement originates here                                                                                                |
+| `tool`                     | `claude_auth_status`, `claude_auth_select`, `claude_auth_usage` | loaded by dynamic import: a static one cancels 28 node:test subtests                                                                                                     |
+| `event`                    | idle-time rotation                                              | —                                                                                                                                                                        |
+| TUI `slots`                | the chip and the sidebar section                                | `session_prompt_right` and `sidebar_content`; a separate plugin kind, `PluginInput.tui` is `never`                                                                       |
+| TUI `keymap.registerLayer` | the four commands and their keys                                | global commands only; no dialog-scoped binding exists                                                                                                                    |
+| TUI `ui.dialog`            | every screen                                                    | `replace`/`clear`, not `open`/`close`; replaces the stack rather than pushing                                                                                            |
+| TUI `ui.DialogPrompt`      | the three text boxes                                            | declares `onCancel` and never calls it; escape is the stack's, via `onClose`                                                                                             |
+| TUI `ui.DialogSelect`      | every list                                                      | option text is `title`, not `label`; `category` renders as a real heading                                                                                                |
+| TUI `theme.current`        | the health colours                                              | `success`, `warning`, `error`, `text`, `textMuted`                                                                                                                       |
 
 The SDK is pinned to the running binary's exact version. Three different
 versions were in play at one point -- the lockfile held 1.2.27, a sibling
@@ -871,7 +883,7 @@ so those can still be pulled and anything generally useful can go back.
 
 **[robbash/opencode-claude-auth](https://github.com/robbash/opencode-claude-auth)**
 by **Robert Sternberg** contributed the piece this fork leans on hardest: reading
-the Keychain *comment* for an entry, via `security dump-keychain`, so an account
+the Keychain _comment_ for an entry, via `security dump-keychain`, so an account
 has a name a person recognises instead of a hex suffix. Everything here that
 talks about "Team 2" or resolves a preset reference like `"Acme 1"` is standing
 on that. It survives in `src/keychain.ts` and was explicitly preserved across an

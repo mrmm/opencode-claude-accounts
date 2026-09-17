@@ -54,6 +54,7 @@ import { candidatePaths, getConfig, resetConfigCache } from "../dist/config.js"
 import {
   configRows,
   EDITABLE,
+  STRATEGY_NAMES,
   optionsFor,
   setJsoncValue,
   validateValue,
@@ -200,6 +201,32 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       navigate(back)
     }
   }
+
+  /**
+   * A confirmation step for anything that cannot be undone.
+   *
+   * Toggling an account, renaming one or changing a strategy are all one
+   * selection away from being put back. Deleting a preset is not: the accounts,
+   * the strategy and the label go with it, and nothing in the TUI can
+   * reconstruct them.
+   */
+  const confirmThen = (
+    title: string,
+    message: string,
+    act: () => void,
+    back: () => void,
+  ) =>
+    api.ui.dialog.replace(
+      () => (
+        <api.ui.DialogConfirm
+          title={title}
+          message={message}
+          onConfirm={() => navigate(act)}
+          onCancel={() => navigate(back)}
+        />
+      ),
+      escapeTo(back),
+    )
 
   const BACK = "__back__"
   const backRow = (where: string) => ({
@@ -677,27 +704,25 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     return openPreset(name)
                   }
                   if (v === "__delete__") {
-                    const rest = { ...cfg.presets }
-                    delete rest[name]
-                    savePresets(rest, `${name} removed.`)
-                    return menu()
+                    const doomed = cfg.presets[name]
+                    const count = (doomed?.accounts ?? []).length
+                    return confirmThen(
+                      `Delete ${name}?`,
+                      `Removes the preset, its ${count} account${count === 1 ? "" : "s"} and its strategy from the config. This cannot be undone from here.`,
+                      () => {
+                        const rest = { ...cfg.presets }
+                        delete rest[name]
+                        savePresets(rest, `${name} removed.`)
+                        menu()
+                      },
+                      () => openPreset(name),
+                    )
                   }
                   pickStrategy(name, preset)
                 }}
               />
             ))
           }
-
-          const STRATEGIES = [
-            "sticky",
-            "priority",
-            "least-loaded",
-            "least-used",
-            "round-robin",
-            "weighted",
-            "random",
-            "p2c",
-          ]
 
           const pickStrategy = (
             name: string,
@@ -710,7 +735,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 current={preset.strategy ?? "sticky"}
                 options={[
                   backRow(name),
-                  ...STRATEGIES.map((v) => ({ title: v, value: v })),
+                  ...STRATEGY_NAMES.map((v) => ({ title: v, value: v })),
                 ]}
                 onSelect={(row) => {
                   if (String(row.value) === BACK) return openPreset(name)

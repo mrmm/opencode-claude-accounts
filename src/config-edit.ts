@@ -27,7 +27,17 @@
  * `preset` is the one list that cannot be written down here, because it is
  * whatever the user configured; optionsFor() reads it at open time.
  */
+import { STRATEGIES } from "./balance/index.ts"
 import { parseDuration, parseRatio } from "./config.ts"
+
+/**
+ * Every strategy the balancer implements, in the order it declares them.
+ *
+ * Object.keys over the registry rather than a list beside it: adding a strategy
+ * to the balancer makes it appear here, and a test asserts the two cannot
+ * diverge.
+ */
+export const STRATEGY_NAMES: string[] = Object.keys(STRATEGIES)
 
 export type EditableKind = "boolean" | "enum" | "preset" | "number"
 
@@ -55,17 +65,11 @@ export const EDITABLE: Editable[] = [
     label: "Strategy",
     section: "Balancing",
     kind: "enum",
+    // Derived from the balancer's own registry, never retyped. A UI list that
+    // drifts offers a strategy that does not exist, or hides one that does --
+    // and the drift is silent, because both halves type-check on their own.
+    options: STRATEGY_NAMES,
     hint: "how the balancer picks",
-    options: [
-      "sticky",
-      "priority",
-      "least-loaded",
-      "least-used",
-      "round-robin",
-      "weighted",
-      "random",
-      "p2c",
-    ],
   },
   {
     key: "preset",
