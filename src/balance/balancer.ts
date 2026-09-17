@@ -279,7 +279,7 @@ export function resolveAccountRefs(
 
 export function resolvePools(
   members: readonly Member[],
-  cfg: Pick<ClaudeAuthConfig, "pools" | "accounts" | "strategy">,
+  cfg: Pick<ClaudeAuthConfig, "pools" | "accounts" | "strategy" | "weights">,
 ): Pool[] {
   const keep = (refs: string[]) => resolveAccountRefs(refs, members).sources
 
@@ -292,7 +292,16 @@ export function resolvePools(
   const flat =
     cfg.accounts.length > 0 ? keep(cfg.accounts) : members.map((m) => m.source)
   if (flat.length === 0) return []
-  return [{ name: "default", accounts: flat }]
+  // Weights ride along, or `weighted` on the flat path silently degrades to
+  // round-robin: every account weighs 1 and nothing says so.
+  const weights = cfg.weights && Object.keys(cfg.weights).length > 0
+  return [
+    {
+      name: "default",
+      accounts: flat,
+      ...(weights ? { weights: cfg.weights } : {}),
+    },
+  ]
 }
 
 // ---------------------------------------------------------------------------

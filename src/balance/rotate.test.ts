@@ -353,3 +353,44 @@ describe("describeSelection", () => {
     assert.equal(describeSelection(withPresets, "some-source"), "one account")
   })
 })
+
+describe("preset weights", () => {
+  it("a preset's weights reach the active config", () => {
+    const weighted = {
+      ...DEFAULT_CONFIG,
+      presets: {
+        w: {
+          strategy: "weighted" as const,
+          accounts: ["a", "b"],
+          weights: { a: 4 },
+        },
+      },
+    }
+    const out = resolveActiveConfig(weighted, "preset:w")
+    assert.equal(out.cfg.strategy, "weighted")
+    assert.deepEqual(out.cfg.weights, { a: 4 })
+  })
+
+  it("a preset without weights clears any inherited ones", () => {
+    // Otherwise a top-level weight silently applies to a preset that never
+    // mentioned it, and the ratio comes from a setting the preset does not show.
+    const plain = {
+      ...DEFAULT_CONFIG,
+      weights: { a: 9 },
+      presets: { plain: { accounts: ["a", "b"] } },
+    }
+    assert.deepEqual(resolveActiveConfig(plain, "preset:plain").cfg.weights, {})
+  })
+
+  it("a pool-based preset does not inherit flat weights either", () => {
+    const tiered = {
+      ...DEFAULT_CONFIG,
+      weights: { a: 9 },
+      presets: { tiered: { pools: [{ name: "p", accounts: ["a"] }] } },
+    }
+    assert.deepEqual(
+      resolveActiveConfig(tiered, "preset:tiered").cfg.weights,
+      {},
+    )
+  })
+})

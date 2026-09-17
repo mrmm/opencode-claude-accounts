@@ -102,8 +102,17 @@ export function resolveActiveConfig(
       // preset's accounts sit alongside inherited pools would make the effective
       // set depend on settings the preset never mentioned.
       ...(preset.pools
-        ? { pools: preset.pools, accounts: [] }
-        : { accounts: preset.accounts ?? [], pools: [] }),
+        ? { pools: preset.pools, accounts: [], weights: {} }
+        : {
+            accounts: preset.accounts ?? [],
+            pools: [],
+            // Carried through so `weighted` means something on a flat preset:
+            // without it the synthesised pool has no weights, every account
+            // weighs 1, and the strategy is round-robin reporting itself as
+            // weighted. Reset rather than inherited, so a top-level weight
+            // cannot silently set the ratio for a preset that never named it.
+            weights: preset.weights ?? {},
+          }),
     },
     preset: chosen,
   }

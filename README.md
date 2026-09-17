@@ -568,6 +568,41 @@ The writer tracks strings, line and block comments and brace depth, so a key
 named inside a comment, or nested inside `presets`, is never mistaken for the
 top-level one. A scan that reaches end of file is refused rather than written.
 
+### Strategy parameters
+
+Most strategies take none: `round-robin`, `random` and `p2c` are fully described
+by the account list. The rest read something:
+
+| strategy                     | parameter                      | where                               |
+| ---------------------------- | ------------------------------ | ----------------------------------- |
+| `sticky`                     | `switchAt`, `switchWindow`     | `/cc-config` -> Balancing           |
+| `least-loaded`, `least-used` | `switchWindow`, `quotaMaxAge`  | `/cc-config`                        |
+| `priority`                   | the order of the accounts list | the order they appear in `accounts` |
+| `weighted`                   | `weights`, per account         | the preset, or top level            |
+
+```jsonc
+{
+  "presets": {
+    "mostly-a": {
+      "strategy": "weighted",
+      "accounts": ["Acme 1", "Acme 2"],
+      "weights": { "Acme 1": 3, "Acme 2": 1 },
+    },
+  },
+}
+```
+
+Weights live on the preset because the strategy does: a preset is a strategy
+plus the accounts it runs over, and a weight means nothing without both. Keys
+are the same references the accounts list accepts. A missing account weighs 1,
+so only the ones that differ need naming.
+
+A preset that sets no weights does not inherit the top-level ones. Otherwise the
+ratio would come from a setting the preset never mentions, which is the same
+class of surprise as a pool inheriting accounts.
+
+Pool-based presets keep their own per-tier weights, unchanged.
+
 ### Irreversible actions
 
 Deleting a preset asks first, naming what goes with it. Everything else in the

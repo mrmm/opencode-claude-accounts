@@ -196,6 +196,21 @@ export function parseAccountNames(
   return out
 }
 
+/**
+ * A map of account reference to positive weight. Non-numeric, zero and negative
+ * entries are dropped rather than rejecting the whole map: one bad weight
+ * should not silently flatten the others back to 1.
+ */
+export function parseWeights(v: unknown): Record<string, number> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const out: Record<string, number> = {}
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    const n = Number(raw)
+    if (Number.isFinite(n) && n > 0) out[k] = n
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 export function parsePools(v: unknown): Pool[] | undefined {
   if (!Array.isArray(v)) return undefined
   const out: Pool[] = []
@@ -212,16 +227,8 @@ export function parsePools(v: unknown): Pool[] | undefined {
       accounts,
     }
     if (isBalanceStrategy(r.strategy)) pool.strategy = r.strategy
-    if (r.weights && typeof r.weights === "object") {
-      const weights: Record<string, number> = {}
-      for (const [k, w] of Object.entries(
-        r.weights as Record<string, unknown>,
-      )) {
-        const n = Number(w)
-        if (Number.isFinite(n) && n > 0) weights[k] = n
-      }
-      if (Object.keys(weights).length > 0) pool.weights = weights
-    }
+    const weights = parseWeights(r.weights)
+    if (weights) pool.weights = weights
     out.push(pool)
   }
   return out
@@ -242,6 +249,14 @@ export type Preset = {
   strategy?: BalanceStrategy
   /** Accounts in priority order. Ignored when `pools` is set. */
   accounts?: string[]
+  /**
+   * Per-account weight for `weighted`; missing entries weigh 1.
+   *
+   * Lives on the preset because strategy does: a preset is a strategy plus the
+   * accounts it runs over, and a weight is meaningless without both. Ignored
+   * when `pools` is set, where each tier carries its own.
+   */
+  weights?: Record<string, number>
   /** Failover tiers, for a preset that needs more than one. */
   pools?: Pool[]
 }
@@ -260,6 +275,8 @@ export function parsePresets(v: unknown): Record<string, Preset> | undefined {
     if (accounts && accounts.length > 0) preset.accounts = accounts
     const pools = parsePools(r.pools)
     if (pools && pools.length > 0) preset.pools = pools
+    const weights = parseWeights(r.weights)
+    if (weights) preset.weights = weights
     // A preset that names no accounts and no pools would silently mean "all of
     // them", which is not what anyone writes a preset for.
     if (!preset.accounts && !preset.pools) continue
@@ -308,6 +325,14 @@ export type ClaudeAuthConfig = {
    * with no usable account.
    */
   accounts: string[]
+  /**
+   * Per-account weight for `weighted` on the flat (non-pool) path.
+   *
+   * A pool carries its own; this is for the case where there are no pools, and
+   * without it `weighted` degrades to round-robin while still calling itself
+   * weighted.
+   */
+  weights: Record<string, number>
   /**
    * Move to another account by itself when the active one runs out. Off by
    * default: changing which subscription serves a request is the kind of
@@ -414,6 +439,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   configReloadInterval: 3000,
 
   accounts: [],
+  weights: {},
   autoSwitch: false,
   switchAt: 0.95,
   switchOn429: true,
@@ -598,6 +624,9 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
     )
   }
 
+  const topWeights = parseWeights(r.weights)
+  if (topWeights) out.weights = topWeights
+
   const names = parseAccountNames(r.accountNames)
   if (names) out.accountNames = names
 
@@ -711,6 +740,13 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   bindBy: (v) => v,
   pinBlocksRotation: (v) => v === "1",
   tools: (v) => v === "1",
+  weights: (v) => {
+    try {
+      return parseWeights(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
   accountNames: (v) => {
     try {
       return parseAccountNames(JSON.parse(v))

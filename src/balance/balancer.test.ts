@@ -9,6 +9,7 @@ import {
   clearEjection,
   ejectedUntil,
   resetCursors,
+  STRATEGIES,
   resetEjections,
   resolveAccountRefs,
   resolvePools,
@@ -617,5 +618,80 @@ describe("over threshold is not the same as exhausted", () => {
     const d = selectAccount(members("full", "ok"), cache, cfg(), null, NOW_MS)
     assert.equal(d!.source, "ok")
     assert.notEqual(d!.pool, "over-threshold")
+  })
+})
+
+const WEIGHTED_MEMBERS = [
+  { source: "a", label: "A", utilization: 0 },
+  { source: "b", label: "B", utilization: 0 },
+]
+
+describe("weights on the flat path", () => {
+  const base = {
+    pools: [],
+    accounts: ["a", "b"],
+    strategy: "weighted" as const,
+  }
+
+  it("carries configured weights into the synthesised pool", () => {
+    // Without this the pool has no weights, every account weighs 1, and
+    // `weighted` is round-robin wearing another name.
+    const [pool] = resolvePools(WEIGHTED_MEMBERS, {
+      ...base,
+      weights: { a: 3, b: 1 },
+    })
+    assert.deepEqual(pool!.weights, { a: 3, b: 1 })
+  })
+
+  it("omits the field entirely when no weights are configured", () => {
+    const [pool] = resolvePools(WEIGHTED_MEMBERS, { ...base, weights: {} })
+    assert.equal(pool!.weights, undefined)
+  })
+
+  it("spreads requests in the configured ratio", () => {
+    const pool = {
+      name: "default",
+      accounts: ["a", "b"],
+      weights: { a: 3, b: 1 },
+    }
+    const picks: string[] = []
+    for (let i = 0; i < 8; i++) {
+      picks.push(
+        STRATEGIES.weighted({
+          candidates: WEIGHTED_MEMBERS,
+          pool,
+          activeSource: null,
+          usage: {},
+          rng: () => 0,
+        } as never),
+      )
+    }
+    const a = picks.filter((p) => p === "a").length
+    assert.equal(a, 6, `3:1 over 8 picks should give a six times, got ${a}`)
+    assert.equal(picks.filter((p) => p === "b").length, 2)
+  })
+
+  it("treats an unweighted account as weight 1, not zero", () => {
+    // Weighing it 0 would exclude an account nobody excluded.
+    resetCursors()
+    const pool = {
+      name: "wtest-default",
+      accounts: ["a", "b"],
+      weights: { a: 2 },
+    }
+    const picks: string[] = []
+    for (let i = 0; i < 6; i++) {
+      picks.push(
+        STRATEGIES.weighted({
+          candidates: WEIGHTED_MEMBERS,
+          pool,
+          activeSource: null,
+          usage: {},
+          rng: () => 0,
+        } as never),
+      )
+    }
+    assert.ok(picks.includes("b"), "the unweighted account never served")
+    assert.equal(picks.filter((p) => p === "a").length, 4)
   })
 })

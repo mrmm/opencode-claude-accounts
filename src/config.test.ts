@@ -409,6 +409,7 @@ describe("config surface coverage", () => {
     bindBy: "none",
     pinBlocksRotation: "0",
     tools: "0",
+    weights: '{"Acme 1":3}',
     accountNames: '{"Acme 1":"Team 1"}',
     retryPrefillError: "1",
     captureRequests: "messages",
