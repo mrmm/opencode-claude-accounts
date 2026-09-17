@@ -169,6 +169,38 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       resolveRef(ref, list as { source: string; label?: string }[]),
     )
 
+  /**
+   * Escape, routed to a parent screen instead of closing everything.
+   *
+   * DialogPrompt declares onCancel and never calls it -- esc is handled by the
+   * dialog stack, which pops and calls onClose. So "back" has to come from
+   * onClose, and that needs two guards to be safe.
+   *
+   * replace() fires every existing onClose *before* installing the next screen,
+   * so a deliberate navigation would fire it too: `navigating` suppresses that.
+   * And the stack still holds the item while its onClose runs, so a handler
+   * that itself calls replace() would re-enter the same onClose: `fired` makes
+   * each one single-shot. Without both, this is an infinite loop rather than a
+   * back button.
+   */
+  let navigating = false
+  const navigate = (fn: () => void) => {
+    navigating = true
+    try {
+      fn()
+    } finally {
+      navigating = false
+    }
+  }
+  const escapeTo = (back: () => void) => {
+    let fired = false
+    return () => {
+      if (navigating || fired) return
+      fired = true
+      navigate(back)
+    }
+  }
+
   const BACK = "__back__"
   const backRow = (where: string) => ({
     title: "\u2190 Back",
@@ -516,28 +548,31 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             const cfg = getConfig()
             const current = displayNames().get(source) ?? ""
             const prompt = (seed: string) =>
-              api.ui.dialog.replace(() => (
-                <api.ui.DialogPrompt
-                  title="Name for this account"
-                  placeholder="Team 1"
-                  value={seed}
-                  onConfirm={(value: string) => {
-                    const name = value.trim()
-                    const next = { ...cfg.accountNames }
-                    // An empty name removes the override rather than storing
-                    // one, so there is a way back to the derived name.
-                    if (name === "") delete next[source]
-                    else next[source] = name
-                    writeKey(
-                      "accountNames",
-                      indentJson(next, 2),
-                      name === "" ? "Name cleared." : `Now "${name}".`,
-                    )
-                    openAccounts()
-                  }}
-                  onCancel={() => openAccounts()}
-                />
-              ))
+              api.ui.dialog.replace(
+                () => (
+                  <api.ui.DialogPrompt
+                    title="Name for this account"
+                    placeholder="Team 1"
+                    value={seed}
+                    onConfirm={(value: string) => {
+                      const name = value.trim()
+                      const next = { ...cfg.accountNames }
+                      // An empty name removes the override rather than storing
+                      // one, so there is a way back to the derived name.
+                      if (name === "") delete next[source]
+                      else next[source] = name
+                      writeKey(
+                        "accountNames",
+                        indentJson(next, 2),
+                        name === "" ? "Name cleared." : `Now "${name}".`,
+                      )
+                      openAccounts()
+                    }}
+                    onCancel={() => openAccounts()}
+                  />
+                ),
+                escapeTo(openAccounts),
+              )
             prompt(current)
           }
 
@@ -695,37 +730,40 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           const newPreset = () => {
             const cfg = getConfig()
             const prompt = (seed: string) =>
-              api.ui.dialog.replace(() => (
-                <api.ui.DialogPrompt
-                  title="Name for the new preset"
-                  placeholder="rr-13"
-                  value={seed}
-                  onConfirm={(value: string) => {
-                    const checked = validatePresetName(value, cfg.presets)
-                    if (!checked.ok) {
-                      api.ui.toast({
-                        variant: "error",
-                        title: "Not created",
-                        message: checked.reason,
-                      })
-                      return prompt(value)
-                    }
-                    // Starts from every enabled account: a preset of none
-                    // cannot be saved, and this is the set already in use.
-                    const seeded = {
-                      label: checked.name,
-                      strategy: "round-robin",
-                      accounts: enabledSources(accounts, cfg.accounts),
-                    }
-                    savePresets(
-                      { ...cfg.presets, [checked.name]: seeded },
-                      `${checked.name} created.`,
-                    )
-                    openPreset(checked.name)
-                  }}
-                  onCancel={() => menu()}
-                />
-              ))
+              api.ui.dialog.replace(
+                () => (
+                  <api.ui.DialogPrompt
+                    title="Name for the new preset"
+                    placeholder="rr-13"
+                    value={seed}
+                    onConfirm={(value: string) => {
+                      const checked = validatePresetName(value, cfg.presets)
+                      if (!checked.ok) {
+                        api.ui.toast({
+                          variant: "error",
+                          title: "Not created",
+                          message: checked.reason,
+                        })
+                        return prompt(value)
+                      }
+                      // Starts from every enabled account: a preset of none
+                      // cannot be saved, and this is the set already in use.
+                      const seeded = {
+                        label: checked.name,
+                        strategy: "round-robin",
+                        accounts: enabledSources(accounts, cfg.accounts),
+                      }
+                      savePresets(
+                        { ...cfg.presets, [checked.name]: seeded },
+                        `${checked.name} created.`,
+                      )
+                      openPreset(checked.name)
+                    }}
+                    onCancel={() => menu()}
+                  />
+                ),
+                escapeTo(menu),
+              )
             prompt("")
           }
 
@@ -802,34 +840,37 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             // vocabulary is chosen, so a typo is not expressible there.
             if (meta.kind === "number") {
               const prompt = (seed: string) =>
-                api.ui.dialog.replace(() => (
-                  <api.ui.DialogPrompt
-                    title={`${meta.label} (${key})`}
-                    placeholder={meta.example}
-                    value={seed}
-                    onConfirm={(value: string) => {
-                      const checked = validateValue(meta, value)
-                      if (!checked.ok) {
-                        // Refuse and stay put with what was typed, rather than
-                        // writing a value the config layer would quietly
-                        // replace with its default.
-                        api.ui.toast({
-                          variant: "error",
-                          title: `${key} unchanged`,
-                          message: checked.reason,
-                        })
-                        prompt(value)
-                        return
-                      }
-                      write(key, checked.literal)
-                      // Back to the list, not out to the prompt: changing one
-                      // setting is rarely the whole errand, and dialog.clear()
-                      // drops the entire stack.
-                      openList()
-                    }}
-                    onCancel={() => openList()}
-                  />
-                ))
+                api.ui.dialog.replace(
+                  () => (
+                    <api.ui.DialogPrompt
+                      title={`${meta.label} (${key})`}
+                      placeholder={meta.example}
+                      value={seed}
+                      onConfirm={(value: string) => {
+                        const checked = validateValue(meta, value)
+                        if (!checked.ok) {
+                          // Refuse and stay put with what was typed, rather than
+                          // writing a value the config layer would quietly
+                          // replace with its default.
+                          api.ui.toast({
+                            variant: "error",
+                            title: `${key} unchanged`,
+                            message: checked.reason,
+                          })
+                          prompt(value)
+                          return
+                        }
+                        write(key, checked.literal)
+                        // Back to the list, not out to the prompt: changing one
+                        // setting is rarely the whole errand, and dialog.clear()
+                        // drops the entire stack.
+                        openList()
+                      }}
+                      onCancel={() => openList()}
+                    />
+                  ),
+                  escapeTo(openList),
+                )
               prompt(current === undefined ? "" : String(current))
               return
             }
