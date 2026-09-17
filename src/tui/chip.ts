@@ -68,6 +68,44 @@ export function shortLabel(label: string): string {
 }
 
 /**
+ * Field separator for every string this plugin puts on screen.
+ *
+ * A middle dot, not a hyphen: hyphens occur *inside* the values being
+ * separated -- model names (haiku-4-5), preset names (rr-123), account labels
+ * (Wings of Freedom) -- so "refusing - 104%/57% - Wings of" read as one run of
+ * text with no visible structure.
+ */
+export const SEP = " \u00b7 "
+
+/** Nothing observed for a window. An em dash, never a hyphen, never "-". */
+const NONE = "\u2014"
+
+/**
+ * Both quota windows, each labelled.
+ *
+ * "13%/56%" was the old rendering and it never said which number was which --
+ * the two windows behave completely differently (one resets in hours, the other
+ * in a week), so reading the wrong one leads to the wrong decision. A percentage
+ * above 100 is not a bug: it means the account is past its threshold.
+ */
+export function quotaText(
+  quota: QuotaCache,
+  source: string | null,
+  opts: { includeWeek?: boolean } = {},
+): string {
+  const { five, week, rejected } = utilisation(quota, source)
+  if (five === undefined && week === undefined) return "no reading"
+  const parts = [`5h ${five === undefined ? NONE : `${five}%`}`]
+  if (opts.includeWeek !== false) {
+    parts.push(`wk ${week === undefined ? NONE : `${week}%`}`)
+  }
+  // Said in a word rather than punctuation: "!" needs a legend, "refused" does
+  // not, and this is the one state that means requests are failing right now.
+  if (rejected) parts.unshift("refused")
+  return parts.join(SEP)
+}
+
+/**
  * "Team 3", when the label carries a number.
  *
  * Accounts are usually numbered by whoever set them up, and that number is what
@@ -162,12 +200,10 @@ export function formatChip(input: ChipInput): string {
     ? (shortNames(input.accounts).get(active.source) ??
       shortLabel(active.label))
     : "no account"
-  const { five, week, rejected } = utilisation(input.quota, input.activeSource)
 
-  const load =
-    five === undefined && week === undefined
-      ? ""
-      : ` ${[five, week].map((n) => (n === undefined ? "–" : `${n}%`)).join("/")}`
+  // The 5h window only: this sits beside the prompt, and it is the window that
+  // moves during a session. The weekly figure is in the sidebar, which has room.
+  const load = `${SEP}${quotaText(input.quota, input.activeSource, { includeWeek: false })}`
 
   const mode = input.selection.startsWith(PRESET)
     ? `⇄ ${input.selection.slice(PRESET.length)}`
@@ -175,7 +211,7 @@ export function formatChip(input: ChipInput): string {
       ? "⇄ auto"
       : "⏻"
 
-  return `${mode} ${name}${load}${rejected ? " !" : ""}`
+  return `${mode}${SEP}${name}${load}`
 }
 
 /**
@@ -200,14 +236,16 @@ export function sidebarLines(input: ChipInput): {
       ? "balancing - auto"
       : "pinned"
   const hidden = input.hiddenCount ?? 0
-  const heading = hidden > 0 ? `${mode}, ${hidden} off` : mode
+  const heading = hidden > 0 ? `${mode}${SEP}${hidden} off` : mode
 
   const total = Object.values(input.requests ?? {}).reduce((n, r) => n + r, 0)
   const names = shortNames(input.accounts)
 
   const rows = input.accounts.map((a) => {
-    const { five, week, rejected } = utilisation(input.quota, a.source)
-    const quota = five === undefined ? "no reading" : `${five}%/${week ?? "-"}%`
+    const quota = quotaText(input.quota, a.source)
+    // Still needed as a flag, not as text: the caller colours the row with it,
+    // while quotaText says it in words.
+    const { rejected } = utilisation(input.quota, a.source)
 
     // Share of requests, not of quota: it answers "is the balancer actually
     // spreading load", which the quota percentages do not -- two accounts can
@@ -215,7 +253,7 @@ export function sidebarLines(input: ChipInput): {
     const served = input.requests?.[a.source]
     const share =
       total > 0 && served !== undefined
-        ? ` - ${Math.round((served / total) * 100)}% reqs`
+        ? `${SEP}${Math.round((served / total) * 100)}% reqs`
         : ""
 
     return {
@@ -247,25 +285,21 @@ export function buildPickerOptions(input: {
 
   const presets = Object.entries(input.presets).map(([name, p]) =>
     mark(`${PRESET}${name}`, {
-      title: `${p.label ?? name}${p.strategy ? ` - ${p.strategy}` : ""}`,
+      title: `${p.label ?? name}${p.strategy ? `${SEP}${p.strategy}` : ""}`,
       value: `${PRESET}${name}`,
       category: "Balancing",
     }),
   )
 
   const auto = mark(AUTO, {
-    title: "Auto - balance across all",
+    title: `Auto${SEP}balance across all`,
     value: AUTO,
     category: "Balancing",
   })
 
   const pickerNames = shortNames(input.accounts)
   const accounts = input.accounts.map((a) => {
-    const { five, week, rejected } = utilisation(input.quota, a.source)
-    const load =
-      five === undefined
-        ? ""
-        : ` [${five}%/${week ?? "-"}%${rejected ? " !" : ""}]`
+    const load = `${SEP}${quotaText(input.quota, a.source, { includeWeek: false })}`
     return mark(a.source, {
       title: `${pickerNames.get(a.source) ?? shortLabel(a.label)}${load}`,
       value: a.source,
@@ -289,14 +323,19 @@ export function sessionRows(
   now: number = Date.now(),
 ): PickerOption[] {
   return sessions.map((s) => {
-    const err = s.errors > 0 ? `, ${s.errors} err` : ""
+    const err = s.errors > 0 ? `${SEP}${s.errors} err` : ""
     const spread =
       s.accounts.length > 1 ? `${s.accounts.length} accounts` : "1 account"
     return {
       // The id is long and the tail is what distinguishes one from another.
-      title: `${s.session.slice(-8)}  ${s.requests} req${err}`,
+      title: `${s.session.slice(-8)}${SEP}${s.requests} req${err}`,
       value: s.session,
-      description: `${spread} - ${s.models.map(shortModel).join(", ")} - avg ${fmtMs(s.avg_ms)} - ${ago(s.last_at, now)}`,
+      description: [
+        spread,
+        s.models.map(shortModel).join(", "),
+        `avg ${fmtMs(s.avg_ms)}`,
+        ago(s.last_at, now),
+      ].join(SEP),
     }
   })
 }
@@ -375,13 +414,12 @@ export function accountToggleRows(
   const enabled = new Set(enabledSources(all, allowList))
   const names = shortNames(all)
   return all.map((a) => {
-    const { five, week, rejected } = utilisation(quota, a.source)
     const state = enabled.has(a.source) ? "[x]" : "[ ]"
-    const load = five === undefined ? "no reading" : `${five}%/${week ?? "-"}%`
+    const load = quotaText(quota, a.source)
     return {
       title: `${state} ${names.get(a.source) ?? a.source}`,
       value: a.source,
-      description: `${rejected ? "refusing - " : ""}${load} - ${shortLabel(a.label)}`,
+      description: `${load}${SEP}${shortLabel(a.label)}`,
     }
   })
 }

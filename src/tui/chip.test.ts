@@ -8,6 +8,8 @@ import {
   shortNames,
   teamName,
   accountToggleRows,
+  quotaText,
+  SEP,
   ago,
   enabledSources,
   toggleAccount,
@@ -99,14 +101,21 @@ describe("formatChip", () => {
     quota: { s1: q(0.41, 0.45) } as QuotaCache,
   }
 
-  it("names the account actually serving, with both windows", () => {
+  it("names the account serving and its 5h window, labelled", () => {
+    // Only the 5h window here: it is the one that moves during a session, and
+    // this sits beside the prompt. The weekly figure is in the sidebar, which
+    // has a column to spend on it.
     const chip = formatChip({
       ...base,
       selection: "preset:rr-123",
       activeSource: "s1",
     })
     assert.match(chip, /Wings of Freedom/)
-    assert.match(chip, /41%\/45%/)
+    assert.match(chip, /5h 41%/)
+    assert.ok(
+      !chip.includes("45%"),
+      "the weekly window does not belong beside the prompt",
+    )
   })
 
   it("shows which preset is balancing, so the mode is never a guess", () => {
@@ -141,17 +150,18 @@ describe("formatChip", () => {
       selection: "preset:rr-123",
       activeSource: "s1",
     })
-    assert.ok(chip.length <= 34, `chip too wide: ${chip.length} cols — ${chip}`)
+    assert.ok(chip.length <= 40, `chip too wide: ${chip.length} cols - ${chip}`)
   })
 
-  it("marks a rejected account", () => {
+  it("says a rejected account is refused, in a word", () => {
+    // "!" needed a legend. This is the one state meaning requests fail now.
     const chip = formatChip({
       accounts: ACCOUNTS,
       quota: { s1: q(1, 0.3, true) } as QuotaCache,
       selection: "__auto__",
       activeSource: "s1",
     })
-    assert.match(chip, /!/)
+    assert.match(chip, /refused/)
   })
 })
 
@@ -261,7 +271,8 @@ describe("sidebarLines", () => {
 
   it("says so when an account has no reading, rather than implying 0%", () => {
     const { rows } = sidebarLines({ ...base, selection: "__auto__" })
-    assert.match(rows[0]!.detail, /41%\/45%/)
+    assert.match(rows[0]!.detail, /5h 41%/)
+    assert.match(rows[0]!.detail, /wk 45%/)
     assert.match(rows[1]!.detail, /no reading/)
   })
 
@@ -485,6 +496,47 @@ describe("account allow-list", () => {
     const rows = accountToggleRows(ALL, [], {
       s1: q(1, 0.3, true),
     } as QuotaCache)
-    assert.match(rows[0]!.description, /refusing/)
+    assert.match(rows[0]!.description, /refused/)
+  })
+})
+
+describe("display vocabulary", () => {
+  it("labels both windows, because 13%/56% never said which was which", () => {
+    const text = quotaText({ s1: q(0.13, 0.56) } as QuotaCache, "s1")
+    assert.match(text, /5h 13%/)
+    assert.match(text, /wk 56%/)
+    assert.ok(!text.includes("/"), "a slash does not say which window is which")
+  })
+
+  it("can omit the weekly window where there is no room", () => {
+    const text = quotaText({ s1: q(0.13, 0.56) } as QuotaCache, "s1", {
+      includeWeek: false,
+    })
+    assert.match(text, /5h 13%/)
+    assert.ok(!text.includes("wk"))
+  })
+
+  it("distinguishes a missing window from a zero one", () => {
+    assert.match(quotaText({ s1: q(0.13) } as QuotaCache, "s1"), /wk \u2014/)
+    assert.match(quotaText({ s1: q(0.13, 0) } as QuotaCache, "s1"), /wk 0%/)
+  })
+
+  it("says no reading when neither window was observed", () => {
+    assert.equal(quotaText({} as QuotaCache, "s1"), "no reading")
+  })
+
+  it("leads with refused, since that outranks any percentage", () => {
+    const text = quotaText({ s1: q(1.04, 0.57, true) } as QuotaCache, "s1")
+    assert.ok(text.startsWith("refused"), text)
+    assert.match(text, /5h 104%/, "over 100% is a real reading, not a bug")
+  })
+
+  it("separates fields with something that cannot occur inside one", () => {
+    // Hyphens appear in model names, preset names and account labels, which is
+    // why they cannot also be the separator.
+    assert.equal(SEP.trim(), "\u00b7")
+    for (const value of ["haiku-4-5", "rr-123", "Wings of Freedom"]) {
+      assert.ok(!value.includes(SEP.trim()), `${value} contains the separator`)
+    }
   })
 })

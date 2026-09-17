@@ -39,7 +39,7 @@ import {
   readUsage,
   summarizeSessions,
 } from "../dist/balance/usage.js"
-import { candidatePaths, getConfig } from "../dist/config.js"
+import { candidatePaths, getConfig, resetConfigCache } from "../dist/config.js"
 import {
   configRows,
   EDITABLE,
@@ -316,6 +316,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               const tmp = `${configFile}.tmp-${process.pid}`
               writeFileSync(tmp, after, "utf8")
               renameSync(tmp, configFile)
+              // getConfig() holds its answer for configReloadInterval and will
+              // not re-stat before then, so re-reading here would hand back the
+              // config as it was a moment ago -- the write lands and the dialog
+              // redraws unchanged. Dropping the cache makes the next read the
+              // file.
+              resetConfigCache()
               api.ui.toast({
                 variant: "success",
                 title: "Accounts",
@@ -378,6 +384,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               const tmp = `${configFile}.tmp-${process.pid}`
               writeFileSync(tmp, after, "utf8")
               renameSync(tmp, configFile)
+              // getConfig() holds its answer for configReloadInterval and will
+              // not re-stat before then, so re-reading here would hand back the
+              // config as it was a moment ago -- the write lands and the dialog
+              // redraws unchanged. Dropping the cache makes the next read the
+              // file.
+              resetConfigCache()
               api.ui.toast({
                 variant: "success",
                 title: key,

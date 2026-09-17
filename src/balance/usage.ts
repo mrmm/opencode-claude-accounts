@@ -368,3 +368,90 @@ export function summarizeSessions(
     }))
     .sort((a, b) => b.last_at - a.last_at)
 }
+
+/** One session, in detail. */
+export type SessionDetail = {
+  session: string
+  requests: number
+  errors: number
+  /** HTTP status -> count, so a 429 storm reads apart from a 500. */
+  byStatus: { status: number; count: number }[]
+  byAccount: { account: string; requests: number }[]
+  byModel: { model: string; requests: number }[]
+  avg_ms: number
+  max_ms: number
+  first_at: number
+  last_at: number
+  /**
+   * Where each account's 5h utilisation stood at this session's first and last
+   * request. NOT this session's consumption: the window is shared with every
+   * other session and with rotation, so the movement is an upper bound on what
+   * happened here, and whoever renders it has to say so.
+   */
+  quotaMoves: { account: string; from: number; to: number }[]
+}
+
+export function sessionDetail(
+  events: UsageEvent[],
+  session: string,
+  unknownLabel = "(no session)",
+): SessionDetail | null {
+  const mine = events.filter(
+    (e): e is RequestEvent =>
+      e.kind === "request" && (e.session ?? unknownLabel) === session,
+  )
+  if (mine.length === 0) return null
+
+  const tally = <K extends string | number>(
+    pick: (e: RequestEvent) => K | undefined,
+  ): { key: K; count: number }[] => {
+    const m = new Map<K, number>()
+    for (const e of mine) {
+      const k = pick(e)
+      if (k === undefined) continue
+      m.set(k, (m.get(k) ?? 0) + 1)
+    }
+    return [...m.entries()]
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count)
+  }
+
+  const quotaMoves: SessionDetail["quotaMoves"] = []
+  for (const { key: account } of tally((e) => e.account)) {
+    const seen = mine.filter(
+      (e) => e.account === account && typeof e.utilization_5h === "number",
+    )
+    if (seen.length === 0) continue
+    quotaMoves.push({
+      account,
+      from: seen[0]!.utilization_5h!,
+      to: seen[seen.length - 1]!.utilization_5h!,
+    })
+  }
+
+  const times = mine.map((e) => e.created_at)
+  return {
+    session,
+    requests: mine.length,
+    errors: mine.filter((e) => e.status >= 400).length,
+    byStatus: tally((e) => e.status).map((r) => ({
+      status: r.key,
+      count: r.count,
+    })),
+    byAccount: tally((e) => e.account).map((r) => ({
+      account: r.key,
+      requests: r.count,
+    })),
+    byModel: tally((e) => e.model).map((r) => ({
+      model: r.key,
+      requests: r.count,
+    })),
+    avg_ms: Math.round(
+      mine.reduce((n, e) => n + e.duration_ms, 0) / mine.length,
+    ),
+    max_ms: Math.max(...mine.map((e) => e.duration_ms)),
+    first_at: Math.min(...times),
+    last_at: Math.max(...times),
+    quotaMoves,
+  }
+}

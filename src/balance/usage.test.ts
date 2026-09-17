@@ -10,6 +10,7 @@ import {
   record,
   recordRequest,
   summarize,
+  sessionDetail,
   summarizeSessions,
   usageIndex,
 } from "./usage.ts"
@@ -226,5 +227,75 @@ describe("summarizeSessions", () => {
 
   it("returns nothing for an empty log rather than throwing", () => {
     assert.deepEqual(summarizeSessions([]), [])
+  })
+})
+
+describe("sessionDetail", () => {
+  const evs = [
+    sessionReq("s1", { account: "a1", ms: 100, at: 10 }),
+    sessionReq("s1", { account: "a1", ms: 300, at: 20, status: 429 }),
+    sessionReq("s1", { account: "a2", ms: 200, at: 30, model: "haiku" }),
+    sessionReq("s2", { account: "a1", ms: 50, at: 40 }),
+  ]
+
+  it("answers null for a session with no traffic, rather than an empty shell", () => {
+    assert.equal(sessionDetail(evs, "nope"), null)
+  })
+
+  it("counts only the session asked for", () => {
+    const d = sessionDetail(evs, "s1")!
+    assert.equal(d.requests, 3)
+    assert.equal(d.errors, 1)
+  })
+
+  it("breaks errors down by status, so a 429 storm reads apart from a 500", () => {
+    const d = sessionDetail(evs, "s1")!
+    assert.deepEqual(
+      d.byStatus.map((r) => [r.status, r.count]),
+      [
+        [200, 2],
+        [429, 1],
+      ],
+    )
+  })
+
+  it("ranks accounts and models by how much they were used", () => {
+    const d = sessionDetail(evs, "s1")!
+    assert.deepEqual(d.byAccount, [
+      { account: "a1", requests: 2 },
+      { account: "a2", requests: 1 },
+    ])
+    assert.equal(d.byModel[0]!.model, "opus")
+  })
+
+  it("reports the worst latency, not only the average", () => {
+    const d = sessionDetail(evs, "s1")!
+    assert.equal(d.avg_ms, 200)
+    assert.equal(d.max_ms, 300)
+  })
+
+  it("spans first to last request", () => {
+    const d = sessionDetail(evs, "s1")!
+    assert.equal(d.first_at, 10)
+    assert.equal(d.last_at, 30)
+  })
+
+  it("reports where quota stood, per account, at the session's edges", () => {
+    const withQuota = [
+      { ...sessionReq("s1", { account: "a1", at: 1 }), utilization_5h: 0.2 },
+      { ...sessionReq("s1", { account: "a1", at: 2 }), utilization_5h: 0.5 },
+    ] as never[]
+    const d = sessionDetail(withQuota, "s1")!
+    assert.deepEqual(d.quotaMoves, [{ account: "a1", from: 0.2, to: 0.5 }])
+  })
+
+  it("omits an account whose quota was never observed", () => {
+    const d = sessionDetail(evs, "s1")!
+    assert.deepEqual(d.quotaMoves, [])
+  })
+
+  it("groups the sessionless events under the same label the list uses", () => {
+    const d = sessionDetail([sessionReq(undefined, { at: 5 })], "(no session)")!
+    assert.equal(d.requests, 1)
   })
 })
