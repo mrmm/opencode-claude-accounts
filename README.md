@@ -369,6 +369,17 @@ you, and no other level implies it.
 Blocks composed programmatically by OpenCode report as `unattributed`, which is
 the useful answer: no file is responsible for them.
 
+### Getting back
+
+Every screen below the first carries a `← Back` row. That is not a stylistic
+choice: `TuiDialogStack.replace()` discards the stack and installs a single
+item, and fires every existing `onClose` _before_ doing so -- so `onClose`
+cannot distinguish "escaped" from "moved forward", and there is no stack to pop.
+No dialog-scoped keybinding is exposed either. A selectable row is the mechanism
+that exists, and it has the advantage of being visible rather than remembered.
+
+`esc` still closes outright, from anywhere.
+
 ### Assistant prefill refusals
 
 Some models answer 400 `This model does not support assistant message prefill.

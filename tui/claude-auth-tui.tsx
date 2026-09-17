@@ -146,6 +146,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           ? api.theme.current.success
           : api.theme.current.textMuted
 
+  /**
+   * The only back affordance the dialog API supports.
+   *
+   * There is no stack to pop: TuiDialogStack.replace() discards the stack and
+   * installs one item, and it fires every existing onClose *before* doing so --
+   * so onClose cannot tell "escaped" from "moved forward" and is useless for
+   * navigation. No dialog-scoped keybinding is exposed either. A selectable row
+   * is what remains, and it has the advantage of being visible.
+   */
+  const BACK = "__back__"
+  const backRow = (where: string) => ({
+    title: "\u2190 Back",
+    value: BACK,
+    description: `to ${where}`,
+  })
+
   const [snap, setSnap] = createSignal(read())
   const timer = setInterval(() => setSnap(read()), POLL_MS)
   onCleanup(() => clearInterval(timer))
@@ -317,7 +333,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
                 title={`Session ${session.slice(-8)}`}
-                options={rows}
+                options={[backRow("the session list"), ...rows]}
                 // Any row goes back: nothing here is selectable, and landing at
                 // the prompt after reading one number is not where you were.
                 onSelect={() => openList()}
@@ -435,12 +451,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
                 title="Accounts the balancer may use"
-                options={accountToggleRows(
-                  accounts,
-                  cfg.accounts,
-                  readQuotaCache(),
-                )}
+                options={[
+                  backRow("accounts"),
+                  ...accountToggleRows(
+                    accounts,
+                    cfg.accounts,
+                    readQuotaCache(),
+                  ),
+                ]}
                 onSelect={(row) => {
+                  if (String(row.value) === BACK) return menu()
                   const next = toggleAccount(
                     accounts,
                     getConfig().accounts,
@@ -492,6 +512,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               <api.ui.DialogSelect
                 title={`${name} - ${preset.strategy ?? "sticky"}`}
                 options={[
+                  backRow("accounts"),
                   ...accounts.map((a) => ({
                     title: `${inSet.has(a.source) ? "[x]" : "[ ]"} ${names.get(a.source) ?? a.source}`,
                     value: `a:${a.source}`,
@@ -513,6 +534,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 ]}
                 onSelect={(row) => {
                   const v = String(row.value)
+                  if (v === BACK) return menu()
                   if (v.startsWith("a:")) {
                     const next = togglePresetAccount(preset, v.slice(2))
                     if (!next) {
@@ -561,8 +583,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               <api.ui.DialogSelect
                 title={`Strategy for ${name}`}
                 current={preset.strategy ?? "sticky"}
-                options={STRATEGIES.map((v) => ({ title: v, value: v }))}
+                options={[
+                  backRow(name),
+                  ...STRATEGIES.map((v) => ({ title: v, value: v })),
+                ]}
                 onSelect={(row) => {
+                  if (String(row.value) === BACK) return openPreset(name)
                   savePresets(
                     {
                       ...cfg.presets,
@@ -721,8 +747,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
                 title={`${meta.label} (${key})`}
-                options={optionsFor(meta, current, getConfig().presets)}
+                options={[
+                  backRow("settings"),
+                  ...optionsFor(meta, current, getConfig().presets),
+                ]}
                 onSelect={(choice) => {
+                  if (String(choice.value) === BACK) return openList()
                   const checked = validateValue(meta, String(choice.value))
                   if (checked.ok) write(key, checked.literal)
                   openList()
