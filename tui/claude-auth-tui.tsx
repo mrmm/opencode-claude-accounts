@@ -838,10 +838,31 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           const editOrder = (name: string, preset: Record<string, unknown>) => {
             const list = (preset.accounts ?? []) as string[]
             const names = displayNames()
+
+            // Which row the cursor is on. onMove reports every move but not the
+            // initial position, so it starts on the first row -- which is where
+            // the cursor starts.
+            let cursor = list[0] ?? ""
+
+            const shift = (how: "up" | "down") => {
+              const next = moveRef(list, cursor, how)
+              if (!next) {
+                api.ui.toast({
+                  variant: "warning",
+                  title: "Not moved",
+                  message: `Already ${how === "up" ? "first" : "last"}.`,
+                })
+                return editOrder(name, preset)
+              }
+              const body = { ...preset, accounts: next }
+              savePresets({ ...getConfig().presets, [name]: body }, "")
+              editOrder(name, body)
+            }
+
             api.ui.dialog.replace(
               () => (
                 <api.ui.DialogSelect
-                  title={`Order for ${name} - first healthy one serves`}
+                  title={`Order for ${name} - type + or - to move, enter for more`}
                   options={[
                     backRow(name),
                     ...orderRows(list, names, (ref) =>
@@ -851,6 +872,18 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                       ),
                     ),
                   ]}
+                  onMove={(row) => {
+                    const v = String(row.value)
+                    if (v.startsWith("o:")) cursor = v.slice(2)
+                  }}
+                  onFilter={(query) => {
+                    // The only key hook this dialog offers. A filter box would
+                    // otherwise swallow the keystroke, and no dialog-scoped
+                    // binding exists to claim it instead.
+                    const last = query.slice(-1)
+                    if (last === "+") shift("up")
+                    else if (last === "-") shift("down")
+                  }}
                   onSelect={(row) => {
                     const val = String(row.value)
                     if (val === BACK) return openPreset(name)
