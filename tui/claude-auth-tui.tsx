@@ -835,16 +835,29 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
            * express move-down or move-to-top, and guessing which one was meant
            * from a list position is how a reorder becomes a puzzle.
            */
-          const editOrder = (name: string, preset: Record<string, unknown>) => {
+          /**
+           * Reorder the accounts `priority` reads.
+           *
+           * `focus` is the row the cursor should land on. Redrawing is how a
+           * move is shown, and a fresh dialog starts at row 0 -- so without it
+           * every move bounces the cursor to Back and the next + moves a
+           * different account than the one just moved.
+           */
+          const editOrder = (
+            name: string,
+            preset: Record<string, unknown>,
+            focus?: string,
+          ) => {
             const list = (preset.accounts ?? []) as string[]
             const names = displayNames()
 
-            // Which row the cursor is on. onMove reports every move but not the
-            // initial position, so it starts on the first row -- which is where
-            // the cursor starts.
-            let cursor = list[0] ?? ""
+            // Empty while the cursor sits on a row that is not an account.
+            // Defaulting to the first one made + reorder an account the cursor
+            // was nowhere near, from the Back row.
+            let cursor = focus ?? ""
 
             const shift = (how: "up" | "down") => {
+              if (!cursor) return
               const next = moveRef(list, cursor, how)
               if (!next) {
                 api.ui.toast({
@@ -852,17 +865,18 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   title: "Not moved",
                   message: `Already ${how === "up" ? "first" : "last"}.`,
                 })
-                return editOrder(name, preset)
+                return editOrder(name, preset, cursor)
               }
               const body = { ...preset, accounts: next }
               savePresets({ ...getConfig().presets, [name]: body }, "")
-              editOrder(name, body)
+              editOrder(name, body, cursor)
             }
 
             api.ui.dialog.replace(
               () => (
                 <api.ui.DialogSelect
                   title={`Order for ${name} - type + or - to move, enter for more`}
+                  current={focus ? `o:${focus}` : undefined}
                   options={[
                     backRow(name),
                     ...orderRows(list, names, (ref) =>
@@ -874,12 +888,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   ]}
                   onMove={(row) => {
                     const v = String(row.value)
-                    if (v.startsWith("o:")) cursor = v.slice(2)
+                    cursor = v.startsWith("o:") ? v.slice(2) : ""
                   }}
                   onFilter={(query) => {
-                    // The only key hook this dialog offers. A filter box would
-                    // otherwise swallow the keystroke, and no dialog-scoped
-                    // binding exists to claim it instead.
+                    // The only key hook this dialog offers; without it the
+                    // filter box swallows the keystroke.
                     const last = query.slice(-1)
                     if (last === "+") shift("up")
                     else if (last === "-") shift("down")
@@ -918,14 +931,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   title: "Not moved",
                   message: `${label} is already there.`,
                 })
-                return editOrder(name, preset)
+                return editOrder(name, preset, ref)
               }
               const body = { ...preset, accounts: next }
               savePresets(
                 { ...getConfig().presets, [name]: body },
                 `${label} is now #${next.indexOf(ref) + 1}.`,
               )
-              editOrder(name, body)
+              editOrder(name, body, ref)
             }
             api.ui.dialog.replace(
               () => (
@@ -960,12 +973,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   ]}
                   onSelect={(row) => {
                     const val = String(row.value)
-                    if (val === BACK) return editOrder(name, preset)
+                    if (val === BACK) return editOrder(name, preset, ref)
                     apply(val as "up" | "down" | "top" | "bottom")
                   }}
                 />
               ),
-              escapeTo(() => editOrder(name, preset)),
+              escapeTo(() => editOrder(name, preset, ref)),
             )
           }
 
