@@ -15,6 +15,7 @@ import type {
   SessionDetail,
   SessionUsage,
 } from "../balance/index.ts"
+import { formatDuration } from "../balance/index.ts"
 
 export type ChipAccount = { source: string; label: string }
 
@@ -47,6 +48,7 @@ export type ChipInput = {
    * accounts is indistinguishable from one the plugin failed to see.
    */
   hiddenCount?: number
+  /** Unix seconds, injectable so a countdown can be asserted. */
   now?: number
 }
 
@@ -106,13 +108,21 @@ const NONE = "\u2014"
 export function quotaText(
   quota: QuotaCache,
   source: string | null,
-  opts: { includeWeek?: boolean } = {},
+  opts: { includeWeek?: boolean; resets?: boolean; now?: number } = {},
 ): string {
-  const { five, week, rejected } = utilisation(quota, source)
+  const { five, week, fiveIn, weekIn, rejected } = utilisation(
+    quota,
+    source,
+    opts.now,
+  )
   if (five === undefined && week === undefined) return "no reading"
-  const parts = [`5h ${five === undefined ? NONE : `${five}%`}`]
+  // Percentage then time-remaining, the shape the account switcher already
+  // uses, so the two surfaces read the same way.
+  const left = (secs: number | undefined) =>
+    opts.resets && secs !== undefined ? ` ${formatDuration(secs)}` : ""
+  const parts = [`5h ${five === undefined ? NONE : `${five}%`}${left(fiveIn)}`]
   if (opts.includeWeek !== false) {
-    parts.push(`wk ${week === undefined ? NONE : `${week}%`}`)
+    parts.push(`wk ${week === undefined ? NONE : `${week}%`}${left(weekIn)}`)
   }
   // Said in a word rather than punctuation: "!" needs a legend, "refused" does
   // not, and this is the one state that means requests are failing right now.
@@ -215,18 +225,53 @@ function pct(v: number | undefined): number | undefined {
   return typeof v === "number" ? Math.round(v * 100) : undefined
 }
 
+/**
+ * Seconds until a window turns over, or undefined when that is not known.
+ *
+ * A non-positive `resetsAt` reads as unknown rather than as 1970: the header
+ * never carries one, and a zero there means the field was never filled in.
+ */
+function until(
+  w: { resetsAt?: number } | undefined,
+  now: number,
+): number | undefined {
+  if (!w || typeof w.resetsAt !== "number" || w.resetsAt <= 0) return undefined
+  return w.resetsAt - now
+}
+
+/** A window whose reset moment has already passed. */
+const gone = (v: number | undefined) => v !== undefined && v <= 0
+
 export function utilisation(
   quota: QuotaCache,
   source: string | null,
-): { five?: number; week?: number; rejected: boolean } {
+  now: number = Math.floor(Date.now() / 1000),
+): {
+  five?: number
+  week?: number
+  /** Seconds until reset, omitted when unknown or already past. */
+  fiveIn?: number
+  weekIn?: number
+  rejected: boolean
+} {
   const q = source ? quota?.[source] : undefined
+  const fiveIn = until(q?.fiveHour, now)
+  const weekIn = until(q?.sevenDay, now)
+  // A window past its reset holds a reading from before the turnover, so it is
+  // 0 and not whatever was last seen. The account switcher already renders it
+  // this way; two surfaces disagreeing about one number is worse than either
+  // answer being the wrong one to prefer.
   return {
-    five: pct(q?.fiveHour?.utilization),
-    week: pct(q?.sevenDay?.utilization),
+    five: gone(fiveIn) ? 0 : pct(q?.fiveHour?.utilization),
+    week: gone(weekIn) ? 0 : pct(q?.sevenDay?.utilization),
+    fiveIn: gone(fiveIn) ? undefined : fiveIn,
+    weekIn: gone(weekIn) ? undefined : weekIn,
     // A rejected window is the one fact worth a colour change: the account is
-    // not merely busy, it is refusing requests.
+    // not merely busy, it is refusing requests. A refusal from a window that
+    // has since turned over is not a refusal now.
     rejected:
-      q?.fiveHour?.status === "rejected" || q?.sevenDay?.status === "rejected",
+      (q?.fiveHour?.status === "rejected" && !gone(fiveIn)) ||
+      (q?.sevenDay?.status === "rejected" && !gone(weekIn)),
   }
 }
 
@@ -305,7 +350,10 @@ export function sidebarLines(input: ChipInput): {
   const names = input.names ?? shortNames(input.accounts)
 
   const rows = input.accounts.map((a) => {
-    const quota = quotaText(input.quota, a.source)
+    const quota = quotaText(input.quota, a.source, {
+      resets: true,
+      now: input.now,
+    })
     const health = accountHealth(
       input.quota,
       a.source,

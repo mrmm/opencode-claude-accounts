@@ -468,10 +468,21 @@ A section in the sidebar, where there is room for the rest:
 
 ```
 Claude Auth (balancing - rr-123 · 1 off)
-  ●  Team 2   5h 24% · wk 57% · 44% reqs
-  ·  Team 1   refused · 5h 104% · wk 57% · 28% reqs
-  ·  Team 3   5h 24% · wk 57% · 27% reqs
+  ●  Team 2   5h 24% 2h10m · wk 57% 3d4h · 44% reqs
+  ·  Team 1   refused · 5h 104% 1h41m · wk 57% 3d4h · 28% reqs
+  ·  Team 3   5h 24% 2h55m · wk 57% 5d2h · 27% reqs
 ```
+
+The duration after each percentage is the time left on that window, taken from
+the `-reset` header that account itself last returned -- so the two windows
+count down independently, and so do the accounts, which is what distinct weekly
+anchors look like. The prompt chip omits it; there is no room beside an input
+box.
+
+A window whose reset has passed reads `0%` rather than the figure cached before
+the turnover, and stops reporting `refused`. The account switcher already showed
+it that way, and one number rendered two different ways across two surfaces is
+worse than either way of showing it.
 
 Colour means load and nothing else -- green below the warning threshold, yellow
 at it, red at the window or while being refused, muted when nothing has been

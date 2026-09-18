@@ -828,3 +828,89 @@ describe("shortNames with overrides", () => {
     assert.equal(shortNames(ACC).get("s1"), "Team 1")
   })
 })
+
+describe("reset countdowns", () => {
+  const NOW = 1_800_000_000
+  // A cache with real reset anchors, unlike q() whose 0 means "never filled in".
+  const withResets = (fiveIn?: number, weekIn?: number, rejected = false) =>
+    ({
+      s1: {
+        fiveHour: {
+          utilization: 0.24,
+          status: rejected ? "rejected" : "allowed",
+          ...(fiveIn === undefined ? {} : { resetsAt: NOW + fiveIn }),
+        },
+        sevenDay: {
+          utilization: 0.56,
+          status: "allowed",
+          ...(weekIn === undefined ? {} : { resetsAt: NOW + weekIn }),
+        },
+        observedAt: NOW,
+      },
+    }) as unknown as QuotaCache
+
+  it("reports the time left on each window", () => {
+    const u = utilisation(withResets(7800, 273_600), "s1", NOW)
+    assert.equal(u.fiveIn, 7800)
+    assert.equal(u.weekIn, 273_600)
+  })
+
+  it("renders the countdown after each percentage, only when asked", () => {
+    const cache = withResets(7800, 273_600)
+    assert.equal(
+      quotaText(cache, "s1", { resets: true, now: NOW }),
+      "5h 24% 2h10m \u00b7 wk 56% 3d4h",
+    )
+    // Every other surface is unchanged: the chip has no room for it.
+    assert.equal(quotaText(cache, "s1", { now: NOW }), "5h 24% \u00b7 wk 56%")
+  })
+
+  it("omits the countdown when the reset time is unknown", () => {
+    assert.equal(
+      quotaText(withResets(undefined, undefined), "s1", {
+        resets: true,
+        now: NOW,
+      }),
+      "5h 24% \u00b7 wk 56%",
+    )
+  })
+
+  it("treats a zero reset as unknown, not as 1970", () => {
+    // Guards the fixtures the rest of this file is built on.
+    const u = utilisation({ s1: q(0.41, 0.45) } as QuotaCache, "s1", NOW)
+    assert.equal(u.five, 41)
+    assert.equal(u.fiveIn, undefined)
+  })
+
+  it("reads a window past its reset as 0%, with no countdown", () => {
+    const u = utilisation(withResets(-60, 273_600), "s1", NOW)
+    assert.equal(u.five, 0)
+    assert.equal(u.fiveIn, undefined)
+    // The other window is untouched.
+    assert.equal(u.week, 56)
+    assert.equal(u.weekIn, 273_600)
+  })
+
+  it("stops saying refused once the refusing window has turned over", () => {
+    assert.equal(
+      utilisation(withResets(600, 273_600, true), "s1", NOW).rejected,
+      true,
+    )
+    assert.equal(
+      utilisation(withResets(-60, 273_600, true), "s1", NOW).rejected,
+      false,
+    )
+  })
+
+  it("puts the countdown in the sidebar", () => {
+    const { rows } = sidebarLines({
+      accounts: [{ source: "s1", label: "Acme 1" }],
+      quota: withResets(7800, 273_600),
+      selection: "__auto__",
+      activeSource: "s1",
+      now: NOW,
+    })
+    assert.match(rows[0]!.detail, /5h 24% 2h10m/)
+    assert.match(rows[0]!.detail, /wk 56% 3d4h/)
+  })
+})
