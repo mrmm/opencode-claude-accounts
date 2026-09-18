@@ -40,6 +40,8 @@ import {
   indentJson,
   isEditable,
   knobRows,
+  moveRef,
+  orderRows,
   presetMembership,
   presetRows,
   togglePresetAccount,
@@ -756,6 +758,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             }
 
             if (key === "weights") return editWeights(name, preset)
+            if (key === "order") return editOrder(name, preset)
 
             const clearRow = {
               title: `Use the default (${display(defaults[key])})`,
@@ -823,6 +826,114 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 escapeTo(() => openPreset(name)),
               )
             prompt(preset[key] === undefined ? "" : String(preset[key]))
+          }
+
+          /**
+           * Reorder the accounts `priority` reads.
+           *
+           * Two steps rather than one: a single tap that "moves up" cannot
+           * express move-down or move-to-top, and guessing which one was meant
+           * from a list position is how a reorder becomes a puzzle.
+           */
+          const editOrder = (name: string, preset: Record<string, unknown>) => {
+            const list = (preset.accounts ?? []) as string[]
+            const names = displayNames()
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title={`Order for ${name} - first healthy one serves`}
+                  options={[
+                    backRow(name),
+                    ...orderRows(list, names, (ref) =>
+                      resolveRef(
+                        ref,
+                        accounts as { source: string; label?: string }[],
+                      ),
+                    ),
+                  ]}
+                  onSelect={(row) => {
+                    const val = String(row.value)
+                    if (val === BACK) return openPreset(name)
+                    moveWhere(name, preset, val.slice(2))
+                  }}
+                />
+              ),
+              escapeTo(() => openPreset(name)),
+            )
+          }
+
+          const moveWhere = (
+            name: string,
+            preset: Record<string, unknown>,
+            ref: string,
+          ) => {
+            const list = (preset.accounts ?? []) as string[]
+            const names = displayNames()
+            const source = resolveRef(
+              ref,
+              accounts as { source: string; label?: string }[],
+            )
+            const label = (source && names.get(source)) ?? ref
+            const apply = (how: "up" | "down" | "top" | "bottom") => {
+              const next = moveRef(list, ref, how)
+              if (!next) {
+                // Refused rather than written: a no-op write still moves the
+                // file's timestamp, and the timestamp is what every reader
+                // watches.
+                api.ui.toast({
+                  variant: "warning",
+                  title: "Not moved",
+                  message: `${label} is already there.`,
+                })
+                return editOrder(name, preset)
+              }
+              const body = { ...preset, accounts: next }
+              savePresets(
+                { ...getConfig().presets, [name]: body },
+                `${label} is now #${next.indexOf(ref) + 1}.`,
+              )
+              editOrder(name, body)
+            }
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title={`Move ${label}`}
+                  options={[
+                    {
+                      title: "\u2190 Back",
+                      value: BACK,
+                      description: "to the order",
+                    },
+                    {
+                      title: "Up one",
+                      value: "up",
+                      description: "serve sooner",
+                    },
+                    {
+                      title: "Down one",
+                      value: "down",
+                      description: "serve later",
+                    },
+                    {
+                      title: "To the top",
+                      value: "top",
+                      description: "serve first",
+                    },
+                    {
+                      title: "To the bottom",
+                      value: "bottom",
+                      description: "last resort",
+                    },
+                  ]}
+                  onSelect={(row) => {
+                    const val = String(row.value)
+                    if (val === BACK) return editOrder(name, preset)
+                    apply(val as "up" | "down" | "top" | "bottom")
+                  }}
+                />
+              ),
+              escapeTo(() => editOrder(name, preset)),
+            )
           }
 
           /** Cycle each account's weight; 1 is the default and is not stored. */

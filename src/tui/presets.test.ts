@@ -5,6 +5,8 @@ import {
   indentJson,
   isEditable,
   knobRows,
+  moveRef,
+  orderRows,
   presetMembership,
   PRESET_KNOBS,
   presetRows,
@@ -219,12 +221,93 @@ describe("knobRows", () => {
     assert.ok(rows.some((r) => r.value === "k:weights"))
   })
 
-  it("covers every knob a preset may carry", () => {
-    const rows = knobRows(
+  it("shows only the knobs the strategy in force reads", () => {
+    // `weights` and `order` each belong to exactly one strategy, so the row
+    // count varies by strategy rather than always being every knob.
+    const weighted = knobRows(
       { accounts: ["a"], strategy: "weighted" },
       defaults,
       render,
     )
-    assert.equal(rows.length, PRESET_KNOBS.length)
+    assert.ok(weighted.some((r) => r.value === "k:weights"))
+    assert.ok(!weighted.some((r) => r.value === "k:order"))
+
+    const prioritised = knobRows(
+      { accounts: ["a"], strategy: "priority" },
+      defaults,
+      render,
+    )
+    assert.ok(prioritised.some((r) => r.value === "k:order"))
+    assert.ok(!prioritised.some((r) => r.value === "k:weights"))
+
+    const plain = knobRows({ accounts: ["a"] }, defaults, render)
+    assert.equal(plain.length, PRESET_KNOBS.length - 2)
+  })
+})
+
+describe("moveRef", () => {
+  const list = ["a", "b", "c"]
+
+  it("moves one entry up and down", () => {
+    assert.deepEqual(moveRef(list, "b", "up"), ["b", "a", "c"])
+    assert.deepEqual(moveRef(list, "b", "down"), ["a", "c", "b"])
+  })
+
+  it("moves to either end", () => {
+    assert.deepEqual(moveRef(list, "c", "top"), ["c", "a", "b"])
+    assert.deepEqual(moveRef(list, "a", "bottom"), ["b", "c", "a"])
+  })
+
+  it("answers null when the move would change nothing", () => {
+    // A write that changes nothing still moves the file's timestamp, and the
+    // timestamp is what every reader watches.
+    assert.equal(moveRef(list, "a", "up"), null)
+    assert.equal(moveRef(list, "c", "down"), null)
+    assert.equal(moveRef(list, "a", "top"), null)
+    assert.equal(moveRef(list, "c", "bottom"), null)
+  })
+
+  it("answers null for an entry that is not there", () => {
+    assert.equal(moveRef(list, "zz", "up"), null)
+  })
+
+  it("does not mutate the list it was given", () => {
+    const original = [...list]
+    moveRef(list, "b", "up")
+    assert.deepEqual(list, original)
+  })
+
+  it("keeps the reference spelling, not the resolved source", () => {
+    // A preset's accounts are references; rewriting them as sources on a
+    // reorder would quietly rewrite config the user hand-wrote.
+    const refs = ["Acme 1", "Acme 2"]
+    assert.deepEqual(moveRef(refs, "Acme 2", "up"), ["Acme 2", "Acme 1"])
+  })
+})
+
+/** Two references, resolved the way the balancer would. */
+const resolveOrderRef = (ref: string) => (ref === "Acme 1" ? "s1" : "s2")
+
+describe("orderRows", () => {
+  const names = new Map([
+    ["s1", "Team 1"],
+    ["s2", "Team 2"],
+  ])
+
+  it("numbers the positions, since position is the whole meaning", () => {
+    const rows = orderRows(["Acme 1", "Acme 2"], names, resolveOrderRef)
+    assert.match(rows[0]!.title, /^1\. Team 1/)
+    assert.match(rows[1]!.title, /^2\. Team 2/)
+  })
+
+  it("says what first means, and what the others wait for", () => {
+    const rows = orderRows(["Acme 1", "Acme 2"], names, resolveOrderRef)
+    assert.match(rows[0]!.description, /first/)
+    assert.match(rows[1]!.description, /after 1 other$/)
+  })
+
+  it("falls back to the reference when it resolves to nothing", () => {
+    const rows = orderRows(["ghost"], names, () => undefined)
+    assert.match(rows[0]!.title, /ghost/)
   })
 })

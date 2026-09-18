@@ -30,6 +30,7 @@ import { resolveRef } from "../balance/index.ts"
 export type PresetKnob = {
   key:
     | "strategy"
+    | "order"
     | "autoSwitch"
     | "switchAt"
     | "switchWindow"
@@ -49,6 +50,7 @@ export type PresetKnob = {
  */
 export const PRESET_KNOBS: PresetKnob[] = [
   { key: "strategy", label: "Strategy", inheritsFrom: "strategy" },
+  { key: "order", label: "Order", inheritsFrom: "accounts" },
   { key: "weights", label: "Weights", inheritsFrom: "weights" },
   { key: "autoSwitch", label: "Auto-switch", inheritsFrom: "autoSwitch" },
   { key: "switchAt", label: "Switch at", inheritsFrom: "switchAt" },
@@ -193,9 +195,13 @@ export function knobRows(
   render: (key: string, value: unknown) => string,
 ): { title: string; value: string; description: string; category: string }[] {
   const strategy = (preset.strategy ?? defaults.strategy) as string
-  return PRESET_KNOBS.filter(
-    (k) => k.key !== "weights" || strategy === "weighted",
-  ).map((k) => {
+  return PRESET_KNOBS.filter((k) => {
+    // A knob only the strategy in force reads. Showing the others would be a
+    // control that appears to do something and does not.
+    if (k.key === "weights") return strategy === "weighted"
+    if (k.key === "order") return strategy === "priority"
+    return true
+  }).map((k) => {
     const own = (preset as Record<string, unknown>)[k.key]
     const inherited = own === undefined
     const effective = inherited ? defaults[k.inheritsFrom] : own
@@ -206,6 +212,62 @@ export function knobRows(
         ? "inherited from the defaults"
         : "set by this preset",
       category: "Behaviour",
+    }
+  })
+}
+
+export type Move = "up" | "down" | "top" | "bottom"
+
+/**
+ * The list with one entry moved, or null when it would not move.
+ *
+ * Null rather than the same array, so a caller can skip a write that changes
+ * nothing -- the config file's timestamp is what the plugin watches, and a
+ * no-op write makes every reader re-read for no reason.
+ */
+export function moveRef(
+  list: string[],
+  ref: string,
+  how: Move,
+): string[] | null {
+  const from = list.indexOf(ref)
+  if (from === -1) return null
+  const to =
+    how === "up"
+      ? from - 1
+      : how === "down"
+        ? from + 1
+        : how === "top"
+          ? 0
+          : list.length - 1
+  if (to === from || to < 0 || to >= list.length) return null
+  const next = [...list]
+  next.splice(from, 1)
+  next.splice(to, 0, ref)
+  return next
+}
+
+/**
+ * The ordering screen: every account in the order `priority` will read it.
+ *
+ * Numbered, because "first" is the whole meaning of the list and a bare
+ * sequence of names does not say that position is what matters.
+ */
+export function orderRows(
+  list: string[],
+  names: Map<string, string>,
+  resolve: (ref: string) => string | undefined,
+): { title: string; value: string; description: string }[] {
+  return list.map((ref, i) => {
+    const source = resolve(ref)
+    const name = (source && names.get(source)) ?? ref
+    return {
+      title: `${i + 1}. ${name}`,
+      value: `o:${ref}`,
+      description:
+        i === 0
+          ? "served first while it is healthy"
+          : `tried after ${i} other${i === 1 ? "" : "s"}`,
     }
   })
 }
