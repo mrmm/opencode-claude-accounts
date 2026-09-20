@@ -1846,3 +1846,99 @@ describe("refreshIfNeeded — token expiry", () => {
     )
   })
 })
+
+describe("quota attribution — the account that served, not the one now active", () => {
+  // The balancer rotates the active account on a TIMER (`maybeRotate("sync-tick")`),
+  // with no request involved, and a streaming completion outlives several ticks.
+  // Attribution used to re-read `getActiveAccount()` once the response was back,
+  // so a response was credited to whoever happened to be active by then.
+  //
+  // Live symptom: three separate subscriptions all reporting the same weekly
+  // reset anchor and the same utilisation, which the balancer then read as
+  // unanimous exhaustion and refused to rotate past -- while the API went on
+  // answering normally.
+  it("credits the response to the dispatch account after a mid-flight rotation", async () => {
+    const originalNow = Date.now
+    const originalSetTimeout = globalThis.setTimeout
+    const originalHome = process.env.HOME
+    const originalFetch = globalThis.fetch
+    const tempHome = await mkdtemp(join(tmpdir(), "opencode-claude-auth-attr-"))
+    process.env.HOME = tempHome
+    Date.now = () => 1_700_000_000_000
+    globalThis.setTimeout = (() => ({
+      unref() {},
+    })) as unknown as typeof setTimeout
+
+    try {
+      const { helpersModule } = await loadHelpersWithMultiAccountKeychain({
+        aExpiresAt: Date.now() + 8 * 60 * 60_000,
+        bExpiresAt: Date.now() + 8 * 60 * 60_000,
+        bRefreshResult: "success",
+      })
+      const mod = helpersModule as unknown as {
+        default: (i: never) => Promise<unknown>
+        setActiveAccountSource: (s: string) => void
+      }
+
+      // The response carries acct-a's real numbers. If attribution is taken
+      // after the fact, they land on acct-b.
+      globalThis.fetch = (async () => {
+        mod.setActiveAccountSource("acct-b") // the sync-tick, mid-flight
+        return new Response("ok", {
+          status: 200,
+          headers: {
+            "anthropic-ratelimit-unified-5h-utilization": "0.42",
+            "anthropic-ratelimit-unified-5h-reset": "1700003600",
+            "anthropic-ratelimit-unified-5h-status": "allowed",
+            "anthropic-ratelimit-unified-7d-utilization": "0.11",
+            "anthropic-ratelimit-unified-7d-reset": "1700500000",
+          },
+        })
+      }) as typeof fetch
+
+      const plugin = await mod.default({} as never)
+      const typed = plugin as { auth?: { loader?: TestAuthLoader } }
+      const authConfig = await typed.auth!.loader!(
+        async () => ({
+          type: "oauth",
+          refresh: "refresh",
+          access: "access",
+          expires: Date.now() + 60_000,
+        }),
+        { models: {} },
+      )
+
+      mod.setActiveAccountSource("acct-a") // dispatch account
+      await authConfig.fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: JSON.stringify({ model: "claude-haiku-4-5", messages: [] }),
+      })
+
+      const cachePath = join(
+        tempHome,
+        ".local/share/opencode/claude-auth-quota.json",
+      )
+      const cache = JSON.parse(await readFile(cachePath, "utf8")) as Record<
+        string,
+        { fiveHour?: { utilization: number } }
+      >
+
+      assert.equal(
+        cache["acct-a"]?.fiveHour?.utilization,
+        0.42,
+        "the account that served must carry its own reading",
+      )
+      assert.equal(
+        cache["acct-b"],
+        undefined,
+        "the account rotated to mid-flight served nothing and must hold nothing",
+      )
+    } finally {
+      Date.now = originalNow
+      globalThis.setTimeout = originalSetTimeout
+      globalThis.fetch = originalFetch
+      if (typeof originalHome === "string") process.env.HOME = originalHome
+      else delete process.env.HOME
+    }
+  })
+})

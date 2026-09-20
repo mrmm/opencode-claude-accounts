@@ -22,6 +22,7 @@ import {
   pickStartupAccount,
   recordRequest,
   resolveSessionCredentials,
+  boundSource,
   refreshQuotas,
   writeQuotaForAccount,
 } from "./balance/index.ts"
@@ -80,6 +81,7 @@ export {
   getCachedCredentials,
   syncAuthJson,
   refreshAccountsList,
+  setActiveAccountSource,
   type ClaudeCredentials,
 } from "./credentials.ts"
 export {
@@ -777,6 +779,24 @@ const plugin: PluginWithOptions = async (
             }
 
             const latest = sessionCreds ?? getCachedCredentials()
+
+            // The account this request actually goes out on, captured here
+            // rather than re-derived once the response is back.
+            //
+            // `maybeRotate("sync-tick")` moves the active account on a timer,
+            // with no request involved, and a streaming completion outlives
+            // several ticks. Asking `getActiveAccount()` on the way back
+            // therefore credits the response to whoever happens to be active by
+            // then -- which wrote one account's headers onto another's key,
+            // until three separate subscriptions were all reporting the same
+            // reset anchor and the balancer called them unanimously spent.
+            let servingSource =
+              (sessionCreds && ocSessionId
+                ? (boundSource(ocSessionId) ?? null)
+                : null) ??
+              getActiveAccount()?.source ??
+              null
+
             if (!latest) {
               log("fetch_no_credentials", { modelId: "unknown" })
               throw new Error(
@@ -1034,13 +1054,14 @@ const plugin: PluginWithOptions = async (
             // of the turn. The rotation itself is hot: the token is resolved per
             // request, so nothing has to be re-registered for this to land.
             if (response.status === 429) {
-              const refusedSource = getActiveAccount()?.source ?? null
+              const refusedSource = servingSource
               const rotated = noteRejection(refusedSource, response.headers)
               const rotatedCreds = rotated ? getCachedCredentials() : null
               if (
                 rotatedCreds &&
                 rotatedCreds.accessToken !== latest.accessToken
               ) {
+                servingSource = rotated?.source ?? servingSource
                 log("fetch_retry_after_rotate", {
                   modelId,
                   from: refusedSource,
@@ -1089,7 +1110,7 @@ const plugin: PluginWithOptions = async (
             try {
               const quota = parseQuotaHeaders(response.headers)
               observedQuota = quota
-              const source = getActiveAccount()?.source ?? null
+              const source = servingSource
               if (quota && source) {
                 writeQuotaForAccount(source, quota)
                 log("quota_observed", {
@@ -1107,7 +1128,7 @@ const plugin: PluginWithOptions = async (
             // the latest reading per account, so it answers "how full is this
             // account" but never "how much has it served, and how often was it
             // refused". Recorded for every response, refusals included.
-            const servedBy = getActiveAccount()?.source ?? null
+            const servedBy = servingSource
             if (servedBy) {
               recordRequest({
                 account: servedBy,
