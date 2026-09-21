@@ -16,6 +16,9 @@
  * simply a separate consumer of one decision function.
  */
 
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { dirname, join } from "node:path"
 import { type ClaudeAuthConfig, getConfig } from "../config.ts"
 import {
   AUTO_SOURCE,
@@ -38,26 +41,69 @@ const bindings = new Map<string, Binding>()
 /**
  * Sessions that have declined paid overflow.
  *
- * Per-process and unpersisted, deliberately: "this session" ends when the
- * session does, and a decision to spend money should not outlive the
- * conversation that made it.
+ * On disk rather than in memory, because the two halves of this plugin are two
+ * PROCESSES: the balancer runs in the server, the dialogs in the TUI worker,
+ * and a Set written by one is invisible to the other. An in-memory flag made
+ * the setting unreachable from the only place anyone would set it.
+ *
+ * Entries still expire on the same idle rule as a binding, so the original
+ * intent survives the move: a decision to spend money does not outlive the
+ * conversation that made it, it just no longer depends on a process staying up.
  */
-const creditsDeniedBy = new Set<string>()
+function denialsPath(): string {
+  return join(
+    homedir(),
+    ".local",
+    "share",
+    "opencode",
+    "claude-auth-credit-denials.json",
+  )
+}
+
+type Denials = Record<string, number>
+
+function readDenials(nowMs: number = Date.now()): Denials {
+  try {
+    const raw = JSON.parse(readFileSync(denialsPath(), "utf8")) as Denials
+    const live: Denials = {}
+    for (const [id, at] of Object.entries(raw)) {
+      if (typeof at === "number" && nowMs - at <= IDLE_MS) live[id] = at
+    }
+    return live
+  } catch {
+    return {}
+  }
+}
+
+function writeDenials(d: Denials): void {
+  try {
+    const p = denialsPath()
+    mkdirSync(dirname(p), { recursive: true })
+    // Temp file then rename: a torn read here would silently spend money.
+    const tmp = `${p}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(d, null, 2))
+    renameSync(tmp, p)
+  } catch {
+    // A denial that cannot be recorded must not take the request down with it.
+  }
+}
 
 export function denyCredits(sessionId: string): void {
-  creditsDeniedBy.add(sessionId)
+  writeDenials({ ...readDenials(), [sessionId]: Date.now() })
 }
 
 export function allowCredits(sessionId: string): void {
-  creditsDeniedBy.delete(sessionId)
+  const d = readDenials()
+  delete d[sessionId]
+  writeDenials(d)
 }
 
 export function creditsDenied(sessionId: string): boolean {
-  return creditsDeniedBy.has(sessionId)
+  return sessionId in readDenials()
 }
 
 export function resetCreditDenials(): void {
-  creditsDeniedBy.clear()
+  writeDenials({})
 }
 
 /**

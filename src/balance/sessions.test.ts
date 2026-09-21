@@ -1,4 +1,8 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
+import { writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { beforeEach, describe, it } from "node:test"
 
 import { DEFAULT_CONFIG, type ClaudeAuthConfig } from "../config.ts"
@@ -166,5 +170,38 @@ describe("a session can decline paid overflow", () => {
     assert.equal(creditsDenied("s1"), true)
     allowCredits("s1")
     assert.equal(creditsDenied("s1"), false)
+  })
+})
+
+describe("a credit denial crosses the process boundary", () => {
+  // The balancer runs in the server and the dialogs in the TUI worker. An
+  // in-memory flag set by one is invisible to the other, which made the
+  // setting unreachable from the only surface that would set it.
+  it("is readable after the writing process is gone", () => {
+    resetCreditDenials()
+    denyCredits("crosser")
+    const seen = execFileSync(
+      process.execPath,
+      [
+        "-e",
+        'import("./dist/balance/index.js").then((m) => console.log(m.creditsDenied("crosser")))',
+      ],
+      { encoding: "utf8", cwd: process.cwd() },
+    ).trim()
+    assert.equal(seen, "true")
+    resetCreditDenials()
+  })
+
+  it("expires on the same idle rule as a binding", () => {
+    resetCreditDenials()
+    denyCredits("stale")
+    const p = join(
+      homedir(),
+      ".local/share/opencode/claude-auth-credit-denials.json",
+    )
+    // Backdate past the idle window rather than waiting an hour for it.
+    writeFileSync(p, JSON.stringify({ stale: Date.now() - 2 * 60 * 60_000 }))
+    assert.equal(creditsDenied("stale"), false, "an hour idle, so forgotten")
+    resetCreditDenials()
   })
 })

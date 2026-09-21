@@ -79,6 +79,14 @@ import {
   type Health,
 } from "../dist/tui/chip.js"
 import { BUILD } from "../dist/version.js"
+import {
+  allowCredits,
+  creditsDenied,
+  denyCredits,
+} from "../dist/balance/index.js"
+
+/** Set by the sidebar slot, which is the only surface handed a session id. */
+let lastSessionId: string | null = null
 
 /** Two small file reads. No Keychain, no network, so polling is cheap. */
 const POLL_MS = 4000
@@ -269,7 +277,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   api.slots.register({
     order: 210,
     slots: {
-      sidebar_content() {
+      sidebar_content(_ctx, props: { session_id: string }) {
+        // A command carries no session id -- TuiCommand is title/value/keybind
+        // and nothing else -- but this slot does, and it re-renders constantly
+        // for whichever session is on screen. So the dialogs borrow it here.
+        lastSessionId = props.session_id
         const view = () =>
           sidebarLines({
             accounts: visible(),
@@ -342,6 +354,26 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             quota: current.quota,
             selection: current.selection,
           })
+          // A per-session choice belongs beside the per-session account, not in
+          // the global settings screen. Offered only when there is a session to
+          // attach it to, and only when credits are globally allowed -- a row
+          // that cannot change the outcome is worse than an absent one.
+          const sid = lastSessionId
+          const canDecline = sid !== null && getConfig().useCredits
+          const CREDITS = "__credits_toggle__"
+          if (canDecline) {
+            const off = creditsDenied(sid)
+            options.push({
+              title: off
+                ? "Paid credits: declined for this session"
+                : "Paid credits: allowed for this session",
+              value: CREDITS,
+              description: off
+                ? "this session stops instead of spending once every allowance is gone"
+                : "this session may spend overflow once every allowance is gone",
+              category: "This session",
+            })
+          }
           // `dialog` is a stack: `replace` pushes this dialog, `clear` closes
           // it. There is no open()/close() pair.
           api.ui.dialog.replace(() => (
@@ -350,6 +382,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               current={current.selection}
               options={options}
               onSelect={(option) => {
+                if (String(option.value) === CREDITS && sid) {
+                  // Written to disk, not held in memory: the balancer runs in
+                  // the server process and would never see a flag set here.
+                  const off = creditsDenied(sid)
+                  if (off) allowCredits(sid)
+                  else denyCredits(sid)
+                  api.ui.toast({
+                    variant: "success",
+                    title: "Paid credits",
+                    message: off
+                      ? "This session may spend overflow again."
+                      : "This session will stop rather than spend overflow.",
+                  })
+                  api.ui.dialog.clear()
+                  return
+                }
                 // The whole point: one file write. No authorize(), no auth.json
                 // rewrite, no provider rebuild. The next request routes to it.
                 saveAccountSource(String(option.value))

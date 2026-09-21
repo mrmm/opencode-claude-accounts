@@ -59,8 +59,9 @@ one answered. Cost increases down the list, so the order is the policy.
 
 `useCredits: false` removes the `credits` tier entirely, so a spent account is
 simply spent and the plugin stops rather than bills. A single session can
-decline on its own (`denyCredits(sessionId)`), which narrows only that
-session's view while the global setting still governs the rest. Neither turns
+decline on its own -- a row in `/cc-account`, under "This session" -- which
+narrows only that session's view while the global setting still governs the
+rest. Neither turns
 credits off at Anthropic -- no API offers that, and this credential could not
 use one if it did. They decline to ROUTE, which keeps this plugin's traffic
 free while another client on the same account still spends.
@@ -88,6 +89,19 @@ Hue carries ONE axis: what it costs to use this account. Which account is
 serving is a separate channel — the filled marker and the brighter name —
 because colouring by "is it serving" made a healthy idle account and an
 exhausted one identical, which is the comparison the list exists to support.
+
+## Two processes, one plugin
+
+The balancer runs in the opencode server; the dialogs run in the TUI worker.
+They share nothing but files. Anything one sets and the other must read goes
+through disk -- the selection file, the config, the quota cache, and the
+per-session credit denials. An in-memory flag is invisible across that line,
+and the failure is silent: the setter works, the reader never sees it.
+
+`TuiCommand` carries no session id either (it is title/value/keybind and
+nothing else), so a command that needs one borrows it from `sidebar_content`,
+the slot that is handed it on every render. Note the renderer signature is
+`(ctx, props)` -- the context comes first, and the props second.
 
 ## Where the facts come from
 
