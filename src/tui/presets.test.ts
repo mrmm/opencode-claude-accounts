@@ -3,7 +3,15 @@ import { describe, it } from "node:test"
 
 import {
   indentJson,
-  isEditable,
+  isFlat,
+  isTiered,
+  poolRows,
+  poolsOf,
+  togglePoolAccount,
+  movePool,
+  addPool,
+  removePool,
+  setPoolStrategy,
   knobRows,
   moveRef,
   orderRows,
@@ -27,12 +35,12 @@ const PRESETS: PresetMap = {
   },
 }
 
-describe("isEditable", () => {
+describe("isFlat", () => {
   it("refuses a pool-based preset", () => {
     // Tiered failover is a list of groups each with its own strategy. Editing
     // that in a one-line dialog is a worse text editor than the open one.
-    assert.equal(isEditable(PRESETS["rr-12"]!), true)
-    assert.equal(isEditable(PRESETS.tiered!), false)
+    assert.equal(isFlat(PRESETS["rr-12"]!), true)
+    assert.equal(isFlat(PRESETS.tiered!), false)
   })
 })
 
@@ -162,9 +170,12 @@ describe("presetRows", () => {
     assert.ok(!rows[1]!.description.includes("in use"))
   })
 
-  it("says which presets it will not edit, rather than hiding them", () => {
+  it("describes a tiered preset by its shape, not by a refusal", () => {
+    // It used to read "read only here". Both kinds are editable now, so the
+    // row says what the preset IS rather than what the editor will not do.
     const rows = presetRows(PRESETS, "__auto__")
-    assert.match(rows[1]!.description, /read only/)
+    assert.match(rows[1]!.description, /tiers/)
+    assert.equal(rows[1]!.description.includes("read only"), false)
   })
 })
 
@@ -309,5 +320,100 @@ describe("orderRows", () => {
   it("falls back to the reference when it resolves to nothing", () => {
     const rows = orderRows(["ghost"], names, () => undefined)
     assert.match(rows[0]!.title, /ghost/)
+  })
+})
+
+describe("tiered presets", () => {
+  const TIERED = {
+    label: "Team 1+2, fall back to Team 3",
+    pools: [
+      {
+        name: "primary",
+        accounts: ["Team 1", "Team 2"],
+        strategy: "least-loaded",
+      },
+      { name: "reserve", accounts: ["Team 3"] },
+    ],
+  }
+  const TIER_MEMBERS = [
+    { source: "s1", label: "Team 1" },
+    { source: "s2", label: "Team 2" },
+    { source: "s3", label: "Team 3" },
+  ]
+  const NAMES = new Map([
+    ["s1", "Team 1"],
+    ["s2", "Team 2"],
+    ["s3", "Team 3"],
+  ])
+
+  it("is not the flat kind", () => {
+    assert.equal(isFlat(TIERED), false)
+    assert.equal(isTiered(TIERED), true)
+  })
+
+  it("numbers the tiers and says what each is for", () => {
+    const rows = poolRows(TIERED, NAMES, TIER_MEMBERS)
+    assert.equal(rows[0]!.title, "1. primary")
+    assert.match(rows[0]!.description, /Team 1, Team 2/)
+    assert.match(rows[0]!.description, /least-loaded/)
+    assert.match(rows[0]!.description, /served first/)
+    assert.match(rows[1]!.description, /used when tier 1 is spent/)
+  })
+
+  it("counts references that resolve to nothing", () => {
+    const broken = { pools: [{ name: "p", accounts: ["Team 1", "Ghost"] }] }
+    assert.match(
+      poolRows(broken, NAMES, TIER_MEMBERS)[0]!.description,
+      /1 unresolved/,
+    )
+  })
+
+  it("moves an account between tiers by toggling each side", () => {
+    const off = togglePoolAccount(TIERED, 0, "s2", TIER_MEMBERS)!
+    assert.deepEqual(poolsOf(off)[0]!.accounts, ["Team 1"])
+    const on = togglePoolAccount(off, 1, "s2", TIER_MEMBERS)!
+    assert.deepEqual(poolsOf(on)[1]!.accounts, ["Team 3", "s2"])
+    // The other tier is untouched, and the strategy rides along.
+    assert.equal(poolsOf(on)[0]!.strategy, "least-loaded")
+  })
+
+  it("refuses to empty a tier, because deleting it is the honest verb", () => {
+    assert.equal(togglePoolAccount(TIERED, 1, "s3", TIER_MEMBERS), null)
+  })
+
+  it("reorders tiers, which is what changes the failover order", () => {
+    const moved = movePool(TIERED, 1, "up")!
+    assert.deepEqual(
+      poolsOf(moved).map((p) => p.name),
+      ["reserve", "primary"],
+    )
+    assert.equal(movePool(TIERED, 0, "up"), null, "already first")
+  })
+
+  it("adds and removes a tier, but never the last one", () => {
+    const three = addPool(TIERED, "spare")
+    assert.equal(poolsOf(three).length, 3)
+    assert.deepEqual(
+      poolsOf(removePool(three, 2)!).map((p) => p.name),
+      ["primary", "reserve"],
+    )
+    const one = { pools: [{ name: "only", accounts: ["Team 1"] }] }
+    assert.equal(
+      removePool(one, 0),
+      null,
+      "a preset with no tiers names nobody",
+    )
+  })
+
+  it("sets and clears a tier's own strategy", () => {
+    const set = setPoolStrategy(TIERED, 1, "round-robin")!
+    assert.equal(poolsOf(set)[1]!.strategy, "round-robin")
+    const cleared = setPoolStrategy(set, 1, null)!
+    assert.equal("strategy" in poolsOf(cleared)[1]!, false, "inherits again")
+  })
+
+  it("describes a tiered preset by its tiers in the list", () => {
+    const rows = presetRows({ t: TIERED }, null)
+    assert.match(rows[0]!.description, /2 tiers, 3 accounts/)
   })
 })

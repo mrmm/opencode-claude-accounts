@@ -6,6 +6,7 @@ import { join } from "node:path"
 
 import {
   bindingWindow,
+  creditHeadroom,
   blockProbe,
   buildProbeRequest,
   buildUsageRequest,
@@ -587,5 +588,165 @@ describe("usage endpoint", () => {
     assert.equal(probeBlocked("a", 1000 + 3212), true)
     assert.equal(probeBlocked("a", 1000 + 3213), false, "the block expires")
     resetProbeBlocks()
+  })
+})
+
+/** Every case below is a real account shape observed live on one day. */
+const asExtra = (o: Record<string, unknown>) => o as never
+
+describe("creditHeadroom", () => {
+  it("is false when there is no credit line at all", () => {
+    assert.equal(creditHeadroom(undefined), false)
+    assert.equal(
+      creditHeadroom(asExtra({ enabled: false, capReached: false })),
+      false,
+    )
+  })
+
+  it("is false on an enabled but unfunded line", () => {
+    // Observed: is_enabled true with monthly_limit 0. Reading `enabled` alone
+    // put this account forward as if it could pay for something.
+    assert.equal(
+      creditHeadroom(
+        asExtra({
+          enabled: true,
+          capReached: false,
+          usedMinor: 0,
+          limitMinor: 0,
+        }),
+      ),
+      false,
+    )
+  })
+
+  it("is false once the spend has reached the cap", () => {
+    // Observed: 200.35 spent against a 200.00 cap, still serving 99% of
+    // requests and refusing them, because capReached had not flipped.
+    assert.equal(
+      creditHeadroom(
+        asExtra({
+          enabled: true,
+          capReached: false,
+          usedMinor: 20035,
+          limitMinor: 20000,
+        }),
+      ),
+      false,
+    )
+    assert.equal(
+      creditHeadroom(
+        asExtra({
+          enabled: true,
+          capReached: false,
+          usedMinor: 20000,
+          limitMinor: 20000,
+        }),
+      ),
+      false,
+      "exactly at the cap is not headroom",
+    )
+  })
+
+  it("is true while money remains", () => {
+    // Observed: 233.48 of 300.00, sitting idle while the exhausted one served.
+    assert.equal(
+      creditHeadroom(
+        asExtra({
+          enabled: true,
+          capReached: false,
+          usedMinor: 23348,
+          limitMinor: 30000,
+        }),
+      ),
+      true,
+    )
+  })
+
+  it("trusts the server's own flag over the arithmetic", () => {
+    assert.equal(
+      creditHeadroom(
+        asExtra({
+          enabled: true,
+          capReached: true,
+          usedMinor: 0,
+          limitMinor: 30000,
+        }),
+      ),
+      false,
+    )
+  })
+
+  it("falls back to enabled when the figures are unknown", () => {
+    assert.equal(
+      creditHeadroom(asExtra({ enabled: true, capReached: false })),
+      true,
+    )
+  })
+})
+
+describe("the cache merges rather than replaces", () => {
+  it("keeps probe-only fields when a response writes headers", () => {
+    // The fault this prevents: every response replaced the entry, so the
+    // BUSIEST account lost its credit state fastest -- which is precisely the
+    // account whose credit state decides anything.
+    const p = probeTmp()
+    writeQuotaForAccount(
+      "a",
+      {
+        fiveHour: { utilization: 0.5 },
+        extra: {
+          enabled: true,
+          capReached: false,
+          usedMinor: 100,
+          limitMinor: 20000,
+        },
+        activeLimits: [
+          { kind: "weekly_all", percent: 100, severity: "critical" },
+        ],
+        observedAt: 1,
+      },
+      p,
+    )
+    writeQuotaForAccount("a", parseQuotaHeaders(REAL_HEADERS, OBSERVED)!, p)
+    const after = readQuotaCache(p).a!
+    assert.equal(
+      after.extra?.limitMinor,
+      20000,
+      "credits survived the response",
+    )
+    assert.equal(after.activeLimits?.length, 1)
+    // ...and the headers still won for what they own.
+    assert.equal(after.observedAt, OBSERVED)
+  })
+
+  it("lets a newer probe overwrite the credit figures", () => {
+    const p = probeTmp()
+    writeQuotaForAccount(
+      "a",
+      {
+        extra: {
+          enabled: true,
+          capReached: false,
+          usedMinor: 100,
+          limitMinor: 20000,
+        },
+        observedAt: 1,
+      },
+      p,
+    )
+    writeQuotaForAccount(
+      "a",
+      {
+        extra: {
+          enabled: true,
+          capReached: true,
+          usedMinor: 20000,
+          limitMinor: 20000,
+        },
+        observedAt: 2,
+      },
+      p,
+    )
+    assert.equal(readQuotaCache(p).a!.extra?.capReached, true)
   })
 })

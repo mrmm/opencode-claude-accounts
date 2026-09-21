@@ -3,10 +3,10 @@
  *
  * A preset is a name, a strategy and a set of accounts -- the same shape the
  * account toggle already edits, so this reuses that idea rather than inventing
- * a second one. What it deliberately does NOT edit is a preset built from
- * `pools`: tiered failover is a list of groups each with its own strategy, and
- * a one-line dialog editing that becomes a worse text editor than the one
- * already open. Those are shown, marked, and left alone.
+ * a second one. A preset built from `pools` -- tiered failover, a list of
+ * groups each with its own strategy -- is edited by the same primitives one
+ * tier at a time, which is what kept it from becoming a worse text editor than
+ * the one already open.
  *
  * A preset's accounts are REFERENCES, not sources: a hand-written config says
  * "Acme 1" and the balancer resolves that by substring against the account
@@ -58,11 +58,23 @@ export const PRESET_KNOBS: PresetKnob[] = [
   { key: "ejectFor", label: "Eject for", inheritsFrom: "ejectFor" },
 ]
 
+/**
+ * One fallback tier. Structurally the config's own `Pool`; mirrored here for
+ * the same reason `Preset` is -- this file stays a leaf, and the shape is
+ * three fields that have not changed since pools existed.
+ */
+export type Pool = {
+  name: string
+  accounts?: string[]
+  strategy?: string
+  weights?: Record<string, number>
+}
+
 export type Preset = {
   label?: string
   strategy?: string
   accounts?: string[]
-  pools?: unknown[]
+  pools?: Pool[]
   weights?: Record<string, number>
   autoSwitch?: boolean
   switchAt?: number
@@ -72,8 +84,14 @@ export type Preset = {
 
 export type PresetMap = Record<string, Preset>
 
-/** A preset this editor can safely change. */
-export function isEditable(p: Preset): boolean {
+/**
+ * Whether this preset is the FLAT kind -- one list of accounts.
+ *
+ * Was `isEditable`, back when a tiered preset was shown and left alone. Both
+ * kinds are editable now, by different screens, so the question the name asks
+ * had to change with the answer.
+ */
+export function isFlat(p: Preset): boolean {
   return !Array.isArray(p.pools)
 }
 
@@ -87,14 +105,14 @@ export type Member = { source: string; label?: string }
  * account, or matches two and is therefore refused, makes the preset quietly
  * smaller than it reads. That is worth showing.
  */
-export function presetMembership(
-  preset: Preset,
+export function refsMembership(
+  refs: readonly string[],
   members: readonly Member[],
 ): { sources: Set<string>; refFor: Map<string, string>; unresolved: string[] } {
   const sources = new Set<string>()
   const refFor = new Map<string, string>()
   const unresolved: string[] = []
-  for (const ref of preset.accounts ?? []) {
+  for (const ref of refs) {
     const source = resolveRef(ref, members)
     if (!source) {
       unresolved.push(ref)
@@ -104,6 +122,13 @@ export function presetMembership(
     if (!refFor.has(source)) refFor.set(source, ref)
   }
   return { sources, refFor, unresolved }
+}
+
+export function presetMembership(
+  preset: Preset,
+  members: readonly Member[],
+): { sources: Set<string>; refFor: Map<string, string>; unresolved: string[] } {
+  return refsMembership(preset.accounts ?? [], members)
 }
 
 /**
@@ -169,9 +194,9 @@ export function presetRows(
 ): { title: string; value: string; description: string; category: string }[] {
   const rows = Object.entries(presets).map(([name, p]) => {
     const active = selection === `preset:${name}`
-    const shape = isEditable(p)
+    const shape = isFlat(p)
       ? `${p.strategy ?? "sticky"} over ${(p.accounts ?? []).length} accounts`
-      : `${(p.pools as unknown[]).length} tiers - read only here`
+      : `${poolsOf(p).length} tiers, ${poolsOf(p).reduce((n, q) => n + (q.accounts ?? []).length, 0)} accounts`
     return {
       title: p.label ? `${name}: ${p.label}` : name,
       value: name,
@@ -225,13 +250,20 @@ export type Move = "up" | "down" | "top" | "bottom"
  * nothing -- the config file's timestamp is what the plugin watches, and a
  * no-op write makes every reader re-read for no reason.
  */
-export function moveRef(
-  list: string[],
-  ref: string,
+/**
+ * Move one element, or null when the move would change nothing.
+ *
+ * Generic because two things are ordered here and both are priority lists: the
+ * accounts inside a tier, and the tiers themselves. One mover, so a no-op is
+ * refused the same way in both -- an idle write still moves the mtime that
+ * every reader watches.
+ */
+export function moveAt<T>(
+  list: readonly T[],
+  from: number,
   how: Move,
-): string[] | null {
-  const from = list.indexOf(ref)
-  if (from === -1) return null
+): T[] | null {
+  if (from < 0 || from >= list.length) return null
   const to =
     how === "up"
       ? from - 1
@@ -242,9 +274,17 @@ export function moveRef(
           : list.length - 1
   if (to === from || to < 0 || to >= list.length) return null
   const next = [...list]
-  next.splice(from, 1)
-  next.splice(to, 0, ref)
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved as T)
   return next
+}
+
+export function moveRef(
+  list: string[],
+  ref: string,
+  how: Move,
+): string[] | null {
+  return moveAt(list, list.indexOf(ref), how)
 }
 
 /**
@@ -270,4 +310,137 @@ export function orderRows(
           : `tried after ${i} other${i === 1 ? "" : "s"}`,
     }
   })
+}
+
+// ---------------------------------------------------------------------------
+// Tiers
+// ---------------------------------------------------------------------------
+
+/**
+ * A tiered preset carries `pools` instead of `accounts`: an ordered list of
+ * fallback tiers, each a small preset of its own. Tier 1 serves while anything
+ * in it is healthy; tier 2 is what happens when it is not.
+ *
+ * Everything below reuses the flat primitives rather than restating them --
+ * a tier's membership is `refsMembership`, a tier's order is `moveAt`.
+ */
+export function isTiered(p: Preset): boolean {
+  return Array.isArray(p.pools)
+}
+
+export function poolsOf(p: Preset): Pool[] {
+  return Array.isArray(p.pools) ? p.pools : []
+}
+
+/** One row per tier, numbered, naming who is in it. */
+export function poolRows(
+  preset: Preset,
+  names: Map<string, string>,
+  members: readonly Member[],
+): { title: string; value: string; description: string }[] {
+  const pools = poolsOf(preset)
+  return pools.map((pool, i) => {
+    const { sources, unresolved } = refsMembership(pool.accounts ?? [], members)
+    const who = [...sources].map((s) => names.get(s) ?? s)
+    // An unresolved reference makes a tier quietly smaller than it reads, so
+    // it is counted here rather than silently dropped.
+    const missing = unresolved.length ? `, ${unresolved.length} unresolved` : ""
+    return {
+      title: `${i + 1}. ${pool.name || `tier ${i + 1}`}`,
+      value: `p:${i}`,
+      description:
+        (who.length ? who.join(", ") : "empty") +
+        (pool.strategy ? ` (${pool.strategy})` : "") +
+        missing +
+        (i === 0 ? " — served first" : ` — used when tier ${i} is spent`),
+    }
+  })
+}
+
+function withPools(preset: Preset, pools: Pool[]): Preset {
+  return { ...preset, pools }
+}
+
+/** Add or remove one account in one tier. */
+export function togglePoolAccount(
+  preset: Preset,
+  index: number,
+  source: string,
+  members: readonly Member[],
+): Preset | null {
+  const pools = poolsOf(preset)
+  const pool = pools[index]
+  if (!pool) return null
+  const { sources, refFor } = refsMembership(pool.accounts ?? [], members)
+  const current = pool.accounts ?? []
+
+  if (sources.has(source)) {
+    // A tier with nothing in it is dropped by the balancer anyway, so emptying
+    // one is a slower way of deleting it. Deleting is the honest verb.
+    if (sources.size === 1) return null
+    const ref = refFor.get(source)
+    const next = [...pools]
+    next[index] = { ...pool, accounts: current.filter((r) => r !== ref) }
+    return withPools(preset, next)
+  }
+  const next = [...pools]
+  next[index] = { ...pool, accounts: [...current, source] }
+  return withPools(preset, next)
+}
+
+export function movePool(
+  preset: Preset,
+  index: number,
+  how: Move,
+): Preset | null {
+  const moved = moveAt(poolsOf(preset), index, how)
+  return moved ? withPools(preset, moved) : null
+}
+
+export function addPool(preset: Preset, name: string): Preset {
+  return withPools(preset, [...poolsOf(preset), { name, accounts: [] }])
+}
+
+/**
+ * Remove a tier. The last one cannot go: a tiered preset with no tiers names
+ * no accounts at all, which is a preset that can never serve.
+ */
+export function removePool(preset: Preset, index: number): Preset | null {
+  const pools = poolsOf(preset)
+  if (pools.length <= 1 || !pools[index]) return null
+  return withPools(
+    preset,
+    pools.filter((_, i) => i !== index),
+  )
+}
+
+export function renamePool(
+  preset: Preset,
+  index: number,
+  name: string,
+): Preset | null {
+  const pools = poolsOf(preset)
+  const pool = pools[index]
+  if (!pool) return null
+  const next = [...pools]
+  next[index] = { ...pool, name }
+  return withPools(preset, next)
+}
+
+export function setPoolStrategy(
+  preset: Preset,
+  index: number,
+  strategy: string | null,
+): Preset | null {
+  const pools = poolsOf(preset)
+  const pool = pools[index]
+  if (!pool) return null
+  const next = [...pools]
+  if (strategy === null) {
+    const { strategy: _drop, ...rest } = pool
+    next[index] = rest
+  } else {
+    next[index] = { ...pool, strategy: strategy as Pool["strategy"] }
+  }
+  return withPools(preset, next)
 }

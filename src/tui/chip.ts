@@ -15,7 +15,7 @@ import type {
   SessionDetail,
   SessionUsage,
 } from "../balance/index.ts"
-import { formatDuration } from "../balance/index.ts"
+import { creditHeadroom, formatDuration } from "../balance/index.ts"
 
 export type ChipAccount = { source: string; label: string }
 
@@ -161,10 +161,9 @@ export function quotaText(
  */
 export type Health = "unknown" | "ok" | "warn" | "paid" | "critical"
 
-/** Included allowance spent, credits covering it, cap not yet reached. */
+/** Credits exist, are funded, and are not yet spent out. */
 export function onCredits(quota: QuotaCache, source: string | null): boolean {
-  const x = (source ? quota?.[source] : undefined)?.extra
-  return x?.enabled === true && x.capReached !== true
+  return creditHeadroom((source ? quota?.[source] : undefined)?.extra)
 }
 
 const money = (minor: number) => (minor / 100).toFixed(2)

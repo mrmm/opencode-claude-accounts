@@ -27,6 +27,7 @@ import {
   type QuotaCache,
   type QuotaWindow,
   bindingWindow,
+  creditHeadroom,
   quotaForAccount,
 } from "./quota.ts"
 
@@ -189,8 +190,10 @@ export function assess(
 
     const q = quotaForAccount(m.source, cache, nowSec, maxAgeSeconds)
     // Paid overflow, which no rate-limit header mentions. Without it a spent
-    // account looks dead while it is still answering every request.
-    const credits = q?.extra?.enabled === true && q.extra.capReached !== true
+    // account looks dead while it is still answering every request -- and
+    // without the headroom check, an account whose credits are already gone
+    // looks alive while it refuses them.
+    const credits = creditHeadroom(q?.extra)
     if (!q) {
       // No reading is not a fault. An unprobed account is assumed usable —
       // refusing it would strand a fresh install where nothing has been

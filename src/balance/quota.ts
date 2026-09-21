@@ -51,6 +51,24 @@ export type ExtraUsage = {
   capReached: boolean
 }
 
+/**
+ * Whether credits can actually pay for the next request.
+ *
+ * `is_enabled` alone is not the question, and reading it as if it were put a
+ * live account at 200.35 of a 200.00 cap into the rotation and left one with
+ * 66 EUR of headroom idle. Two ways an enabled credit line covers nothing:
+ * the cap is zero (enabled, never funded -- a real account reports exactly
+ * that), or the spend has reached it. `spend_limit_reached` is the server's
+ * own flag and it is trusted when set, but it is not the only way to be out.
+ */
+export function creditHeadroom(extra: ExtraUsage | undefined): boolean {
+  if (!extra?.enabled || extra.capReached) return false
+  const { usedMinor, limitMinor } = extra
+  // Unknown figures: enabled and not flagged is the best evidence there is.
+  if (limitMinor === undefined || usedMinor === undefined) return true
+  return limitMinor > 0 && usedMinor < limitMinor
+}
+
 /** A limit the server says is currently binding. */
 export type ActiveLimit = {
   kind: string
@@ -237,7 +255,20 @@ export function writeQuotaForAccount(
 ): boolean {
   try {
     const cache = readQuotaCache(path)
-    cache[source] = quota
+    // Merge, never replace. Two writers reach this cache and they know
+    // different things: a response carries headers (windows, status,
+    // representative) and a probe carries what no header mentions (credits,
+    // the binding limit). Replacing meant every response erased the probe --
+    // so the BUSIEST account lost its credit state fastest, which is exactly
+    // the account whose credit state decides anything.
+    const prior = cache[source]
+    cache[source] = {
+      ...(prior?.extra !== undefined ? { extra: prior.extra } : {}),
+      ...(prior?.activeLimits !== undefined
+        ? { activeLimits: prior.activeLimits }
+        : {}),
+      ...quota,
+    }
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
@@ -479,20 +510,8 @@ export async function refreshQuotas(
 
       const quota = parseUsageBody(await res.json().catch(() => null), now())
       if (quota) {
-        // Merged, not replaced: `representative` and the per-window `status`
-        // come from response headers and have no counterpart here.
-        const prior = cache?.[account.source]
-        writeQuotaForAccount(
-          account.source,
-          {
-            ...prior,
-            ...quota,
-            ...(prior?.representative
-              ? { representative: prior.representative }
-              : {}),
-          },
-          path,
-        )
+        // No merge here: writeQuotaForAccount owns that now, for both writers.
+        writeQuotaForAccount(account.source, quota, path)
         result.probed++
       } else {
         // 401 from an expired token, or a body in a shape we do not know.

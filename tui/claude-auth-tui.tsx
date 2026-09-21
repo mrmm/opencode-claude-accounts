@@ -37,13 +37,22 @@ import { readQuotaCache } from "../dist/balance/quota.js"
 import { readShapeFile } from "../dist/introspect.js"
 import { resolveRef } from "../dist/balance/index.js"
 import {
+  addPool,
   indentJson,
-  isEditable,
+  isFlat,
   knobRows,
+  movePool,
   moveRef,
   orderRows,
+  poolRows,
+  poolsOf,
   presetMembership,
   presetRows,
+  refsMembership,
+  removePool,
+  renamePool,
+  setPoolStrategy,
+  togglePoolAccount,
   togglePresetAccount,
   validatePresetName,
 } from "../dist/tui/presets.js"
@@ -633,6 +642,33 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             ))
           }
 
+          /**
+           * One text prompt, shared.
+           *
+           * DialogPrompt declares `onCancel` and never calls it, so escape is
+           * the stack's and has to be routed through `escapeTo` -- a detail
+           * worth writing once rather than at each call site.
+           */
+          const askText = (
+            title: string,
+            seed: string,
+            onConfirm: (value: string) => void,
+            onEscape: () => void,
+            placeholder = "",
+          ) =>
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogPrompt
+                  title={title}
+                  placeholder={placeholder}
+                  value={seed}
+                  onConfirm={(value: string) => onConfirm(value)}
+                  onCancel={() => onEscape()}
+                />
+              ),
+              escapeTo(onEscape),
+            )
+
           const rename = (source: string) => {
             const cfg = getConfig()
             const current = displayNames().get(source) ?? ""
@@ -671,18 +707,248 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             // the explanatory comment sits above the key, outside the value.
             writeKey("presets", indentJson(next, 2), note)
 
+          /**
+           * The tiers of a failover preset, in the order they are tried.
+           *
+           * Reordering IS the edit that matters here -- which group serves
+           * first -- so it gets the same + / - keys as the account order, for
+           * the same reason: enter, a submenu and a direction is three steps
+           * to nudge one row.
+           */
+          const openTiers = (
+            name: string,
+            preset: Record<string, unknown>,
+            focus?: number,
+          ) => {
+            const pools = poolsOf(preset)
+            let cursor = focus ?? -1
+
+            const shift = (how: "up" | "down") => {
+              if (cursor < 0) return
+              const next = movePool(preset, cursor, how)
+              if (!next) {
+                api.ui.toast({
+                  variant: "warning",
+                  title: "Not moved",
+                  message: `Already ${how === "up" ? "first" : "last"}.`,
+                })
+                return openTiers(name, preset, cursor)
+              }
+              savePresets({ ...getConfig().presets, [name]: next }, "")
+              openTiers(name, next, how === "up" ? cursor - 1 : cursor + 1)
+            }
+
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title={`${name} - ${pools.length} tiers, + or - to reorder`}
+                  current={focus === undefined ? undefined : `p:${focus}`}
+                  options={[
+                    backRow(name),
+                    ...poolRows(preset, displayNames(), accounts),
+                    {
+                      title: "Add a tier",
+                      value: "__add__",
+                      description: "a further fallback, tried after the rest",
+                      category: "Tiers",
+                    },
+                  ]}
+                  onMove={(row) => {
+                    const v = String(row.value)
+                    cursor = v.startsWith("p:") ? Number(v.slice(2)) : -1
+                  }}
+                  onFilter={(q) => {
+                    const last = q.slice(-1)
+                    if (last === "+") shift("up")
+                    else if (last === "-") shift("down")
+                  }}
+                  onSelect={(row) => {
+                    const v = String(row.value)
+                    if (v === BACK) return menu()
+                    if (v === "__add__") {
+                      return askText(
+                        "Name for the new tier",
+                        "",
+                        (value: string) => {
+                          const next = addPool(
+                            preset,
+                            value.trim() || `tier ${pools.length + 1}`,
+                          )
+                          savePresets(
+                            { ...getConfig().presets, [name]: next },
+                            `${name}: tier added.`,
+                          )
+                          openTiers(name, next, pools.length)
+                        },
+                        () => openTiers(name, preset),
+                      )
+                    }
+                    openTier(name, preset, Number(v.slice(2)))
+                  }}
+                />
+              ),
+              escapeTo(() => menu()),
+            )
+          }
+
+          /** One tier: who is in it, what strategy it runs, and removal. */
+          const openTier = (
+            name: string,
+            preset: Record<string, unknown>,
+            index: number,
+          ) => {
+            const pool = poolsOf(preset)[index]
+            if (!pool) return openTiers(name, preset)
+            const names = displayNames()
+            const { sources } = refsMembership(pool.accounts ?? [], accounts)
+
+            const save = (
+              next: Record<string, unknown> | null,
+              note: string,
+            ) => {
+              if (!next) {
+                return api.ui.toast({
+                  variant: "warning",
+                  title: pool.name,
+                  message:
+                    "A tier keeps at least one account; delete it instead.",
+                })
+              }
+              savePresets({ ...getConfig().presets, [name]: next }, note)
+              openTier(name, next, index)
+            }
+
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title={`${name} / ${pool.name || `tier ${index + 1}`}`}
+                  options={[
+                    { ...backRow(name), title: "← Back to the tiers" },
+                    ...accounts.map((a) => ({
+                      title: `${sources.has(a.source) ? "[x]" : "[ ]"} ${
+                        names.get(a.source) ?? a.label ?? a.source
+                      }`,
+                      value: `a:${a.source}`,
+                      description: sources.has(a.source)
+                        ? "in this tier"
+                        : "not in this tier",
+                      category: "Accounts",
+                    })),
+                    {
+                      title: `Strategy: ${pool.strategy ?? "inherited"}`,
+                      value: "__strategy__",
+                      description: pool.strategy
+                        ? "set by this tier"
+                        : "inherited from the preset",
+                      category: "Tier",
+                    },
+                    {
+                      title: "Rename this tier",
+                      value: "__rename__",
+                      description: pool.name || `tier ${index + 1}`,
+                      category: "Tier",
+                    },
+                    {
+                      title: "Delete this tier",
+                      value: "__delete__",
+                      description: "the accounts stay; only the grouping goes",
+                      category: "Tier",
+                    },
+                  ]}
+                  onSelect={(row) => {
+                    const v = String(row.value)
+                    if (v === BACK) return openTiers(name, preset, index)
+                    if (v.startsWith("a:")) {
+                      return save(
+                        togglePoolAccount(preset, index, v.slice(2), accounts),
+                        "",
+                      )
+                    }
+                    if (v === "__rename__") {
+                      return askText(
+                        "New name for this tier",
+                        pool.name ?? "",
+                        (value: string) =>
+                          save(
+                            renamePool(
+                              preset,
+                              index,
+                              value.trim() || pool.name,
+                            ),
+                            `${name}: tier renamed.`,
+                          ),
+                        () => openTier(name, preset, index),
+                      )
+                    }
+                    if (v === "__delete__") {
+                      return confirmThen(
+                        `Delete tier ${pool.name || index + 1}?`,
+                        "The accounts stay in the preset's other tiers only if they are also listed there.",
+                        () => {
+                          const next = removePool(preset, index)
+                          if (!next) {
+                            return api.ui.toast({
+                              variant: "warning",
+                              title: name,
+                              message:
+                                "The last tier cannot go; a preset with no tiers names nobody.",
+                            })
+                          }
+                          savePresets(
+                            { ...getConfig().presets, [name]: next },
+                            `${name}: tier deleted.`,
+                          )
+                          openTiers(name, next)
+                        },
+                        () => openTier(name, preset, index),
+                      )
+                    }
+                    // Strategy: the same list the preset knob offers, plus
+                    // inheriting, so a tier is never stuck with one.
+                    api.ui.dialog.replace(
+                      () => (
+                        <api.ui.DialogSelect
+                          title={`Strategy for ${pool.name || `tier ${index + 1}`}`}
+                          current={pool.strategy ?? "__inherit__"}
+                          options={[
+                            {
+                              title: "Inherit from the preset",
+                              value: "__inherit__",
+                              description: "whatever the preset itself uses",
+                            },
+                            ...STRATEGY_NAMES.map((sname) => ({
+                              title: sname,
+                              value: sname,
+                              description: "",
+                            })),
+                          ]}
+                          onSelect={(pick) => {
+                            const chosen = String(pick.value)
+                            save(
+                              setPoolStrategy(
+                                preset,
+                                index,
+                                chosen === "__inherit__" ? null : chosen,
+                              ),
+                              `${name}: tier strategy set.`,
+                            )
+                          }}
+                        />
+                      ),
+                      escapeTo(() => openTier(name, preset, index)),
+                    )
+                  }}
+                />
+              ),
+              escapeTo(() => openTiers(name, preset, index)),
+            )
+          }
+
           const openPreset = (name: string) => {
             const cfg = getConfig()
             const preset = cfg.presets[name]
             if (!preset) return menu()
-            if (!isEditable(preset)) {
-              api.ui.toast({
-                variant: "warning",
-                title: name,
-                message: "Tiered presets are edited in the config file.",
-              })
-              return menu()
-            }
+            if (!isFlat(preset)) return openTiers(name, preset)
             // A preset's accounts are references ("Acme 1"), not Keychain
             // sources, so membership has to be resolved the way the balancer
             // resolves it. Comparing against the source directly is what made
