@@ -78,7 +78,7 @@ import {
   toggleAccount,
   type Health,
 } from "../dist/tui/chip.js"
-import { VERSION } from "../dist/version.js"
+import { BUILD } from "../dist/version.js"
 
 /** Two small file reads. No Keychain, no network, so polling is cheap. */
 const POLL_MS = 4000
@@ -286,7 +286,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             <text fg={api.theme.current.text}>
               <b>Claude Auth</b>
               <span style={{ fg: api.theme.current.textMuted }}>
-                {` v${VERSION}`}
+                {` v${BUILD}`}
               </span>
               <span style={{ fg: api.theme.current.textMuted }}>
                 {" "}

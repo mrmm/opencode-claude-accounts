@@ -40,7 +40,26 @@ running" without reading a log -- a question that cost a debugging round once.
 It is also on every `plugin_init` log line.
 
 The advisory is the exception worth remembering: it composes its own sentences
-and will not inherit anything added to `quotaText`.
+and will not inherit anything added to `quotaText`. Its title must stay true of
+EVERY account -- naming one window there claimed a uniformity that did not
+exist, since the binding limit differs per account. Per-account detail belongs
+in the message.
+
+## Selection tiers
+
+`selectAccount` walks these in order, and the `pool` on its decision says which
+one answered. Cost increases down the list, so the order is the policy.
+
+| tier | when |
+| --- | --- |
+| the strategy's own pick | an account is under `switchAt` |
+| `over-threshold` | all above `switchAt`, but something is still under its limit |
+| `credits` | included allowance spent, paid overflow enabled and under cap |
+| `exhausted` | nothing left: refused, ejected, or capped including credits |
+
+`credits` sits below both free tiers deliberately: a free account at 98% is
+cheaper than a paid one at 100%, and enabling credits must not start spending
+them while any free headroom remains.
 
 ## Colour
 

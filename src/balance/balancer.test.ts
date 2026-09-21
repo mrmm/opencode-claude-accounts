@@ -695,3 +695,82 @@ describe("weights on the flat path", () => {
     assert.equal(picks.filter((p) => p === "a").length, 4)
   })
 })
+
+describe("credits are a tier, not an equal", () => {
+  // The live shape this exists for: an account reporting 5h at 100% with the
+  // header saying "rejected", serving 315 requests with no failures because
+  // paid overflow was covering it -- while the balancer announced that every
+  // account was spent and told the operator to wait.
+  const credits = (
+    util: number,
+    opts: { enabled?: boolean; capped?: boolean } = {},
+  ) => ({
+    ...reading(util, util >= 1 ? { status: "rejected" } : {}),
+    extra: {
+      enabled: opts.enabled ?? true,
+      capReached: opts.capped ?? false,
+      usedMinor: 11378,
+      limitMinor: 20000,
+      currency: "EUR",
+    },
+  })
+
+  it("uses a credit-covered account instead of declaring exhaustion", () => {
+    const cache: QuotaCache = { a: credits(1.0), b: credits(1.01) }
+    const d = selectAccount(members("a", "b"), cache, cfg(), null, NOW_MS)
+    assert.equal(d!.pool, "credits")
+    assert.match(d!.reason, /using credits/)
+  })
+
+  it("still declares exhaustion once the credit cap is reached", () => {
+    const cache: QuotaCache = {
+      a: credits(1.0, { capped: true }),
+      b: credits(1.01, { capped: true }),
+    }
+    const d = selectAccount(members("a", "b"), cache, cfg(), null, NOW_MS)
+    assert.equal(d!.pool, "exhausted")
+    assert.match(d!.reason, /credits exhausted or unavailable/)
+  })
+
+  it("still declares exhaustion when credits are switched off", () => {
+    const cache: QuotaCache = {
+      a: credits(1.0, { enabled: false }),
+      b: credits(1.01, { enabled: false }),
+    }
+    assert.equal(
+      selectAccount(members("a", "b"), cache, cfg(), null, NOW_MS)!.pool,
+      "exhausted",
+    )
+  })
+
+  it("prefers free headroom over paid, however thin the free margin", () => {
+    // Spending money while an account still has its own allowance is buying
+    // what is already paid for.
+    const cache: QuotaCache = { a: credits(1.0), b: reading(0.99) }
+    const d = selectAccount(
+      members("a", "b"),
+      cache,
+      cfg({ switchAt: 0.95 }),
+      null,
+      NOW_MS,
+    )
+    assert.equal(d!.pool, "over-threshold")
+    assert.equal(d!.source, "b")
+  })
+
+  it("does not call an account paid while it is still inside its allowance", () => {
+    // Credits enabled is not credits spent: at 97% this account owes nothing.
+    const cache: QuotaCache = { a: credits(0.97) }
+    const h = assess(members("a"), cache, cfg({ switchAt: 0.95 }), NOW_MS)[0]
+    assert.equal(h!.paidCapacity, false)
+  })
+
+  it("does not fall back to an ejected account just because it has credits", () => {
+    const cache: QuotaCache = { a: credits(1.0) }
+    eject("a", cfg({ ejectFor: 60_000 }), NOW_MS)
+    assert.equal(
+      selectAccount(members("a"), cache, cfg(), null, NOW_MS)!.pool,
+      "exhausted",
+    )
+  })
+})

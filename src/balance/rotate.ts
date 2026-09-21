@@ -307,13 +307,22 @@ export function maybeRotate(
       const q = readQuotaCache()[decision.source]
       const w = q ? bindingWindow(q) : undefined
       const isFiveHour = w !== undefined && w === q?.fiveHour
+      // The server names the limit that actually bound. Deriving it from the
+      // configured switchWindow announced "the 5h limit" while two of three
+      // accounts were held by their weekly one, and a third by its session.
+      const named = q?.activeLimits?.find(
+        (l) => l.severity === "critical",
+      )?.kind
       const other = isFiveHour ? q?.sevenDay : q?.fiveHour
       emitNotice({
         kind: "accounts-exhausted",
         soonestSource: decision.source,
         ...(w?.resetsAt ? { resetsAt: w.resetsAt } : {}),
         ...(w
-          ? { window: isFiveHour ? "5h" : "weekly", utilization: w.utilization }
+          ? {
+              window: named ?? (isFiveHour ? "5h" : "weekly"),
+              utilization: w.utilization,
+            }
           : {}),
         ...(other
           ? {

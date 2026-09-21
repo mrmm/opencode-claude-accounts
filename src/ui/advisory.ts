@@ -172,6 +172,9 @@ export function buildAdvisory(
  * Latching is the caller's job: this function is pure so the policy can be
  * tested without a clock or a client.
  */
+const pctOf = (u: number | undefined) =>
+  u === undefined ? "" : `${Math.round(u * 100)}%`
+
 export function noticeToToast(
   notice: Notice,
   opts: { showSuccess?: boolean } = {},
@@ -237,21 +240,29 @@ export function noticeToToast(
       // Name the window that actually bound. "Spent" without it reads as "no
       // quota at all", when a 5-hour limit can be full while the weekly budget
       // is barely touched.
-      const which = notice.window ? `${notice.window} limit` : "limit"
-      const pct =
-        notice.utilization !== undefined
-          ? ` (${Math.round(notice.utilization * 100)}%)`
-          : ""
+      // The binding limit differs per account -- one weekly, one session,
+      // one five-hour -- so naming a single one in the title claimed a
+      // uniformity that was not there. It belongs in the message, where it is
+      // true of the one account being named.
+
+      // One parenthesis, not two: "(100%) (weekly_all)" reads as two
+      // unrelated asides about the same account.
+      const detail = [notice.window, pctOf(notice.utilization)]
+        .filter(Boolean)
+        .join(", ")
+      const pct = detail ? ` (${detail})` : ""
       const other =
         notice.otherWindow && notice.otherUtilization !== undefined
           ? ` Your ${notice.otherWindow} budget still has ${Math.round((1 - notice.otherUtilization) * 100)}% left.`
           : ""
       return {
         variant: "error",
-        title: `All Claude accounts have hit their ${which}`,
+        // Reaching this state now means credits could not cover it either:
+        // a credit-backed account is used before exhaustion is declared.
+        title: "All Claude accounts have spent their included allowance",
         message: when
-          ? `Staying on ${shortenLabel(notice.soonestSource)}${pct}; it frees up in ${when}.${other}`
-          : `Staying on ${shortenLabel(notice.soonestSource)}${pct}; no reset time was reported.${other}`,
+          ? `Staying on ${shortenLabel(notice.soonestSource)}${pct}; it frees up in ${when}.${other} No credits are available to cover the overflow.`
+          : `Staying on ${shortenLabel(notice.soonestSource)}${pct}; no reset time was reported.${other} No credits are available to cover the overflow.`,
       }
     }
 

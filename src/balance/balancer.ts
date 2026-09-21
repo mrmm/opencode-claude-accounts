@@ -56,6 +56,12 @@ export type Health = {
   healthy: boolean
   /** Why it is unhealthy, for the log. "" when healthy. */
   reason: string
+  /**
+   * The included allowance is gone and credits are covering it: still serving,
+   * for money. Distinct from `healthy`, which stays false -- this account is a
+   * last resort, not an equal.
+   */
+  paidCapacity?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +188,9 @@ export function assess(
     }
 
     const q = quotaForAccount(m.source, cache, nowSec, maxAgeSeconds)
+    // Paid overflow, which no rate-limit header mentions. Without it a spent
+    // account looks dead while it is still answering every request.
+    const credits = q?.extra?.enabled === true && q.extra.capReached !== true
     if (!q) {
       // No reading is not a fault. An unprobed account is assumed usable —
       // refusing it would strand a fresh install where nothing has been
@@ -201,6 +210,7 @@ export function assess(
         credential,
         healthy: false,
         reason: "server rejected",
+        paidCapacity: credits,
       }
     }
     if (util !== undefined && util >= cfg.switchAt) {
@@ -211,6 +221,10 @@ export function assess(
         credential,
         healthy: false,
         reason: `at ${Math.round(util * 100)}% of ${cfg.switchWindow}`,
+        // Only once the allowance is actually gone. Between switchAt and the
+        // limit the account is still free, and spending money there would be
+        // buying what it already has.
+        paidCapacity: credits && util >= 1,
       }
     }
     return {
@@ -582,8 +596,33 @@ export function selectAccount(
     }
   }
 
-  // Genuinely nothing left: refused, ejected, or at the limit. Prefer whoever
-  // frees up first so the wait is as short as it can be.
+  // Spent on the included allowance, but credits are covering it -- so it
+  // serves, for money. Deliberately below both free tiers: a free account at
+  // 98% is cheaper than a paid one, and enabling credits must not start
+  // spending them while any free headroom remains.
+  const paidButServing = known
+    .filter(
+      (h) =>
+        h.credential !== "unusable" &&
+        !h.reason.startsWith("ejected") &&
+        h.paidCapacity === true,
+    )
+    .sort(byHeadroom)
+
+  const paid = paidButServing[0]
+  if (paid) {
+    return {
+      source: paid.source,
+      pool: "credits",
+      strategy: cfg.strategy,
+      changed: paid.source !== activeSource,
+      reason:
+        "every account has spent its included allowance; using credits on the emptiest",
+    }
+  }
+
+  // Genuinely nothing left: refused, ejected, at the limit with no credits, or
+  // credits themselves capped. Prefer whoever frees up first.
   const soonest = known.sort(
     (a, b) => (a.resetsAt ?? Infinity) - (b.resetsAt ?? Infinity),
   )[0]
@@ -595,7 +634,7 @@ export function selectAccount(
     strategy: cfg.strategy,
     changed: soonest.source !== activeSource,
     reason: soonest.resetsAt
-      ? `all accounts spent; earliest reset at ${new Date(soonest.resetsAt * 1000).toISOString()}`
-      : "all accounts spent; no reset time known",
+      ? `all accounts spent, credits exhausted or unavailable; earliest reset at ${new Date(soonest.resetsAt * 1000).toISOString()}`
+      : "all accounts spent, credits exhausted or unavailable; no reset time known",
   }
 }

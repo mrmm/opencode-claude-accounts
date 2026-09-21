@@ -30,7 +30,7 @@ import crypto from "node:crypto"
 import { config } from "./model-config.ts"
 import { readAllClaudeAccounts, type ClaudeAccount } from "./keychain.ts"
 import { initLogger, log } from "./logger.ts"
-import { VERSION } from "./version.ts"
+import { COMMIT, VERSION } from "./version.ts"
 import { emitNotice, setNoticeSink } from "./notify.ts"
 import { getConfig, primeConfig } from "./config.ts"
 import {
@@ -422,6 +422,7 @@ const plugin: PluginWithOptions = async (
 
     log("plugin_init", {
       version: VERSION,
+      commit: COMMIT,
       // Who started this process. A plugin instance per opencode process is
       // correct, so a high init count is a question about the spawner, not the
       // plugin -- and answering it from the log beats guessing at `ps`, which

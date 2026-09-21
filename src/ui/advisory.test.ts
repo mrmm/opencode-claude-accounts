@@ -321,9 +321,29 @@ describe("exhaustion names the window that actually bound", () => {
       },
       { showSuccess: false },
     )
-    assert.match(t?.title ?? "", /5h limit/)
+    // The window names the one account being stayed on, so it belongs in
+    // the message. The title speaks for all of them and must stay true of all
+    // of them -- live, one was weekly-bound, one session-bound, one 5h.
+    assert.match(t?.title ?? "", /spent their included allowance/)
+    assert.equal(t?.title.includes("5h"), false, "the title speaks for all")
+    assert.match(t?.message ?? "", /\(5h, 101%\)/)
     assert.match(t?.message ?? "", /101%/)
     assert.match(t?.message ?? "", /weekly budget still has 85% left/)
+  })
+
+  it("says credits could not cover it, because now they would have", () => {
+    // A credit-backed account is used before exhaustion is declared, so
+    // reaching this state means credits were off or already capped.
+    const t = noticeToToast(
+      { ...base, window: "weekly_all", utilization: 1.0 },
+      { showSuccess: false },
+    )
+    assert.match(t?.message ?? "", /No credits are available/)
+    assert.match(
+      t?.message ?? "",
+      /\(weekly_all, 100%\)/,
+      "the server's own name",
+    )
   })
 
   it("works when the weekly window is the binding one", () => {
@@ -337,13 +357,13 @@ describe("exhaustion names the window that actually bound", () => {
       },
       { showSuccess: false },
     )
-    assert.match(t?.title ?? "", /weekly limit/)
+    assert.match(t?.message ?? "", /\(weekly, 99%\)/)
     assert.match(t?.message ?? "", /5h budget still has 80% left/)
   })
 
   it("degrades to a plain message when no window detail is available", () => {
     const t = noticeToToast(base, { showSuccess: false })
-    assert.match(t?.title ?? "", /limit/)
+    assert.match(t?.title ?? "", /spent their included allowance/)
     assert.ok(!(t?.message ?? "").includes("undefined"))
   })
 })
