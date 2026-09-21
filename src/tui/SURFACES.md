@@ -12,9 +12,9 @@ function names, which are stable.
 Almost nothing renders account state directly. Five surfaces funnel through two
 functions, so a change to either reaches all five at once.
 
-| | where | answers |
-| --- | --- | --- |
-| `quotaText()` | src/tui/chip.ts:108 | what the numbers SAY |
+|                   | where               | answers               |
+| ----------------- | ------------------- | --------------------- |
+| `quotaText()`     | src/tui/chip.ts:108 | what the numbers SAY  |
 | `accountHealth()` | src/tui/chip.ts:194 | what colour they MEAN |
 
 Add a fact to `quotaText` behind an opt-in flag and every caller that wants it
@@ -23,14 +23,21 @@ passes the flag; the ones that do not are untouched. That is how `resets` and
 
 ## Display surfaces
 
-| surface | built by | call site | shows |
-| --- | --- | --- | --- |
-| prompt chip | `formatChip` | src/tui/chip.ts:366 | 5h only, + `paid`. No room beside an input box |
-| sidebar rows | `sidebarLines` | src/tui/chip.ts:407 | 5h + wk + resets + spend + request share |
-| account picker | `buildPickerOptions` | src/tui/chip.ts:471 | 5h + spend |
-| session detail | `detailRows` | src/tui/chip.ts:587 | 5h + wk + spend |
-| accounts-in-use picker | inline | tui/claude-auth-tui.tsx:651 | 5h + wk + spend |
-| toast / advisory | `buildAdvisory` | src/ui/advisory.ts:93 | **separate text path — does NOT use `quotaText`** |
+| surface                | built by             | call site                   | shows                                             |
+| ---------------------- | -------------------- | --------------------------- | ------------------------------------------------- |
+| prompt chip            | `formatChip`         | src/tui/chip.ts:366         | 5h only, + `paid`. No room beside an input box    |
+| sidebar rows           | `sidebarLines`       | src/tui/chip.ts:407         | 5h + wk + resets + spend + request share          |
+| account picker         | `buildPickerOptions` | src/tui/chip.ts:471         | 5h + spend                                        |
+| session detail         | `detailRows`         | src/tui/chip.ts:587         | 5h + wk + spend                                   |
+| accounts-in-use picker | inline               | tui/claude-auth-tui.tsx:651 | 5h + wk + spend                                   |
+| toast / advisory       | `buildAdvisory`      | src/ui/advisory.ts:93       | **separate text path — does NOT use `quotaText`** |
+
+| sidebar header | inline | ../../tui/claude-auth-tui.tsx (`<b>Claude Auth</b>`) | section title + running version |
+
+The version comes from `src/version.ts`, which reads `package.json` rather than
+restating it. It is there to answer "is the build I just made the build that is
+running" without reading a log -- a question that cost a debugging round once.
+It is also on every `plugin_init` log line.
 
 The advisory is the exception worth remembering: it composes its own sentences
 and will not inherit anything added to `quotaText`.
@@ -42,13 +49,13 @@ and will not inherit anything added to `quotaText`.
 `success`, `warning`, `error`, `info`, `text`, `textMuted` — there is no wider
 palette to reach for.
 
-| state | colour | means |
-| --- | --- | --- |
-| `ok` | success | inside the allowance |
-| `warn` | warning | past `quotaWarnAt`, still included |
-| `paid` | info | allowance spent, credits covering it — **working, and costing money** |
-| `critical` | error | genuinely unusable: no credits, or the cap is reached |
-| `unknown` | textMuted | nothing has been read |
+| state      | colour    | means                                                                 |
+| ---------- | --------- | --------------------------------------------------------------------- |
+| `ok`       | success   | inside the allowance                                                  |
+| `warn`     | warning   | past `quotaWarnAt`, still included                                    |
+| `paid`     | info      | allowance spent, credits covering it — **working, and costing money** |
+| `critical` | error     | genuinely unusable: no credits, or the cap is reached                 |
+| `unknown`  | textMuted | nothing has been read                                                 |
 
 Hue carries ONE axis: what it costs to use this account. Which account is
 serving is a separate channel — the filled marker and the brighter name —
@@ -57,13 +64,13 @@ exhausted one identical, which is the comparison the list exists to support.
 
 ## Where the facts come from
 
-| fact | source | note |
-| --- | --- | --- |
-| 5h / weekly utilisation | response headers, and the usage probe | headers give a FRACTION, the probe a PERCENT |
-| reset times | both | headers give unix seconds, the probe ISO strings |
-| `status`, `representative` | response headers only | the probe has no counterpart, so a probe write MERGES |
-| extra usage, spend, `limits[]` | usage probe only (`/api/oauth/usage`) | ~1 call/hour/account; a 429 blocks further probes |
-| request share | `usage.jsonl` | answers "is load actually spread", which quota cannot |
+| fact                           | source                                | note                                                  |
+| ------------------------------ | ------------------------------------- | ----------------------------------------------------- |
+| 5h / weekly utilisation        | response headers, and the usage probe | headers give a FRACTION, the probe a PERCENT          |
+| reset times                    | both                                  | headers give unix seconds, the probe ISO strings      |
+| `status`, `representative`     | response headers only                 | the probe has no counterpart, so a probe write MERGES |
+| extra usage, spend, `limits[]` | usage probe only (`/api/oauth/usage`) | ~1 call/hour/account; a 429 blocks further probes     |
+| request share                  | `usage.jsonl`                         | answers "is load actually spread", which quota cannot |
 
 ## Adding a field — the recipe
 

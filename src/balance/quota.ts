@@ -442,7 +442,13 @@ export async function refreshQuotas(
       result.failed++
       continue
     }
-    if (quotaForAccount(account.source, cache, now(), maxAgeSeconds)) {
+    // Fresh is not the same as complete. The serving account gets a new
+    // header reading on every request, so it is permanently young -- and a
+    // header carries no extra-usage or limits data at all. Judging the probe
+    // by age alone meant the busiest account could never acquire the only
+    // fields the probe exists to fetch.
+    const held = quotaForAccount(account.source, cache, now(), maxAgeSeconds)
+    if (held && held.extra !== undefined) {
       result.skipped++
       continue
     }

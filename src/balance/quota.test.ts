@@ -329,9 +329,18 @@ describe("refreshQuotas", () => {
     assert.deepEqual(calls, ["Bearer tok-a", "Bearer tok-b"])
   })
 
-  it("skips accounts that already have a fresh reading", async () => {
+  it("skips accounts that already have a fresh, complete reading", async () => {
+    // "Complete" now carries weight: a header-only reading is young but has no
+    // extra-usage state, and the probe exists to supply exactly that.
     const p = tmp()
-    writeQuotaForAccount("a", parseQuotaHeaders(REAL_HEADERS, OBSERVED)!, p)
+    writeQuotaForAccount(
+      "a",
+      {
+        ...parseQuotaHeaders(REAL_HEADERS, OBSERVED)!,
+        extra: { enabled: false, capReached: false },
+      },
+      p,
+    )
     const { fn, calls } = fakeFetch([usageBody(50)])
     const r = await refreshQuotas([acct("a"), acct("b")], {
       fetchImpl: fn,
@@ -342,6 +351,52 @@ describe("refreshQuotas", () => {
     assert.equal(r.skipped, 1)
     assert.equal(r.probed, 1)
     assert.equal(calls.length, 1, "the fresh account must not be probed")
+  })
+
+  it("probes a fresh reading that is missing the probe-only fields", async () => {
+    // The serving account is never stale: every response refreshes it. But a
+    // header reading has no extra-usage state, so age alone would lock the
+    // busiest account out of the only data the probe can supply.
+    resetProbeBlocks()
+    const p = tmp()
+    writeQuotaForAccount("a", parseQuotaHeaders(REAL_HEADERS, OBSERVED)!, p)
+    const { fn, calls } = fakeFetch([
+      {
+        five_hour: { utilization: 50, resets_at: null },
+        extra_usage: { is_enabled: true, spend_limit_reached: false },
+        spend: { used: { amount_minor: 100 }, limit: { amount_minor: 200 } },
+      },
+    ])
+    const r = await refreshQuotas([acct("a")], {
+      fetchImpl: fn,
+      path: p,
+      now: () => OBSERVED + 1,
+    })
+    assert.equal(r.probed, 1, "young, but incomplete")
+    assert.equal(calls.length, 1)
+    assert.equal(readQuotaCache(p).a.extra?.enabled, true)
+  })
+
+  it("leaves an account alone once it has probe data and is still fresh", async () => {
+    resetProbeBlocks()
+    const p = tmp()
+    writeQuotaForAccount(
+      "a",
+      {
+        fiveHour: { utilization: 0.5 },
+        extra: { enabled: true, capReached: false },
+        observedAt: OBSERVED,
+      },
+      p,
+    )
+    const { fn, calls } = fakeFetch([usageBody(10)])
+    const r = await refreshQuotas([acct("a")], {
+      fetchImpl: fn,
+      path: p,
+      now: () => OBSERVED + 60,
+    })
+    assert.equal(r.skipped, 1)
+    assert.equal(calls.length, 0)
   })
 
   it("re-probes once a reading goes stale", async () => {
