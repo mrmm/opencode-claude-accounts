@@ -90,6 +90,30 @@ serving is a separate channel — the filled marker and the brighter name —
 because colouring by "is it serving" made a healthy idle account and an
 exhausted one identical, which is the comparison the list exists to support.
 
+## Asking what it is doing
+
+`/cc-debug` re-reads config, accounts and quota from disk, forces a probe
+ignoring both the freshness gate and the 429 backoff, then writes
+`~/.local/share/opencode/claude-auth-report.txt` and shows it. It reports FACTS
+READ AT CALL TIME, never intent: the running build, what the cache holds per
+account, which preset references resolve to nothing, and the config keys that
+decide routing.
+
+It exists because the alternative was a screenshot and a guess. Every fault in
+this area so far was one of: the running build predated the fix, the cache held
+no credit data, or a reference silently resolved to nothing -- and the report
+prints all three without being asked.
+
+## No code hot reload
+
+`api.slots.register` returns an id and the API exposes no remover, so a
+re-imported module would ADD a second sidebar section and chip beside the
+originals. `api.command.register` and `event.on` do return unsubscribes, but
+slots do not, and slots are half the surface. Code changes need a restart.
+
+Data does not: config, presets, the selection file and the quota cache are all
+re-read, and `/cc-debug` forces that immediately.
+
 ## Two processes, one plugin
 
 The balancer runs in the opencode server; the dialogs run in the TUI worker.

@@ -88,6 +88,10 @@ import {
   type Health,
 } from "../dist/tui/chip.js"
 import { BUILD } from "../dist/version.js"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import { debugReport } from "../dist/tui/debug.js"
+import { refreshQuotas, resetProbeBlocks } from "../dist/balance/quota.js"
 import {
   allowCredits,
   creditsDenied,
@@ -413,6 +417,109 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 setSnap(read())
                 api.ui.dialog.clear()
               }}
+            />
+          ))
+        },
+      },
+      {
+        name: "claude-auth.debug",
+        title: "Claude auth: what is it actually doing",
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "cc-debug",
+        async run() {
+          // Re-read everything from disk first, so the report describes the
+          // state as it is rather than as this process last cached it.
+          resetConfigCache()
+          resetProbeBlocks()
+          const cfg = getConfig()
+          const list = refreshAccountsList()
+
+          // A forced probe: the point of asking is usually that something
+          // looks wrong, and a stale reading is the commonest reason.
+          let probe = "not attempted"
+          try {
+            const r = await refreshQuotas(
+              list
+                .map((a) => ({
+                  source: a.source,
+                  accessToken: a.credentials?.accessToken ?? "",
+                }))
+                .filter((a) => a.accessToken),
+              { maxAgeSeconds: 0 },
+            )
+            probe = `probed ${r.probed}, skipped ${r.skipped}, failed ${r.failed}`
+          } catch (e) {
+            probe = `failed: ${(e as Error).message}`
+          }
+
+          const quota = readQuotaCache()
+          // Which references resolve to nothing is the fault that is invisible
+          // everywhere else: the balancer drops them and says nothing.
+          const unresolved: string[] = []
+          for (const [name, preset] of Object.entries(cfg.presets)) {
+            const refs = Array.isArray(preset.pools)
+              ? preset.pools.flatMap((t) => t.accounts ?? [])
+              : (preset.accounts ?? [])
+            for (const ref of refs) {
+              if (!resolveRef(ref, list)) unresolved.push(`${name}: ${ref}`)
+            }
+          }
+
+          const text = [
+            debugReport({
+              build: BUILD,
+              selection: loadPersistedAccountSource() ?? "__auto__",
+              accounts: list,
+              quota,
+              presets: cfg.presets,
+              unresolved,
+              config: {
+                strategy: cfg.strategy,
+                preset: cfg.preset ?? "(none)",
+                useCredits: cfg.useCredits,
+                switchAt: cfg.switchAt,
+                switchWindow: cfg.switchWindow,
+                autoSwitch: cfg.autoSwitch,
+                bindBy: cfg.bindBy,
+                quotaProbe: cfg.quotaProbe,
+                quotaProbeMaxAge: cfg.quotaProbeMaxAge,
+                accounts: cfg.accounts,
+              },
+            }),
+            "",
+            `probe      ${probe}`,
+          ].join("\n")
+
+          const out = join(
+            homedir(),
+            ".local/share/opencode/claude-auth-report.txt",
+          )
+          try {
+            writeFileSync(out, `${text}\n`, "utf8")
+            api.ui.toast({
+              variant: "success",
+              title: "Report written",
+              message: out,
+            })
+          } catch {
+            api.ui.toast({
+              variant: "error",
+              title: "Could not write the report",
+              message: out,
+            })
+          }
+
+          // Shown as well as written: the file is for pasting, the dialog is
+          // for the answer being one keypress away.
+          api.ui.dialog.replace(() => (
+            <api.ui.DialogSelect
+              title={`Claude auth — ${out}`}
+              options={text.split("\n").map((line, i) => ({
+                title: line || " ",
+                value: `l${i}`,
+                description: "",
+              }))}
             />
           ))
         },
