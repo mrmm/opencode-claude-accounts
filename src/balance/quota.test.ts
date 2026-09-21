@@ -6,7 +6,13 @@ import { join } from "node:path"
 
 import {
   bindingWindow,
+  blockProbe,
   buildProbeRequest,
+  buildUsageRequest,
+  parseUsageBody,
+  probeBlocked,
+  resetProbeBlocks,
+  USAGE_URL,
   PROBE_MODEL,
   refreshQuotas,
   formatDuration,
@@ -270,14 +276,36 @@ const probeTmp = () =>
 const acct = (n: string) => ({ source: n, accessToken: `tok-${n}` })
 
 /** Records the Authorization of each call and replays canned headers. */
-function fakeFetch(headersBySeq: Array<Record<string, string> | null>) {
+/** A five-hour reading at `percent`, in the usage endpoint's own shape. */
+function usageBody(percent: number) {
+  return { five_hour: { utilization: percent, resets_at: null } }
+}
+
+/**
+ * The probe reads a JSON body from the usage endpoint, not rate-limit headers:
+ * the headers only arrive on a real inference call, which a probe should not
+ * have to spend.
+ */
+function fakeFetch(
+  bodiesBySeq: Array<Record<string, unknown> | null>,
+  opts: { status?: number; retryAfter?: string } = {},
+) {
   let i = 0
   const calls: string[] = []
   const fn = async (_url: string, init?: RequestInit) => {
-    const h = headersBySeq[i++] ?? null
+    const body = bodiesBySeq[i++] ?? null
     const auth = (init?.headers as Record<string, string>)?.authorization
     calls.push(auth ?? "none")
-    return { headers: new Headers(h ?? {}) } as unknown as Response
+    return {
+      status: opts.status ?? 200,
+      headers: new Headers(
+        opts.retryAfter ? { "retry-after": opts.retryAfter } : {},
+      ),
+      json: async () => {
+        if (body === null) throw new Error("no body")
+        return body
+      },
+    } as unknown as Response
   }
   return { fn: fn as unknown as typeof fetch, calls }
 }
@@ -287,10 +315,7 @@ describe("refreshQuotas", () => {
 
   it("probes each account and caches what it learns", async () => {
     const p = tmp()
-    const { fn, calls } = fakeFetch([
-      { "anthropic-ratelimit-unified-5h-utilization": "1.0" },
-      { "anthropic-ratelimit-unified-5h-utilization": "0.34" },
-    ])
+    const { fn, calls } = fakeFetch([usageBody(100), usageBody(34)])
     const r = await refreshQuotas([acct("a"), acct("b")], {
       fetchImpl: fn,
       path: p,
@@ -307,9 +332,7 @@ describe("refreshQuotas", () => {
   it("skips accounts that already have a fresh reading", async () => {
     const p = tmp()
     writeQuotaForAccount("a", parseQuotaHeaders(REAL_HEADERS, OBSERVED)!, p)
-    const { fn, calls } = fakeFetch([
-      { "anthropic-ratelimit-unified-5h-utilization": "0.5" },
-    ])
+    const { fn, calls } = fakeFetch([usageBody(50)])
     const r = await refreshQuotas([acct("a"), acct("b")], {
       fetchImpl: fn,
       path: p,
@@ -324,9 +347,7 @@ describe("refreshQuotas", () => {
   it("re-probes once a reading goes stale", async () => {
     const p = tmp()
     writeQuotaForAccount("a", parseQuotaHeaders(REAL_HEADERS, OBSERVED)!, p)
-    const { fn } = fakeFetch([
-      { "anthropic-ratelimit-unified-5h-utilization": "0.5" },
-    ])
+    const { fn } = fakeFetch([usageBody(50)])
     const r = await refreshQuotas([acct("a")], {
       fetchImpl: fn,
       path: p,
@@ -335,13 +356,42 @@ describe("refreshQuotas", () => {
     assert.equal(r.probed, 1)
   })
 
-  it("counts a response without quota headers as failed, not probed", async () => {
+  it("counts a body it cannot read as failed, not probed", async () => {
     // What an expired token (401) looks like.
     const p = tmp()
     const { fn } = fakeFetch([null])
     const r = await refreshQuotas([acct("a")], { fetchImpl: fn, path: p })
     assert.deepEqual(r, { probed: 0, skipped: 0, failed: 1 })
     assert.deepEqual(readQuotaCache(p), {})
+  })
+
+  it("stops probing an account the server has rate-limited", async () => {
+    // retry-after here is measured in thousands of seconds. Probing through it
+    // spends the entire hourly budget on being refused.
+    resetProbeBlocks()
+    const p = tmp()
+    const { fn, calls } = fakeFetch([null], {
+      status: 429,
+      retryAfter: "3213",
+    })
+    const r = await refreshQuotas([acct("a")], {
+      fetchImpl: fn,
+      path: p,
+      now: () => 1000,
+    })
+    assert.deepEqual(r, { probed: 0, skipped: 1, failed: 0 })
+    assert.equal(calls.length, 1)
+    assert.equal(probeBlocked("a", 1000 + 3212), true)
+
+    // A second sweep inside the window must not spend another call.
+    const again = await refreshQuotas([acct("a")], {
+      fetchImpl: fn,
+      path: p,
+      now: () => 1000 + 60,
+    })
+    assert.equal(again.skipped, 1)
+    assert.equal(calls.length, 1, "no second call while blocked")
+    resetProbeBlocks()
   })
 
   it("resolves rather than throwing when the network fails", async () => {
@@ -384,5 +434,103 @@ describe("refreshQuotas", () => {
     const body = JSON.parse(init.body as string)
     assert.equal(body.max_tokens, 1)
     assert.equal(body.model, PROBE_MODEL)
+  })
+})
+
+describe("usage endpoint", () => {
+  // Shape captured from a live /api/oauth/usage response. Two conversions are
+  // silent if missed, so they are asserted rather than assumed: utilisation
+  // arrives as a percent where the headers carry a fraction, and resets_at is
+  // an ISO string where the headers carry unix seconds.
+  const PAYLOAD = {
+    five_hour: {
+      utilization: 100,
+      resets_at: "2026-09-21T10:10:00.888468+00:00",
+    },
+    seven_day: {
+      utilization: 75,
+      resets_at: "2026-09-25T00:00:00.888494+00:00",
+    },
+    extra_usage: {
+      is_enabled: true,
+      monthly_limit: 30000,
+      used_credits: 21730,
+      utilization: 72.43,
+      currency: "EUR",
+      spend_limit_reached: false,
+    },
+    limits: [
+      { kind: "session", percent: 0, severity: "normal", is_active: false },
+      {
+        kind: "weekly_all",
+        percent: 100,
+        severity: "critical",
+        resets_at: "2026-09-22T04:00:00.128994+00:00",
+        is_active: true,
+      },
+    ],
+    spend: {
+      used: { amount_minor: 21730, currency: "EUR" },
+      limit: { amount_minor: 30000, currency: "EUR" },
+      can_toggle: false,
+    },
+  }
+
+  it("reads a percent as a fraction, the way the headers report it", () => {
+    const q = parseUsageBody(PAYLOAD, 1_700_000_000)!
+    assert.equal(q.fiveHour?.utilization, 1)
+    assert.equal(q.sevenDay?.utilization, 0.75)
+  })
+
+  it("reads an ISO reset as unix seconds", () => {
+    const q = parseUsageBody(PAYLOAD, 1_700_000_000)!
+    assert.equal(
+      q.fiveHour?.resetsAt,
+      Math.floor(Date.parse("2026-09-21T10:10:00.888468+00:00") / 1000),
+    )
+  })
+
+  it("carries the paid-overflow state the headers never mention", () => {
+    const q = parseUsageBody(PAYLOAD, 1_700_000_000)!
+    assert.deepEqual(q.extra, {
+      enabled: true,
+      capReached: false,
+      usedMinor: 21730,
+      limitMinor: 30000,
+      currency: "EUR",
+    })
+  })
+
+  it("keeps only the limits the server marks active", () => {
+    const q = parseUsageBody(PAYLOAD, 1_700_000_000)!
+    assert.equal(q.activeLimits?.length, 1)
+    assert.equal(q.activeLimits?.[0]?.kind, "weekly_all")
+    assert.equal(q.activeLimits?.[0]?.severity, "critical")
+  })
+
+  it("refuses a body it does not recognise rather than inventing zeroes", () => {
+    assert.equal(parseUsageBody(null), undefined)
+    assert.equal(parseUsageBody({}), undefined)
+    assert.equal(parseUsageBody({ five_hour: { utilization: "x" } }), undefined)
+  })
+
+  it("asks for the usage endpoint, not an inference call", () => {
+    const [url, init] = buildUsageRequest("tok")
+    assert.equal(url, USAGE_URL)
+    assert.equal(
+      (init.headers as Record<string, string>).authorization,
+      "Bearer tok",
+    )
+    assert.equal(init.method ?? "GET", "GET")
+  })
+
+  it("stops probing an account until its retry-after has passed", () => {
+    resetProbeBlocks()
+    assert.equal(probeBlocked("a", 1000), false)
+    blockProbe("a", 1000 + 3213)
+    assert.equal(probeBlocked("a", 1000), true)
+    assert.equal(probeBlocked("a", 1000 + 3212), true)
+    assert.equal(probeBlocked("a", 1000 + 3213), false, "the block expires")
+    resetProbeBlocks()
   })
 })

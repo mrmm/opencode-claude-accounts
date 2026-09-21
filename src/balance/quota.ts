@@ -33,6 +33,32 @@ export type QuotaWindow = {
   status?: string
 }
 
+/**
+ * Paid overflow once the included allowance is gone.
+ *
+ * Absent from the rate-limit headers entirely, and decisive: an account whose
+ * included window is spent still serves normally while credits are enabled and
+ * under their cap. Reading the window alone says "exhausted" about an account
+ * that is answering every request.
+ */
+export type ExtraUsage = {
+  enabled: boolean
+  /** Minor units, as the API reports them -- 21730 is EUR 217.30. */
+  usedMinor?: number
+  limitMinor?: number
+  currency?: string
+  /** The server's own verdict, not a comparison we derive. */
+  capReached: boolean
+}
+
+/** A limit the server says is currently binding. */
+export type ActiveLimit = {
+  kind: string
+  percent: number
+  severity: string
+  resetsAt?: number
+}
+
 export type AccountQuota = {
   fiveHour?: QuotaWindow
   sevenDay?: QuotaWindow
@@ -40,6 +66,12 @@ export type AccountQuota = {
   representative?: string
   /** When these values were observed (unix seconds). */
   observedAt: number
+  /** Paid overflow state. Only the usage endpoint reports it. */
+  extra?: ExtraUsage
+  /** Limits the server marks active -- authoritative, not inferred. */
+  activeLimits?: ActiveLimit[]
+  /** Which organization this account bills against. */
+  orgName?: string
 }
 
 const PREFIX = "anthropic-ratelimit-unified-"
@@ -244,6 +276,30 @@ export function quotaForAccount(
  */
 export type ProbeAccount = { source: string; accessToken: string }
 
+/**
+ * Per-process, because it only has to outlive the next probe sweep. Losing it
+ * on restart costs one refused call, which is cheaper than persisting it.
+ */
+const probeBlockedUntil = new Map<string, number>()
+
+export function blockProbe(source: string, until: number): void {
+  probeBlockedUntil.set(source, until)
+}
+
+export function probeBlocked(source: string, now: number): boolean {
+  const until = probeBlockedUntil.get(source)
+  if (until === undefined) return false
+  if (until <= now) {
+    probeBlockedUntil.delete(source)
+    return false
+  }
+  return true
+}
+
+export function resetProbeBlocks(): void {
+  probeBlockedUntil.clear()
+}
+
 export type ProbeResult = {
   probed: number
   skipped: number
@@ -251,6 +307,89 @@ export type ProbeResult = {
 }
 
 export const PROBE_MODEL = "claude-haiku-4-5-20251001"
+
+export const USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+
+/** Read an account's usage without spending any of it. */
+export function buildUsageRequest(accessToken: string): [string, RequestInit] {
+  return [USAGE_URL, { headers: { authorization: `Bearer ${accessToken}` } }]
+}
+
+function epoch(iso: unknown): number | undefined {
+  if (typeof iso !== "string") return undefined
+  const ms = Date.parse(iso)
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined
+}
+
+/**
+ * The usage endpoint's body, in the shape the header path already produces.
+ *
+ * Two conversions that are silent if missed: this endpoint reports utilisation
+ * as a PERCENT (0-100) where the headers report a FRACTION (0-1), and its reset
+ * times are ISO strings where the headers carry unix seconds.
+ */
+export function parseUsageBody(
+  body: unknown,
+  now: number = Math.floor(Date.now() / 1000),
+): AccountQuota | undefined {
+  if (!body || typeof body !== "object") return undefined
+  const b = body as Record<string, any>
+
+  const win = (w: unknown): QuotaWindow | undefined => {
+    if (!w || typeof w !== "object") return undefined
+    const o = w as Record<string, unknown>
+    if (typeof o.utilization !== "number") return undefined
+    return {
+      utilization: o.utilization / 100,
+      ...(epoch(o.resets_at) === undefined
+        ? {}
+        : { resetsAt: epoch(o.resets_at) }),
+    }
+  }
+
+  const five = win(b.five_hour)
+  const week = win(b.seven_day)
+  if (!five && !week) return undefined
+
+  const x = b.extra_usage as Record<string, unknown> | undefined
+  const spend = b.spend as Record<string, any> | undefined
+  const extra: ExtraUsage | undefined = x
+    ? {
+        enabled: x.is_enabled === true,
+        capReached: x.spend_limit_reached === true,
+        ...(typeof spend?.used?.amount_minor === "number"
+          ? { usedMinor: spend.used.amount_minor }
+          : {}),
+        ...(typeof spend?.limit?.amount_minor === "number"
+          ? { limitMinor: spend.limit.amount_minor }
+          : {}),
+        ...(typeof x.currency === "string" ? { currency: x.currency } : {}),
+      }
+    : undefined
+
+  const activeLimits: ActiveLimit[] = Array.isArray(b.limits)
+    ? b.limits
+        .filter((l: any) => l?.is_active === true)
+        .map((l: any) => {
+          const row: ActiveLimit = {
+            kind: String(l.kind ?? "unknown"),
+            percent: Number(l.percent ?? 0),
+            severity: String(l.severity ?? "normal"),
+          }
+          const at = epoch(l.resets_at)
+          if (at !== undefined) row.resetsAt = at
+          return row
+        })
+    : []
+
+  return {
+    ...(five ? { fiveHour: five } : {}),
+    ...(week ? { sevenDay: week } : {}),
+    ...(extra ? { extra } : {}),
+    ...(activeLimits.length ? { activeLimits } : {}),
+    observedAt: now,
+  }
+}
 
 /** Minimal request the API will answer with rate-limit headers attached. */
 export function buildProbeRequest(accessToken: string): [string, RequestInit] {
@@ -307,16 +446,50 @@ export async function refreshQuotas(
       result.skipped++
       continue
     }
+    if (probeBlocked(account.source, now())) {
+      result.skipped++
+      continue
+    }
 
     try {
-      const [url, init] = buildProbeRequest(account.accessToken)
+      const [url, init] = buildUsageRequest(account.accessToken)
       const res = await fetchImpl(url, init)
-      const quota = parseQuotaHeaders(res.headers as HeaderLike, now())
+
+      // This endpoint allows roughly one call an hour per account and answers
+      // 429 with a retry-after measured in thousands of seconds. Probing
+      // through that would spend the whole budget on being refused.
+      if (res.status === 429) {
+        const after = Number.parseInt(
+          (res.headers as Headers)?.get?.("retry-after") ?? "",
+          10,
+        )
+        blockProbe(
+          account.source,
+          now() + (Number.isFinite(after) ? after : 3600),
+        )
+        result.skipped++
+        continue
+      }
+
+      const quota = parseUsageBody(await res.json().catch(() => null), now())
       if (quota) {
-        writeQuotaForAccount(account.source, quota, path)
+        // Merged, not replaced: `representative` and the per-window `status`
+        // come from response headers and have no counterpart here.
+        const prior = cache?.[account.source]
+        writeQuotaForAccount(
+          account.source,
+          {
+            ...prior,
+            ...quota,
+            ...(prior?.representative
+              ? { representative: prior.representative }
+              : {}),
+          },
+          path,
+        )
         result.probed++
       } else {
-        // 401 from an expired token, or any response without the headers.
+        // 401 from an expired token, or a body in a shape we do not know.
         result.failed++
       }
     } catch {
