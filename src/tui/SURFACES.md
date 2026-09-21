@@ -50,12 +50,20 @@ in the message.
 `selectAccount` walks these in order, and the `pool` on its decision says which
 one answered. Cost increases down the list, so the order is the policy.
 
-| tier | when |
-| --- | --- |
-| the strategy's own pick | an account is under `switchAt` |
-| `over-threshold` | all above `switchAt`, but something is still under its limit |
-| `credits` | included allowance spent, paid overflow enabled and under cap |
-| `exhausted` | nothing left: refused, ejected, or capped including credits |
+| tier                    | when                                                          |
+| ----------------------- | ------------------------------------------------------------- |
+| the strategy's own pick | an account is under `switchAt`                                |
+| `over-threshold`        | all above `switchAt`, but something is still under its limit  |
+| `credits`               | included allowance spent, paid overflow enabled and under cap |
+| `exhausted`             | nothing left: refused, ejected, or capped including credits   |
+
+`useCredits: false` removes the `credits` tier entirely, so a spent account is
+simply spent and the plugin stops rather than bills. A single session can
+decline on its own (`denyCredits(sessionId)`), which narrows only that
+session's view while the global setting still governs the rest. Neither turns
+credits off at Anthropic -- no API offers that, and this credential could not
+use one if it did. They decline to ROUTE, which keeps this plugin's traffic
+free while another client on the same account still spends.
 
 `credits` sits below both free tiers deliberately: a free account at 98% is
 cheaper than a paid one at 100%, and enabling credits must not start spending

@@ -327,6 +327,17 @@ export type ClaudeAuthConfig = {
   logEvents: string
   logMaxSizeBytes: number
   logKeep: number
+  /**
+   * Whether paid overflow may be used at all.
+   *
+   * Off means an account whose included allowance is spent is treated as
+   * spent, full stop, even when credits would cover it -- the plugin stops
+   * rather than bills. It cannot turn credits off at Anthropic (no API offers
+   * that, and this credential may not anyway); it declines to ROUTE to them,
+   * which keeps this plugin's traffic free while another client's is not.
+   */
+  useCredits: boolean
+
   /** Probe every account once per session so each switcher row shows quota. */
   quotaProbe: boolean
   /** Also toast on a successful refresh (failures always toast). */
@@ -458,6 +469,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   logEvents: "",
   logMaxSizeBytes: 5 * 1024 * 1024,
   logKeep: 3,
+  useCredits: true,
   quotaProbe: false,
   toastOnRefresh: false,
   accountLabel: DEFAULT_PLACEMENT,
@@ -588,6 +600,8 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
   }
   if (r.logKeep !== undefined) out.logKeep = parseKeep(String(r.logKeep))
 
+  const credits = bool(r.useCredits)
+  if (credits !== undefined) out.useCredits = credits
   const probe = bool(r.quotaProbe)
   if (probe !== undefined) out.quotaProbe = probe
 
@@ -750,6 +764,7 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   logEvents: (v) => v,
   logMaxSizeBytes: (v) => v,
   logKeep: strictInt,
+  useCredits: (v) => v === "1",
   quotaProbe: (v) => v === "1",
   toastOnRefresh: (v) => v === "1",
   accountLabel: (v) => v,

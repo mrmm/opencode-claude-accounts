@@ -134,6 +134,13 @@ export const EDITABLE: Editable[] = [
     hint: "how long a failing account sits out",
   },
   {
+    key: "useCredits",
+    label: "Use paid credits",
+    section: "Balancing",
+    kind: "boolean",
+    hint: "spend overflow when every account's included allowance is gone",
+  },
+  {
     key: "quotaProbe",
     label: "Probe quota in background",
     section: "Quota",

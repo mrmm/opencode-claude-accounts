@@ -12,6 +12,10 @@ import {
   listBindings,
   resetBindings,
   resolveForSession,
+  creditsDenied,
+  denyCredits,
+  allowCredits,
+  resetCreditDenials,
 } from "./sessions.ts"
 
 const NOW = 1785162626000
@@ -105,5 +109,62 @@ describe("session bindings", () => {
 
   it("uses a header name that cannot collide with Anthropic's", () => {
     assert.match(SESSION_HEADER, /^x-claude-auth-/)
+  })
+})
+
+describe("a session can decline paid overflow", () => {
+  const paid = (u: number) => ({
+    ...reading(u, u >= 1 ? { status: "rejected" } : {}),
+    extra: {
+      enabled: true,
+      capReached: false,
+      usedMinor: 100,
+      limitMinor: 20000,
+    },
+  })
+
+  it("narrows only its own view, leaving other sessions alone", () => {
+    resetBindings()
+    resetCreditDenials()
+    const cache: QuotaCache = { a: paid(1.0), b: paid(1.01) }
+
+    denyCredits("thrifty")
+    const thrifty = resolveForSession(
+      "thrifty",
+      members("a", "b"),
+      cache,
+      cfg(),
+      NOW,
+    )
+    const spender = resolveForSession(
+      "spender",
+      members("a", "b"),
+      cache,
+      cfg(),
+      NOW,
+    )
+
+    assert.equal(creditsDenied("thrifty"), true)
+    assert.equal(creditsDenied("spender"), false)
+    // SessionDecision has no `pool`; the tier shows through in the reason.
+    assert.match(
+      thrifty!.reason,
+      /in exhausted/,
+      "declined, so it is told there is nothing free left",
+    )
+    assert.match(
+      spender!.reason,
+      /in credits/,
+      "the global setting still governs every other session",
+    )
+    resetCreditDenials()
+  })
+
+  it("can change its mind", () => {
+    resetCreditDenials()
+    denyCredits("s1")
+    assert.equal(creditsDenied("s1"), true)
+    allowCredits("s1")
+    assert.equal(creditsDenied("s1"), false)
   })
 })

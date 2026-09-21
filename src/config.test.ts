@@ -413,6 +413,7 @@ describe("config surface coverage", () => {
     accountNames: '{"Acme 1":"Team 1"}',
     retryPrefillError: "1",
     captureRequests: "messages",
+    useCredits: "0",
     preset: "rr-12",
     accounts: "alpha,beta",
     pools: '[{"accounts":["alpha"]}]',

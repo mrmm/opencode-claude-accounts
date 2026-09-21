@@ -600,7 +600,11 @@ export function selectAccount(
   // serves, for money. Deliberately below both free tiers: a free account at
   // 98% is cheaper than a paid one, and enabling credits must not start
   // spending them while any free headroom remains.
-  const paidButServing = known
+  // Declining to route is the only lever there is: no API turns credits off,
+  // and this credential could not use one if it existed. So `useCredits: false`
+  // keeps THIS plugin's traffic free; another client on the same account still
+  // spends.
+  const paidButServing = (cfg.useCredits === false ? [] : known)
     .filter(
       (h) =>
         h.credential !== "unusable" &&

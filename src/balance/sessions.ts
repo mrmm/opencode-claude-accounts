@@ -36,6 +36,31 @@ type Binding = { source: string; boundAt: number; lastSeen: number }
 const bindings = new Map<string, Binding>()
 
 /**
+ * Sessions that have declined paid overflow.
+ *
+ * Per-process and unpersisted, deliberately: "this session" ends when the
+ * session does, and a decision to spend money should not outlive the
+ * conversation that made it.
+ */
+const creditsDeniedBy = new Set<string>()
+
+export function denyCredits(sessionId: string): void {
+  creditsDeniedBy.add(sessionId)
+}
+
+export function allowCredits(sessionId: string): void {
+  creditsDeniedBy.delete(sessionId)
+}
+
+export function creditsDenied(sessionId: string): boolean {
+  return creditsDeniedBy.has(sessionId)
+}
+
+export function resetCreditDenials(): void {
+  creditsDeniedBy.clear()
+}
+
+/**
  * Sessions outlive nothing in particular, so the map is swept rather than
  * grown forever. An hour idle is well past any live conversation.
  */
@@ -120,6 +145,9 @@ export function resolveForSession(
     usage?: Record<string, { requests: number; lastUsedAt: number }>
   } = {},
 ): SessionDecision | undefined {
+  // A session opting out narrows its own view of the config; the global
+  // setting still governs every other session.
+  if (creditsDenied(sessionId)) cfg = { ...cfg, useCredits: false }
   const current = boundSource(sessionId)
 
   if (current) {

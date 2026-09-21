@@ -774,3 +774,43 @@ describe("credits are a tier, not an equal", () => {
     )
   })
 })
+
+describe("declining paid overflow", () => {
+  const paid = (u: number) => ({
+    ...reading(u, u >= 1 ? { status: "rejected" } : {}),
+    extra: {
+      enabled: true,
+      capReached: false,
+      usedMinor: 100,
+      limitMinor: 20000,
+    },
+  })
+
+  it("stops rather than bills when credits are switched off", () => {
+    const cache: QuotaCache = { a: paid(1.0), b: paid(1.01) }
+    const on = selectAccount(members("a", "b"), cache, cfg(), null, NOW_MS)
+    const off = selectAccount(
+      members("a", "b"),
+      cache,
+      cfg({ useCredits: false }),
+      null,
+      NOW_MS,
+    )
+    assert.equal(on!.pool, "credits")
+    assert.equal(off!.pool, "exhausted")
+  })
+
+  it("still uses free capacity when credits are off", () => {
+    // Declining to spend is not declining to work.
+    const cache: QuotaCache = { a: paid(1.0), b: reading(0.4) }
+    const d = selectAccount(
+      members("a", "b"),
+      cache,
+      cfg({ useCredits: false }),
+      null,
+      NOW_MS,
+    )
+    assert.equal(d!.source, "b")
+    assert.notEqual(d!.pool, "exhausted")
+  })
+})
