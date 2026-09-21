@@ -2,6 +2,9 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  onCredits,
+  payingNow,
+  spendText,
   buildPickerOptions,
   formatChip,
   shortLabel,
@@ -912,5 +915,99 @@ describe("reset countdowns", () => {
     })
     assert.match(rows[0]!.detail, /5h 24% 2h10m/)
     assert.match(rows[0]!.detail, /wk 56% 3d4h/)
+  })
+})
+
+describe("paid overflow", () => {
+  const withExtra = (
+    fivePct: number,
+    extra?: {
+      enabled: boolean
+      capReached?: boolean
+      used?: number
+      limit?: number
+    },
+  ) =>
+    ({
+      s1: {
+        fiveHour: { utilization: fivePct / 100, status: "allowed" },
+        sevenDay: { utilization: 0.2, status: "allowed" },
+        observedAt: 1_700_000_000,
+        ...(extra
+          ? {
+              extra: {
+                enabled: extra.enabled,
+                capReached: extra.capReached ?? false,
+                ...(extra.used === undefined ? {} : { usedMinor: extra.used }),
+                ...(extra.limit === undefined
+                  ? {}
+                  : { limitMinor: extra.limit }),
+                currency: "EUR",
+              },
+            }
+          : {}),
+      },
+    }) as unknown as QuotaCache
+
+  const TH = { warnAt: 0.9, weeklyWarnAt: 0.85 }
+
+  it("is its own state, not critical, while credits cover the account", () => {
+    const cache = withExtra(100, { enabled: true, used: 11378, limit: 20000 })
+    assert.equal(accountHealth(cache, "s1", TH), "paid")
+    assert.equal(onCredits(cache, "s1"), true)
+  })
+
+  it("is critical once the credit cap is reached", () => {
+    const cache = withExtra(100, { enabled: true, capReached: true })
+    assert.equal(accountHealth(cache, "s1", TH), "critical")
+    assert.equal(onCredits(cache, "s1"), false)
+  })
+
+  it("is critical when there are no credits at all", () => {
+    assert.equal(accountHealth(withExtra(100), "s1", TH), "critical")
+  })
+
+  it("is unaffected while the account is still inside its allowance", () => {
+    const cache = withExtra(40, { enabled: true, used: 11378, limit: 20000 })
+    assert.equal(accountHealth(cache, "s1", TH), "ok")
+    // Enabled credits are not the same as credits being spent.
+    assert.equal(payingNow(cache, "s1"), false, "available is not spent")
+    assert.equal(
+      quotaText(cache, "s1", { spend: true }).includes("paid"),
+      false,
+    )
+  })
+
+  it("renders the money, in major units, only while it is being spent", () => {
+    const cache = withExtra(100, { enabled: true, used: 11378, limit: 20000 })
+    assert.equal(spendText(cache, "s1"), "paid 113.78/200.00 EUR")
+    assert.match(
+      quotaText(cache, "s1", { spend: true }),
+      /paid 113\.78\/200\.00 EUR/,
+    )
+    // Off by default, so the surfaces that did not ask are unchanged.
+    assert.equal(quotaText(cache, "s1").includes("paid"), false)
+  })
+
+  it("says paid in the prompt chip, without the figures", () => {
+    const chip = formatChip({
+      accounts: [{ source: "s1", label: "Team 1" }],
+      quota: withExtra(100, { enabled: true, used: 11378, limit: 20000 }),
+      selection: "__auto__",
+      activeSource: "s1",
+    })
+    assert.match(chip, /paid/)
+    assert.equal(chip.includes("113.78"), false, "no room beside an input box")
+  })
+
+  it("shows the spend on the sidebar row", () => {
+    const { rows } = sidebarLines({
+      accounts: [{ source: "s1", label: "Team 1" }],
+      quota: withExtra(100, { enabled: true, used: 11378, limit: 20000 }),
+      selection: "__auto__",
+      activeSource: "s1",
+    })
+    assert.match(rows[0]!.detail, /paid 113\.78\/200\.00 EUR/)
+    assert.equal(rows[0]!.health, "paid")
   })
 })

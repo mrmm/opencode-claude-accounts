@@ -76,6 +76,7 @@ import {
   shortNames,
   sidebarLines,
   toggleAccount,
+  type Health,
 } from "../dist/tui/chip.js"
 
 /** Two small file reads. No Keychain, no network, so polling is cheap. */
@@ -144,14 +145,19 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
    * an absence of news, and colouring it as healthy would claim something the
    * plugin does not know.
    */
-  const healthColour = (h: "unknown" | "ok" | "warn" | "critical") =>
+  const healthColour = (h: Health) =>
     h === "critical"
       ? api.theme.current.error
-      : h === "warn"
-        ? api.theme.current.warning
-        : h === "ok"
-          ? api.theme.current.success
-          : api.theme.current.textMuted
+      : // Its own hue, because it is its own fact: the account works, and
+        // using it costs money. Warning yellow reads as "nearly out" and
+        // success green hides the bill entirely.
+        h === "paid"
+        ? api.theme.current.info
+        : h === "warn"
+          ? api.theme.current.warning
+          : h === "ok"
+            ? api.theme.current.success
+            : api.theme.current.textMuted
 
   /**
    * The only back affordance the dialog API supports.
@@ -642,7 +648,9 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   ...accounts.map((a) => ({
                     title: `${inSet.has(a.source) ? "[x]" : "[ ]"} ${names.get(a.source) ?? a.source}`,
                     value: `a:${a.source}`,
-                    description: quotaText(readQuotaCache(), a.source),
+                    description: quotaText(readQuotaCache(), a.source, {
+                      spend: true,
+                    }),
                     category: "Accounts in this preset",
                   })),
                   ...unresolved.map((ref) => ({

@@ -108,7 +108,13 @@ const NONE = "\u2014"
 export function quotaText(
   quota: QuotaCache,
   source: string | null,
-  opts: { includeWeek?: boolean; resets?: boolean; now?: number } = {},
+  opts: {
+    includeWeek?: boolean
+    resets?: boolean
+    now?: number
+    /** Append the money once credits are actually covering this account. */
+    spend?: boolean
+  } = {},
 ): string {
   const { five, week, fiveIn, weekIn, rejected } = utilisation(
     quota,
@@ -127,6 +133,13 @@ export function quotaText(
   // Said in a word rather than punctuation: "!" needs a legend, "refused" does
   // not, and this is the one state that means requests are failing right now.
   if (rejected) parts.unshift("refused")
+
+  // Only while it is happening: a spend line on an account that is nowhere
+  // near its limit is noise on every row that is fine.
+  if (opts.spend && payingNow(quota, source)) {
+    const spent = spendText(quota, source)
+    if (spent) parts.push(spent)
+  }
   return parts.join(SEP)
 }
 
@@ -140,7 +153,43 @@ export function quotaText(
  * to make. Which account is serving is now a marker and a brightness; hue is
  * free to mean load.
  */
-export type Health = "unknown" | "ok" | "warn" | "critical"
+/**
+ * `paid` sits between warn and critical: the included allowance is gone, but
+ * credits are covering the account, so it is still serving -- for money. It is
+ * a state of its own because the two neighbours are both wrong for it. Calling
+ * it critical strands a working account; calling it ok hides a bill.
+ */
+export type Health = "unknown" | "ok" | "warn" | "paid" | "critical"
+
+/** Included allowance spent, credits covering it, cap not yet reached. */
+export function onCredits(quota: QuotaCache, source: string | null): boolean {
+  const x = (source ? quota?.[source] : undefined)?.extra
+  return x?.enabled === true && x.capReached !== true
+}
+
+const money = (minor: number) => (minor / 100).toFixed(2)
+
+/** `paid 113.78/200.00 EUR`, or "" when the figures are not known. */
+export function spendText(quota: QuotaCache, source: string | null): string {
+  const x = (source ? quota?.[source] : undefined)?.extra
+  if (!x?.enabled || x.usedMinor === undefined || x.limitMinor === undefined) {
+    return ""
+  }
+  return `paid ${money(x.usedMinor)}/${money(x.limitMinor)} ${x.currency ?? ""}`.trim()
+}
+
+/**
+ * Credits are not merely available -- they are being spent right now.
+ *
+ * `onCredits` alone was the wrong question: an account at 40% with credits
+ * enabled is not paying for anything, and labelling it "paid" would put a
+ * bill on every healthy row.
+ */
+export function payingNow(quota: QuotaCache, source: string | null): boolean {
+  if (!onCredits(quota, source)) return false
+  const { five, week, rejected } = utilisation(quota, source)
+  return rejected || (five ?? 0) >= 100 || (week ?? 0) >= 100
+}
 
 export function accountHealth(
   quota: QuotaCache,
@@ -148,11 +197,14 @@ export function accountHealth(
   thresholds: { warnAt: number; weeklyWarnAt: number },
 ): Health {
   const { five, week, rejected } = utilisation(quota, source)
-  // Being refused outranks any reading: requests are failing right now.
-  if (rejected) return "critical"
+  if (five === undefined && week === undefined && !rejected) return "unknown"
+
+  // Spent, by refusal or by arithmetic. Which of the two states that is
+  // depends on whether anything is covering the overflow.
+  const spent = rejected || (five ?? 0) >= 100 || (week ?? 0) >= 100
+  if (spent) return onCredits(quota, source) ? "paid" : "critical"
+  // Below this line the account is inside its allowance, so nothing is owed.
   if (five === undefined && week === undefined) return "unknown"
-  // At or past the window itself, not merely past the warning line.
-  if ((five ?? 0) >= 100 || (week ?? 0) >= 100) return "critical"
   if (
     (five ?? 0) >= Math.round(thresholds.warnAt * 100) ||
     (week ?? 0) >= Math.round(thresholds.weeklyWarnAt * 100)
@@ -311,7 +363,9 @@ export function formatChip(input: ChipInput): string {
 
   // The 5h window only: this sits beside the prompt, and it is the window that
   // moves during a session. The weekly figure is in the sidebar, which has room.
-  const load = `${SEP}${quotaText(input.quota, input.activeSource, { includeWeek: false })}`
+  const load = `${SEP}${quotaText(input.quota, input.activeSource, { includeWeek: false })}${
+    payingNow(input.quota, input.activeSource) ? `${SEP}paid` : ""
+  }`
 
   const mode = input.selection.startsWith(PRESET)
     ? `⇄ ${input.selection.slice(PRESET.length)}`
@@ -352,6 +406,7 @@ export function sidebarLines(input: ChipInput): {
   const rows = input.accounts.map((a) => {
     const quota = quotaText(input.quota, a.source, {
       resets: true,
+      spend: true,
       now: input.now,
     })
     const health = accountHealth(
@@ -413,7 +468,7 @@ export function buildPickerOptions(input: {
 
   const pickerNames = input.names ?? shortNames(input.accounts)
   const accounts = input.accounts.map((a) => {
-    const load = `${SEP}${quotaText(input.quota, a.source, { includeWeek: false })}`
+    const load = `${SEP}${quotaText(input.quota, a.source, { includeWeek: false, spend: true })}`
     return mark(a.source, {
       title: `${pickerNames.get(a.source) ?? shortLabel(a.label)}${load}`,
       value: a.source,
@@ -529,7 +584,7 @@ export function accountToggleRows(
   const enabled = new Set(enabledSources(all, allowList))
   return all.map((a) => {
     const state = enabled.has(a.source) ? "[x]" : "[ ]"
-    const load = quotaText(quota, a.source)
+    const load = quotaText(quota, a.source, { spend: true })
     return {
       title: `${state} ${names.get(a.source) ?? a.source}`,
       value: a.source,
