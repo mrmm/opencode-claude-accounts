@@ -978,15 +978,37 @@ describe("paid overflow", () => {
     )
   })
 
-  it("renders the money, in major units, only while it is being spent", () => {
-    const cache = withExtra(100, { enabled: true, used: 11378, limit: 20000 })
-    assert.equal(spendText(cache, "s1"), "paid 113.78/200.00 EUR")
+  it("renders the balance whether or not it is being spent", () => {
+    // The balance is what says an account can take over LATER, so showing it
+    // only once the switch has happened shows it too late to act on.
+    const spending = withExtra(100, {
+      enabled: true,
+      used: 11378,
+      limit: 20000,
+    })
+    const idle = withExtra(40, { enabled: true, used: 11378, limit: 20000 })
+    assert.equal(spendText(spending, "s1"), "credits 113.78/200.00 EUR")
     assert.match(
-      quotaText(cache, "s1", { spend: true }),
-      /paid 113\.78\/200\.00 EUR/,
+      quotaText(spending, "s1", { spend: true }),
+      /credits 113\.78\/200\.00 EUR/,
+    )
+    assert.match(
+      quotaText(idle, "s1", { spend: true }),
+      /credits 113\.78\/200\.00 EUR/,
     )
     // Off by default, so the surfaces that did not ask are unchanged.
-    assert.equal(quotaText(cache, "s1").includes("paid"), false)
+    assert.equal(quotaText(spending, "s1").includes("credits"), false)
+  })
+
+  it("reports nothing for a credit line that was never funded", () => {
+    // Observed live: is_enabled true against a 0.00 cap. "credits 0.00/0.00"
+    // is a fact about nothing.
+    const unfunded = withExtra(100, { enabled: true, used: 0, limit: 0 })
+    assert.equal(spendText(unfunded, "s1"), "")
+    assert.equal(
+      quotaText(unfunded, "s1", { spend: true }).includes("credits"),
+      false,
+    )
   })
 
   it("says paid in the prompt chip, without the figures", () => {
@@ -1007,7 +1029,7 @@ describe("paid overflow", () => {
       selection: "__auto__",
       activeSource: "s1",
     })
-    assert.match(rows[0]!.detail, /paid 113\.78\/200\.00 EUR/)
+    assert.match(rows[0]!.detail, /credits 113\.78\/200\.00 EUR/)
     assert.equal(rows[0]!.health, "paid")
   })
 })

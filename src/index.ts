@@ -98,6 +98,22 @@ export {
   extractFirstUserMessageText,
 } from "./signing.ts"
 
+/**
+ * Whether this reading says the included allowance has just run out.
+ *
+ * Either window at or past its limit means anything further is billed to
+ * credits -- exactly when the cached balance is out of date, because no
+ * rate-limit header carries one.
+ */
+function isSpilling(q: {
+  fiveHour?: { utilization?: number }
+  sevenDay?: { utilization?: number }
+}): boolean {
+  return (
+    (q.fiveHour?.utilization ?? 0) >= 1 || (q.sevenDay?.utilization ?? 0) >= 1
+  )
+}
+
 function getCliVersion(): string {
   return process.env.ANTHROPIC_CLI_VERSION ?? config.ccVersion
 }
@@ -1114,6 +1130,16 @@ const plugin: PluginWithOptions = async (
               const quota = parseQuotaHeaders(response.headers)
               observedQuota = quota
               const source = servingSource
+              // Crossing into paid territory is the one moment the money
+              // figures matter and the one moment they are certainly stale:
+              // headers carry no credit state, so the cached balance predates
+              // the spend that just happened. Ask again.
+              //
+              // Unconditional on purpose -- topUpQuota already refuses when
+              // the reading is fresh and complete (a ten-minute debounce) and
+              // when the endpoint has rate-limited us. Adding a third guard
+              // here would just be a slower way of reaching the same answer.
+              if (quota && isSpilling(quota)) topUpQuota("spilling")
               if (quota && source) {
                 writeQuotaForAccount(source, quota)
                 log("quota_observed", {

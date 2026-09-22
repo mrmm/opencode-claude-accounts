@@ -134,9 +134,11 @@ export function quotaText(
   // not, and this is the one state that means requests are failing right now.
   if (rejected) parts.unshift("refused")
 
-  // Only while it is happening: a spend line on an account that is nowhere
-  // near its limit is noise on every row that is fine.
-  if (opts.spend && payingNow(quota, source)) {
+  // Always, when there is a funded line: knowing an account has 66 EUR left
+  // is what tells you it can take over, and that is worth knowing BEFORE the
+  // switch rather than after. spendText itself stays quiet when there is no
+  // line to report.
+  if (opts.spend) {
     const spent = spendText(quota, source)
     if (spent) parts.push(spent)
   }
@@ -168,13 +170,25 @@ export function onCredits(quota: QuotaCache, source: string | null): boolean {
 
 const money = (minor: number) => (minor / 100).toFixed(2)
 
-/** `paid 113.78/200.00 EUR`, or "" when the figures are not known. */
+/**
+ * `credits 113.78/200.00 EUR`, or "" when there is no credit line to report.
+ *
+ * Shown whenever a FUNDED line exists, not only while it is being drawn on:
+ * the balance is what decides whether an account can take over later, so
+ * hiding it until the moment it matters hides it exactly when it is too late
+ * to act on. An unfunded line (a real 0.00/0.00) reports nothing, because
+ * "credits 0.00/0.00" is a fact about nothing.
+ *
+ * The word is `credits`, not `paid`: this is a balance, not a state. Whether
+ * the account is currently spending is carried by the `paid` health colour.
+ */
 export function spendText(quota: QuotaCache, source: string | null): string {
   const x = (source ? quota?.[source] : undefined)?.extra
   if (!x?.enabled || x.usedMinor === undefined || x.limitMinor === undefined) {
     return ""
   }
-  return `paid ${money(x.usedMinor)}/${money(x.limitMinor)} ${x.currency ?? ""}`.trim()
+  if (x.limitMinor <= 0) return ""
+  return `credits ${money(x.usedMinor)}/${money(x.limitMinor)} ${x.currency ?? ""}`.trim()
 }
 
 /**

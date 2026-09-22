@@ -661,6 +661,13 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                       "pick up an account added or removed since this session started",
                     category: "Accounts",
                   },
+                  {
+                    title: "Refresh quota and credits now",
+                    value: "__probe__",
+                    description:
+                      "ask every account for its usage, ignoring the freshness gate",
+                    category: "Accounts",
+                  },
                   ...presetRows(cfg.presets, selectionOf()),
                   {
                     title: "New preset",
@@ -672,7 +679,33 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 onSelect={(row) => {
                   const v = String(row.value)
                   if (v === "__accounts__") openAccounts()
-                  else if (v === "__refresh__") {
+                  else if (v === "__probe__") {
+                    // Past the freshness gate, not past the rate limit: the
+                    // endpoint allows about one call an hour per account and
+                    // refuses with a retry-after in the thousands of seconds.
+                    // Asking harder does not make it answer.
+                    resetProbeBlocks()
+                    const targets = refreshAccountsList()
+                      .map((a) => ({
+                        source: a.source,
+                        accessToken: a.credentials?.accessToken ?? "",
+                      }))
+                      .filter((a) => a.accessToken)
+                    void refreshQuotas(targets, { maxAgeSeconds: 0 }).then(
+                      (r) => {
+                        setSnap(read())
+                        api.ui.toast({
+                          variant: r.probed > 0 ? "success" : "warning",
+                          title: "Usage refreshed",
+                          message:
+                            r.probed > 0
+                              ? `${r.probed} account(s) updated.`
+                              : "Rate-limited — showing the last figures reported.",
+                        })
+                      },
+                    )
+                    menu()
+                  } else if (v === "__refresh__") {
                     accounts = loadAccounts()
                     api.ui.toast({
                       variant: "success",

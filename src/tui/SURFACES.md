@@ -90,6 +90,28 @@ serving is a separate channel — the filled marker and the brighter name —
 because colouring by "is it serving" made a healthy idle account and an
 exhausted one identical, which is the comparison the list exists to support.
 
+## Keeping the figures current
+
+Three triggers, all funnelling into the same `topUpQuota`, which refuses when
+the reading is fresh and complete and when the endpoint has rate-limited us:
+
+| trigger | when |
+| --- | --- |
+| `sync-tick` | the standing timer, `refreshCheckInterval` |
+| `switcher-open` | opening the account picker |
+| `spilling` | a response shows either window at or past its limit |
+
+`spilling` is the one worth explaining: crossing into paid territory is the
+moment the money figures matter AND the moment they are certainly stale, since
+no header carries a balance. It is called unconditionally -- the freshness gate
+is a ten-minute debounce and the 429 backoff is the endpoint's own guard, so a
+third check here would only be a slower way to the same answer.
+
+Manual: `/cc-accounts` -> "Refresh quota and credits now" ignores the freshness
+gate for every account, and `/cc-debug` does the same before reporting. Neither
+can ignore the rate limit; when refused, the toast says the figures are the
+last ones reported rather than pretending they are current.
+
 ## Asking what it is doing
 
 `/cc-debug` re-reads config, accounts and quota from disk, forces a probe
