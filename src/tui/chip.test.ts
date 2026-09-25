@@ -3,6 +3,8 @@ import { describe, it } from "node:test"
 
 import {
   onCredits,
+  resetClock,
+  resetText,
   payingNow,
   spendText,
   buildPickerOptions,
@@ -1031,5 +1033,97 @@ describe("paid overflow", () => {
     })
     assert.match(rows[0]!.detail, /credits 113\.78\/200\.00 EUR/)
     assert.equal(rows[0]!.health, "paid")
+  })
+})
+
+describe("reset clock times", () => {
+  // Local time, so the digits depend on the reader's zone. The classification
+  // does not, and that is what these assert: today, tomorrow, a weekday, a
+  // date. Pinning "16:42" would only pass in the zone it was written in.
+  const CLOCK = /\d{2}:\d{2}/
+  const noon = new Date(2026, 8, 22, 12, 0, 0).getTime() / 1000
+
+  it("says nothing when the reset is unknown", () => {
+    assert.equal(resetClock(undefined, noon), "")
+    assert.equal(resetClock(0, noon), "", "a zero epoch is unset, not 1970")
+  })
+
+  it("gives only a clock time for today", () => {
+    const later = new Date(2026, 8, 22, 16, 42, 0).getTime() / 1000
+    assert.match(resetClock(later, noon), /^\d{2}:\d{2}$/)
+  })
+
+  it("names tomorrow rather than making it a weekday", () => {
+    const t = new Date(2026, 8, 23, 4, 0, 0).getTime() / 1000
+    assert.match(resetClock(t, noon), new RegExp(`^tomorrow ${CLOCK.source}$`))
+  })
+
+  it("uses a weekday inside the week", () => {
+    const t = new Date(2026, 8, 25, 9, 30, 0).getTime() / 1000
+    assert.match(
+      resetClock(t, noon),
+      new RegExp(`^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ${CLOCK.source}$`),
+    )
+  })
+
+  it("becomes a date past a week, where a weekday is ambiguous", () => {
+    // "Mon" could be six days out or thirteen.
+    const t = new Date(2026, 9, 2, 9, 30, 0).getTime() / 1000
+    assert.match(
+      resetClock(t, noon),
+      new RegExp(`^\\d{1,2} [A-Z][a-z]{2} ${CLOCK.source}$`),
+    )
+  })
+
+  it("reports both windows, and skips one it does not know", () => {
+    const cache = {
+      s1: {
+        fiveHour: {
+          utilization: 1,
+          resetsAt: new Date(2026, 8, 22, 16, 0).getTime() / 1000,
+        },
+        sevenDay: {
+          utilization: 0.5,
+          resetsAt: new Date(2026, 8, 25, 4, 0).getTime() / 1000,
+        },
+        observedAt: noon,
+      },
+      s2: {
+        fiveHour: { utilization: 1 },
+        sevenDay: {
+          utilization: 0.5,
+          resetsAt: new Date(2026, 8, 23, 4, 0).getTime() / 1000,
+        },
+        observedAt: noon,
+      },
+    } as unknown as QuotaCache
+    assert.match(
+      resetText(cache, "s1", noon),
+      /^5h resets .+ \u00b7 wk resets .+$/,
+    )
+    assert.match(resetText(cache, "s2", noon), /^wk resets tomorrow/)
+    assert.equal(resetText(cache, "nobody", noon), "")
+  })
+
+  it("puts them on the picker row, without erasing the active marker", () => {
+    const cache = {
+      s1: {
+        fiveHour: {
+          utilization: 1,
+          resetsAt: new Date(2026, 8, 22, 16, 0).getTime() / 1000,
+        },
+        observedAt: noon,
+      },
+    } as unknown as QuotaCache
+    const rows = buildPickerOptions({
+      accounts: [{ source: "s1", label: "Team 1" }],
+      presets: {},
+      quota: cache,
+      selection: "s1",
+      now: noon,
+    })
+    const row = rows.find((r) => r.value === "s1")!
+    assert.match(row.description!, /^active/)
+    assert.match(row.description!, /5h resets/)
   })
 })

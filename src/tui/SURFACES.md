@@ -95,11 +95,11 @@ exhausted one identical, which is the comparison the list exists to support.
 Three triggers, all funnelling into the same `topUpQuota`, which refuses when
 the reading is fresh and complete and when the endpoint has rate-limited us:
 
-| trigger | when |
-| --- | --- |
-| `sync-tick` | the standing timer, `refreshCheckInterval` |
-| `switcher-open` | opening the account picker |
-| `spilling` | a response shows either window at or past its limit |
+| trigger         | when                                                |
+| --------------- | --------------------------------------------------- |
+| `sync-tick`     | the standing timer, `refreshCheckInterval`          |
+| `switcher-open` | opening the account picker                          |
+| `spilling`      | a response shows either window at or past its limit |
 
 `spilling` is the one worth explaining: crossing into paid territory is the
 moment the money figures matter AND the moment they are certainly stale, since

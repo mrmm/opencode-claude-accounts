@@ -455,15 +455,92 @@ export function sidebarLines(input: ChipInput): {
  * disagree about what the choices are — but selecting one of these writes the
  * selection file and nothing else, with no auth flow to trigger.
  */
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+]
+
+const two = (n: number) => String(n).padStart(2, "0")
+
+/**
+ * When a window resets, as a clock time rather than a countdown.
+ *
+ * A countdown answers "how long", which is what the sidebar needs while you
+ * wait. Choosing an account to switch TO is a different question -- "will this
+ * be back before my meeting" -- and a wall-clock time answers it without
+ * arithmetic.
+ *
+ * Local time on purpose: the reader is in it. The date is only shown when it
+ * is not obvious, because "16:42" is clearer than "22 Sep 16:42" when it is
+ * already the 22nd.
+ */
+export function resetClock(
+  epoch: number | undefined,
+  now: number = Math.floor(Date.now() / 1000),
+): string {
+  if (epoch === undefined || epoch <= 0) return ""
+  const at = new Date(epoch * 1000)
+  const clock = `${two(at.getHours())}:${two(at.getMinutes())}`
+
+  const midnight = new Date(now * 1000)
+  midnight.setHours(0, 0, 0, 0)
+  const days = Math.floor((at.getTime() - midnight.getTime()) / 86_400_000)
+
+  if (days <= 0) return clock
+  if (days === 1) return `tomorrow ${clock}`
+  // Past a week a weekday is ambiguous -- "Mon" could be six days out or
+  // thirteen -- so it becomes a date.
+  if (days < 7) return `${DAYS[at.getDay()]} ${clock}`
+  return `${at.getDate()} ${MONTHS[at.getMonth()]} ${clock}`
+}
+
+/** `5h resets 16:42 · wk resets Thu 02:00`, skipping what is not known. */
+export function resetText(
+  quota: QuotaCache,
+  source: string | null,
+  now: number = Math.floor(Date.now() / 1000),
+): string {
+  const q = source ? quota?.[source] : undefined
+  const parts: string[] = []
+  const five = resetClock(q?.fiveHour?.resetsAt, now)
+  const week = resetClock(q?.sevenDay?.resetsAt, now)
+  if (five) parts.push(`5h resets ${five}`)
+  if (week) parts.push(`wk resets ${week}`)
+  return parts.join(SEP)
+}
+
 export function buildPickerOptions(input: {
   accounts: ChipAccount[]
   presets: Record<string, { label?: string; strategy?: string }>
   quota: QuotaCache
   selection: string
   names?: Map<string, string>
+  /** Unix seconds, injectable so a reset time can be asserted. */
+  now?: number
 }): PickerOption[] {
+  // "active" PREFIXES rather than replaces: the reset times are why this row
+  // is worth reading, and the selected account is the one most likely to be
+  // read for them.
   const mark = (value: string, row: PickerOption): PickerOption =>
-    input.selection === value ? { ...row, description: "active" } : row
+    input.selection === value
+      ? {
+          ...row,
+          description: row.description
+            ? `active${SEP}${row.description}`
+            : "active",
+        }
+      : row
 
   const presets = Object.entries(input.presets).map(([name, p]) =>
     mark(`${PRESET}${name}`, {
@@ -485,6 +562,7 @@ export function buildPickerOptions(input: {
     return mark(a.source, {
       title: `${pickerNames.get(a.source) ?? shortLabel(a.label)}${load}`,
       value: a.source,
+      description: resetText(input.quota, a.source, input.now),
       category: "Pin to one account",
     })
   })
