@@ -677,6 +677,30 @@ guards and can be seen rather than remembered.
 - **Edit the keys consumed once at start-up**: `debug`, `logLevel`,
   `logEvents`, `logMaxSize`, `logKeep`, `tools`, `accountLabel`.
 
+## The reported Claude Code version
+
+Anthropic gates models on the client version a request claims to be. A model
+released behind a newer gate is refused outright:
+
+```
+Claude Code 2.1.217 does not support this model;
+version 2.1.280 or newer is required.
+```
+
+So the version is **read from the installed `claude` CLI** rather than
+hardcoded, because a hardcoded one is an expiry date: it works until a model
+ships behind a newer gate, then blocks exactly that model while everything
+else keeps working — the hardest kind of stale to notice.
+
+|                         |                                                            |
+| ----------------------- | ---------------------------------------------------------- |
+| `ANTHROPIC_CLI_VERSION` | wins outright, for pinning                                 |
+| `claude --version`      | used when the CLI is on PATH                               |
+| `FALLBACK_CC_VERSION`   | when it is not; raise it when it starts blocking something |
+
+A test asserts the fallback is not older than a gate already known to ship, so
+it cannot quietly rot back into the same failure.
+
 ## OpenCode integration points
 
 What this plugin attaches to, and the constraint each surface turned out to
