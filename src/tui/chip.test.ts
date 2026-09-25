@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 
 import {
   onCredits,
+  formatStamp,
   resetClock,
   resetText,
   payingNow,
@@ -1125,5 +1126,60 @@ describe("reset clock times", () => {
     const row = rows.find((r) => r.value === "s1")!
     assert.match(row.description!, /^active/)
     assert.match(row.description!, /5h resets/)
+  })
+})
+
+describe("a chosen reset format", () => {
+  const at = new Date(2026, 8, 22, 16, 42, 7)
+
+  it("writes the day-first date people asked for", () => {
+    assert.equal(formatStamp(at, "DD/MM/YYYY HH:mm"), "22/09/2026 16:42")
+  })
+
+  it("keeps MM as the month and mm as the minute", () => {
+    // The one mistake this notation invites, and the one that is silent:
+    // 09 and 42 both look plausible wherever they land.
+    assert.equal(formatStamp(at, "MM-mm"), "09-42")
+  })
+
+  it("does not let a short token eat a long one", () => {
+    // YYYY must not be read as YY+YY, nor MMM as MM+M.
+    assert.equal(formatStamp(at, "YYYY"), "2026")
+    assert.equal(formatStamp(at, "YY"), "26")
+    assert.equal(formatStamp(at, "MMM DDD"), "Sep Tue")
+  })
+
+  it("never re-reads a digit it just produced", () => {
+    // A two-pass replacer turns the 22 of DD into a year. One pass cannot.
+    assert.equal(
+      formatStamp(new Date(2022, 10, 22, 11, 22), "DD MM HH:mm"),
+      "22 11 11:22",
+    )
+  })
+
+  it("keeps anything that is not a token exactly as written", () => {
+    assert.equal(
+      formatStamp(at, "[resets] DD.MM.YY @ HH:mm:ss"),
+      "[resets] 22.09.26 @ 16:42:07",
+    )
+  })
+
+  it("overrides the relative style entirely, today included", () => {
+    // Asking for a date every time is not asking for it to be hidden when it
+    // happens to be today.
+    const noon = new Date(2026, 8, 22, 12, 0, 0).getTime() / 1000
+    const epoch = at.getTime() / 1000
+    assert.equal(resetClock(epoch, noon), "16:42", "relative by default")
+    assert.equal(
+      resetClock(epoch, noon, "DD/MM/YYYY HH:mm"),
+      "22/09/2026 16:42",
+    )
+  })
+
+  it("falls back to the relative style on an empty or blank template", () => {
+    const noon = new Date(2026, 8, 22, 12, 0, 0).getTime() / 1000
+    const epoch = at.getTime() / 1000
+    assert.equal(resetClock(epoch, noon, ""), "16:42")
+    assert.equal(resetClock(epoch, noon, "   "), "16:42")
   })
 })

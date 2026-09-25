@@ -485,12 +485,48 @@ const two = (n: number) => String(n).padStart(2, "0")
  * is not obvious, because "16:42" is clearer than "22 Sep 16:42" when it is
  * already the 22nd.
  */
+const TOKENS: Record<string, (d: Date) => string> = {
+  YYYY: (d) => String(d.getFullYear()),
+  YY: (d) => two(d.getFullYear() % 100),
+  MMM: (d) => MONTHS[d.getMonth()]!,
+  MM: (d) => two(d.getMonth() + 1),
+  DDD: (d) => DAYS[d.getDay()]!,
+  DD: (d) => two(d.getDate()),
+  HH: (d) => two(d.getHours()),
+  mm: (d) => two(d.getMinutes()),
+  ss: (d) => two(d.getSeconds()),
+}
+
+// Longest first, so YYYY is not eaten by YY and MMM not by MM. One pass, so a
+// digit produced by one token can never be re-read as another.
+const TOKEN_RE = new RegExp(
+  Object.keys(TOKENS)
+    .sort((a, b) => b.length - a.length)
+    .join("|"),
+  "g",
+)
+
+/**
+ * Render a moment with an explicit template: `DD/MM/YYYY HH:mm`.
+ *
+ * Case matters and follows the convention every date library uses: `MM` is the
+ * month, `mm` the minute. Anything that is not a token is kept as written, so
+ * separators are whatever the reader wants.
+ */
+export function formatStamp(at: Date, template: string): string {
+  return template.replace(TOKEN_RE, (t) => TOKENS[t]!(at))
+}
+
 export function resetClock(
   epoch: number | undefined,
   now: number = Math.floor(Date.now() / 1000),
+  template = "",
 ): string {
   if (epoch === undefined || epoch <= 0) return ""
   const at = new Date(epoch * 1000)
+  // An explicit template wins outright. Someone who asked for a date every
+  // time did not ask for it to be hidden when it happens to be today.
+  if (template.trim() !== "") return formatStamp(at, template)
   const clock = `${two(at.getHours())}:${two(at.getMinutes())}`
 
   const midnight = new Date(now * 1000)
@@ -510,11 +546,12 @@ export function resetText(
   quota: QuotaCache,
   source: string | null,
   now: number = Math.floor(Date.now() / 1000),
+  template = "",
 ): string {
   const q = source ? quota?.[source] : undefined
   const parts: string[] = []
-  const five = resetClock(q?.fiveHour?.resetsAt, now)
-  const week = resetClock(q?.sevenDay?.resetsAt, now)
+  const five = resetClock(q?.fiveHour?.resetsAt, now, template)
+  const week = resetClock(q?.sevenDay?.resetsAt, now, template)
   if (five) parts.push(`5h resets ${five}`)
   if (week) parts.push(`wk resets ${week}`)
   return parts.join(SEP)
@@ -528,6 +565,8 @@ export function buildPickerOptions(input: {
   names?: Map<string, string>
   /** Unix seconds, injectable so a reset time can be asserted. */
   now?: number
+  /** `DD/MM/YYYY HH:mm`, or "" for the relative style. */
+  resetFormat?: string
 }): PickerOption[] {
   // "active" PREFIXES rather than replaces: the reset times are why this row
   // is worth reading, and the selected account is the one most likely to be
@@ -562,7 +601,12 @@ export function buildPickerOptions(input: {
     return mark(a.source, {
       title: `${pickerNames.get(a.source) ?? shortLabel(a.label)}${load}`,
       value: a.source,
-      description: resetText(input.quota, a.source, input.now),
+      description: resetText(
+        input.quota,
+        a.source,
+        input.now,
+        input.resetFormat,
+      ),
       category: "Pin to one account",
     })
   })

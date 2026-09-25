@@ -414,6 +414,7 @@ describe("config surface coverage", () => {
     retryPrefillError: "1",
     captureRequests: "messages",
     useCredits: "0",
+    resetFormat: "DD/MM/YYYY HH:mm",
     preset: "rr-12",
     accounts: "alpha,beta",
     pools: '[{"accounts":["alpha"]}]',

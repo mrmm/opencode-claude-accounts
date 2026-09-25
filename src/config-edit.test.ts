@@ -92,16 +92,18 @@ describe("toLiteral", () => {
     assert.equal(toLiteral("boolean", "nonsense"), "false")
   })
 
+  // `number` covers the ratios and durations: they are typed as text and
+  // parsed, so a value that looks numeric is written unquoted.
   it("writes a numeric ratio as a number, not a string", () => {
-    assert.equal(toLiteral("text", "0.95"), "0.95")
+    assert.equal(toLiteral("number", "0.95"), "0.95")
   })
 
   it("quotes a duration, which is not a number", () => {
-    assert.equal(toLiteral("text", "5m"), '"5m"')
+    assert.equal(toLiteral("number", "5m"), '"5m"')
   })
 
   it("escapes rather than trusting what was typed", () => {
-    assert.equal(toLiteral("text", 'a"b'), '"a\\"b"')
+    assert.equal(toLiteral("number", 'a"b'), '"a\\"b"')
   })
 })
 
@@ -501,5 +503,18 @@ describe("strategy list", () => {
 
   it("covers all eight, so a silent truncation is visible", () => {
     assert.equal(STRATEGY_NAMES.length, 8)
+  })
+})
+
+describe("toLiteral for a free-text row", () => {
+  it("always quotes, even when the value looks numeric", () => {
+    // A format template of "2026" is a string, not a year-shaped number, and
+    // writing it bare would change its type in the config file.
+    assert.equal(toLiteral("text", "DD/MM/YYYY HH:mm"), '"DD/MM/YYYY HH:mm"')
+    assert.equal(toLiteral("text", "2026"), '"2026"')
+  })
+
+  it("keeps an empty value, which is how the relative style is asked for", () => {
+    assert.equal(toLiteral("text", ""), '""')
   })
 })

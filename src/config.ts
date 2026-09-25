@@ -336,6 +336,15 @@ export type ClaudeAuthConfig = {
    * that, and this credential may not anyway); it declines to ROUTE to them,
    * which keeps this plugin's traffic free while another client's is not.
    */
+  /**
+   * How a reset moment is written: `DD/MM/YYYY HH:mm`, or "" for the relative
+   * style (a clock time today, `tomorrow HH:MM`, a weekday, then a date).
+   *
+   * Tokens follow the convention every date library uses, so `MM` is the month
+   * and `mm` the minute. Anything else is kept verbatim.
+   */
+  resetFormat: string
+
   useCredits: boolean
 
   /** Probe every account once per session so each switcher row shows quota. */
@@ -469,6 +478,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   logEvents: "",
   logMaxSizeBytes: 5 * 1024 * 1024,
   logKeep: 3,
+  resetFormat: "",
   useCredits: true,
   quotaProbe: false,
   toastOnRefresh: false,
@@ -600,6 +610,7 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
   }
   if (r.logKeep !== undefined) out.logKeep = parseKeep(String(r.logKeep))
 
+  if (typeof r.resetFormat === "string") out.resetFormat = r.resetFormat
   const credits = bool(r.useCredits)
   if (credits !== undefined) out.useCredits = credits
   const probe = bool(r.quotaProbe)
@@ -764,6 +775,7 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   logEvents: (v) => v,
   logMaxSizeBytes: (v) => v,
   logKeep: strictInt,
+  resetFormat: (v) => v,
   useCredits: (v) => v === "1",
   quotaProbe: (v) => v === "1",
   toastOnRefresh: (v) => v === "1",

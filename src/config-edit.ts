@@ -39,7 +39,12 @@ import { parseDuration, parseRatio } from "./config.ts"
  */
 export const STRATEGY_NAMES: string[] = Object.keys(STRATEGIES)
 
-export type EditableKind = "boolean" | "enum" | "preset" | "number"
+/**
+ * `text` is free-form: no list to pick from and nothing to validate beyond
+ * being a string. `number` covers the ratios and durations, which look like
+ * text but are parsed.
+ */
+export type EditableKind = "boolean" | "enum" | "preset" | "number" | "text"
 
 export type Editable = {
   /** The config key, shown alongside the label so the file stays searchable. */
@@ -148,6 +153,13 @@ export const EDITABLE: Editable[] = [
     hint: "probe quota in the background",
   },
   {
+    key: "resetFormat",
+    label: "Reset time format",
+    section: "Quota",
+    kind: "text",
+    hint: "DD/MM/YYYY HH:mm — empty for today/tomorrow/weekday",
+  },
+  {
     key: "quotaWarnAt",
     label: "Warn at (5h)",
     section: "Quota",
@@ -250,6 +262,7 @@ export const NO_PRESET = "__none__"
 
 /** The JSON literal for a chosen value. */
 export function toLiteral(kind: EditableKind, raw: string): string {
+  if (kind === "text") return JSON.stringify(raw)
   if (kind === "boolean") return raw === "true" ? "true" : "false"
   // Clearing a preset means an empty string, which is what resolveActiveConfig
   // reads as "no preset" -- not the literal word none.

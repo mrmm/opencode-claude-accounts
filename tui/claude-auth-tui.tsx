@@ -67,6 +67,7 @@ import {
   configRows,
   display,
   EDITABLE,
+  toLiteral,
   STRATEGY_NAMES,
   optionsFor,
   setJsoncValue,
@@ -242,6 +243,33 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
    * the strategy and the label go with it, and nothing in the TUI can
    * reconstruct them.
    */
+  /**
+   * One text prompt, shared.
+   *
+   * DialogPrompt declares `onCancel` and never calls it, so escape is
+   * the stack's and has to be routed through `escapeTo` -- a detail
+   * worth writing once rather than at each call site.
+   */
+  const askText = (
+    title: string,
+    seed: string,
+    onConfirm: (value: string) => void,
+    onEscape: () => void,
+    placeholder = "",
+  ) =>
+    api.ui.dialog.replace(
+      () => (
+        <api.ui.DialogPrompt
+          title={title}
+          placeholder={placeholder}
+          value={seed}
+          onConfirm={(value: string) => onConfirm(value)}
+          onCancel={() => onEscape()}
+        />
+      ),
+      escapeTo(onEscape),
+    )
+
   const confirmThen = (
     title: string,
     message: string,
@@ -366,6 +394,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             presets: getConfig().presets,
             quota: current.quota,
             selection: current.selection,
+            resetFormat: getConfig().resetFormat,
           })
           // A per-session choice belongs beside the per-session account, not in
           // the global settings screen. Offered only when there is a session to
@@ -781,33 +810,6 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               />
             ))
           }
-
-          /**
-           * One text prompt, shared.
-           *
-           * DialogPrompt declares `onCancel` and never calls it, so escape is
-           * the stack's and has to be routed through `escapeTo` -- a detail
-           * worth writing once rather than at each call site.
-           */
-          const askText = (
-            title: string,
-            seed: string,
-            onConfirm: (value: string) => void,
-            onEscape: () => void,
-            placeholder = "",
-          ) =>
-            api.ui.dialog.replace(
-              () => (
-                <api.ui.DialogPrompt
-                  title={title}
-                  placeholder={placeholder}
-                  value={seed}
-                  onConfirm={(value: string) => onConfirm(value)}
-                  onCancel={() => onEscape()}
-                />
-              ),
-              escapeTo(onEscape),
-            )
 
           const rename = (source: string) => {
             const cfg = getConfig()
@@ -1611,6 +1613,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
 
             // Only ratios and durations are typed; everything with a fixed
             // vocabulary is chosen, so a typo is not expressible there.
+            if (meta.kind === "text") {
+              // Free-form: no list to offer, and nothing to validate beyond
+              // being a string. An EMPTY value is meaningful here rather than
+              // a mistake -- it is how the relative style is asked for -- so
+              // this deliberately skips validateValue.
+              return askText(
+                `${meta.label} (${key})`,
+                current === undefined ? "" : String(current),
+                (value: string) => {
+                  write(key, toLiteral("text", value))
+                  openList()
+                },
+                openList,
+                meta.example,
+              )
+            }
             if (meta.kind === "number") {
               const prompt = (seed: string) =>
                 api.ui.dialog.replace(
