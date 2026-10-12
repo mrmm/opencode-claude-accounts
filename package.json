@@ -26,11 +26,13 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./opencode-claude-auth.js"
+      "import": "./opencode-claude-auth.js",
+      "default": "./opencode-claude-auth.js"
     },
     "./server": {
       "types": "./dist/index.d.ts",
-      "import": "./opencode-claude-auth.js"
+      "import": "./opencode-claude-auth.js",
+      "default": "./opencode-claude-auth.js"
     },
     "./claude-auth-plugin": {
       "types": "./dist/index.d.ts",
@@ -47,7 +49,8 @@
     "./opencode-claude-auth.js": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./tui": "./tui/claude-auth-tui.tsx"
   },
   "scripts": {
     "build": "rm -rf dist && tsc && cp src/anthropic-prompt.txt dist/ && node scripts/stamp.mjs",
@@ -70,6 +73,9 @@
     "dash": "pnpm run build && node --experimental-strip-types scripts/dash.ts",
     "prompt": "pnpm run build && node --experimental-strip-types scripts/prompt-analyze.ts",
     "check:tui": "tsc -p tui/tsconfig.json"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.27"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.18.31",

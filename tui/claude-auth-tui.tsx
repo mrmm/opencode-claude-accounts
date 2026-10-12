@@ -26,6 +26,7 @@ import type {
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui"
 import { createSignal, For, onCleanup } from "solid-js"
+import { setupV2 } from "./v2-adapter.tsx"
 import { readFileSync, renameSync, writeFileSync } from "node:fs"
 
 import {
@@ -1700,5 +1701,9 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   })
 }
 
-const plugin: TuiPluginModule & { id: string } = { id: "claude-auth.tui", tui }
+// One default export for both generations: V1 calls `tui`, V2 calls `setup`.
+const plugin: TuiPluginModule & {
+  id: string
+  setup: (ctx: Parameters<typeof setupV2>[0]) => () => void
+} = { id: "claude-auth.tui", tui, setup: (ctx) => setupV2(ctx, tui) }
 export default plugin
