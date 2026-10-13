@@ -23,7 +23,6 @@
  */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { Plugin } from "@opencode/plugin/tui"
-import { createRoot } from "solid-js"
 
 type Context = Plugin.Context
 type Row = {
@@ -234,13 +233,19 @@ function adapt(ctx: Context): TuiPluginApi {
 }
 
 export function setupV2(ctx: Context, tui: TuiPlugin) {
-  // V1 ran the plugin inside a reactive owner (it uses onCleanup); give it one
-  // and tie its disposal to the V2 plugin's lifetime.
-  return createRoot((dispose) => {
-    void (tui as unknown as (api: TuiPluginApi, options: unknown) => unknown)(
+  // Not wrapped in createRoot: a root of our own has no Keymap.Provider above
+  // it, so keymap.layer threw and no /cc-* command was ever registered. Setup
+  // already runs under the host's owner, which also disposes what we register.
+  void Promise.resolve(
+    (tui as unknown as (api: TuiPluginApi, options: unknown) => unknown)(
       adapt(ctx),
       ctx.options,
-    )
-    return dispose
+    ),
+  ).catch((e: unknown) => {
+    ctx.ui.toast.show({
+      message: `claude-auth TUI failed: ${e instanceof Error ? e.message : String(e)}`,
+      variant: "error",
+    })
   })
+  return () => {}
 }
