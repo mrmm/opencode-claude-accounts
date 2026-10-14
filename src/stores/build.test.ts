@@ -58,6 +58,7 @@ describe("helper store", () => {
   it("writes back in place, keeping fields the plugin does not model", () => {
     const { kv, exec } = fakeHelper({ t1: blob("OLD") })
     const s = buildStore({ id: "t1", backend: "helper", command: ["h"] }, exec)
+    s.read()
     assert.equal(
       s.write({ accessToken: "NEW", refreshToken: "R2", expiresAt: 9 }),
       true,
@@ -123,5 +124,34 @@ describe("keychain store", () => {
     assert.equal(s.source, "Claude Code-credentials-abcd1234")
     assert.equal(s.kind, "keychain")
     assert.equal(s.label, "work")
+  })
+})
+
+describe("helper write-back budget", () => {
+  it("does not read before writing (a broker read spends the grant)", () => {
+    const calls: string[] = []
+    const { exec: inner } = fakeHelper({ t1: blob("OLD") })
+    const exec: Exec = (f, args, opts) => {
+      calls.push(args.at(-2) ?? "")
+      return inner(f, args, opts)
+    }
+    const s = buildStore({ id: "t1", backend: "helper", command: ["h"] }, exec)
+    s.read()
+    calls.length = 0
+    s.write({ accessToken: "N", refreshToken: "R", expiresAt: 1 })
+    assert.deepEqual(calls, ["store"])
+  })
+  it("retries a failed store before giving up", () => {
+    let n = 0
+    const exec: Exec = (_f, args) => {
+      if (args.at(-2) === "store" && ++n < 3) throw new Error("busy")
+      return ""
+    }
+    const s = buildStore({ id: "t1", backend: "helper", command: ["h"] }, exec)
+    assert.equal(
+      s.write({ accessToken: "a", refreshToken: "b", expiresAt: 1 }),
+      true,
+    )
+    assert.equal(n, 3)
   })
 })

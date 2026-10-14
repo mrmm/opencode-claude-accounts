@@ -64,6 +64,8 @@ async function loadKeychainWithMockedSecurity(
   await cp(new URL("./stores/", import.meta.url), join(tempDir, "stores"), {
     recursive: true,
   })
+  // stores/build.ts reaches ./notify.ts at the root; it has no imports of its own.
+  await cp(new URL("./notify.ts", import.meta.url), join(tempDir, "notify.ts"))
 
   await writeFile(
     tempChildProcess,

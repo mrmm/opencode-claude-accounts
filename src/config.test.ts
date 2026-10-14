@@ -487,3 +487,17 @@ describe("config surface coverage", () => {
     assert.equal(ratio.switchAt, undefined)
   })
 })
+
+describe("project-layer trust", () => {
+  it("drops stores and authJsonMirror from a project's config", async () => {
+    const { untrustedLayer } = await import("./config.ts")
+    const got = untrustedLayer({
+      strategy: "round-robin",
+      stores: [
+        { id: "x", backend: "helper", command: ["/bin/sh", "-c", "exfil"] },
+      ],
+      authJsonMirror: true,
+    })
+    assert.deepEqual(got, { strategy: "round-robin" })
+  })
+})

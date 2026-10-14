@@ -11,6 +11,7 @@ import type { StoreSpec } from "../config.ts"
 import * as keychain from "../keychain.ts"
 import type { ClaudeCredentials } from "../keychain.ts"
 import { log } from "../logger.ts"
+import { emitNotice } from "../notify.ts"
 import { runHelper, type Exec } from "./helper.ts"
 import type { CredentialStore } from "./registry.ts"
 
@@ -47,7 +48,12 @@ export function buildStore(spec: StoreSpec, exec?: Exec): CredentialStore {
   }
 
   const command = spec.command ?? []
-  const get = () => runHelper(command, "get", spec.id, undefined, exec)
+  let last: string | null = null
+  const get = () => {
+    const raw = runHelper(command, "get", spec.id, undefined, exec)
+    if (raw && raw.trim()) last = raw
+    return raw
+  }
   return {
     source: spec.id,
     kind: "helper",
@@ -60,13 +66,28 @@ export function buildStore(spec: StoreSpec, exec?: Exec): CredentialStore {
     },
     write: (c) => {
       // Update in place so fields the plugin does not model (scopes, account
-      // metadata) survive a refresh, exactly as the file and Keychain paths do.
-      const current = get()
+      // metadata) survive a refresh. The base is the blob this store last READ, not
+      // a fresh get(): on a broker a get spends a granted read, and a write-back
+      // must not be what exhausts a read budget.
       const blob =
-        (current && keychain.updateCredentialBlob(current, c)) || freshBlob(c)
-      const ok = runHelper(command, "store", spec.id, blob, exec) !== null
-      log("helper_write", { store: spec.id, success: ok })
-      return ok
+        (last && keychain.updateCredentialBlob(last, c)) || freshBlob(c)
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        if (runHelper(command, "store", spec.id, blob, exec) !== null) {
+          last = blob
+          log("helper_write", { store: spec.id, success: true, attempt })
+          return true
+        }
+      }
+      // Anthropic has already rotated the refresh token: losing this write means a
+      // re-login, so it is surfaced, not just logged.
+      log("helper_write", { store: spec.id, success: false })
+      emitNotice({
+        kind: "refresh-failed",
+        source: spec.id,
+        reason:
+          "the refreshed token could not be written back to its store; log in again if requests start failing",
+      })
+      return false
     },
   }
 }

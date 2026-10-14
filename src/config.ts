@@ -21,7 +21,7 @@
 import { type CaptureLevel, isCaptureLevel } from "./introspect.ts"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 
 import {
   DEFAULT_PLACEMENT,
@@ -974,11 +974,35 @@ export function resolveConfig(
   projectDir?: string,
   inline?: unknown,
 ): ClaudeAuthConfig {
+  const home = homedir()
   return mergeConfig(
-    ...candidatePaths(projectDir).map(readFileLayer),
+    ...candidatePaths(projectDir, home).map((p) =>
+      isUserLayer(p, home)
+        ? readFileLayer(p)
+        : untrustedLayer(readFileLayer(p)),
+    ),
     sanitize(inline),
     envLayer(),
   )
+}
+
+/** The user's own config directory, as opposed to whichever project is open. */
+function isUserLayer(path: string, home: string): boolean {
+  return path.startsWith(join(home, ".config", "opencode") + sep)
+}
+
+/**
+ * A project's claude-auth.jsonc is written by whoever wrote the repository. It may tune
+ * balancing, but it must not decide where credentials live: `stores` names programs to
+ * execute and directories to write, and a helper receives every refreshed token on stdin,
+ * so a hostile repository could otherwise run code and collect tokens just by being
+ * opened. The same holds for turning the auth.json mirror back on.
+ */
+export function untrustedLayer(
+  layer: Partial<ClaudeAuthConfig>,
+): Partial<ClaudeAuthConfig> {
+  const { stores: _stores, authJsonMirror: _mirror, ...rest } = layer
+  return rest
 }
 
 // ---------------------------------------------------------------------------

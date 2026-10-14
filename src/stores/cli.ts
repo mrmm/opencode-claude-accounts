@@ -12,13 +12,13 @@
 // directory is deleted. No token is ever printed.
 import { spawnSync } from "node:child_process"
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { getConfig, primeConfig, type StoreSpec } from "../config.ts"
@@ -33,7 +33,7 @@ export type CliIO = {
   exec?: Exec
   /** Runs `claude` interactively with the given config dir; returns exit status. */
   runClaude: (configDir: string) => number
-  ramDir: () => string
+  ramDir: () => string | null
   now: () => number
 }
 
@@ -51,9 +51,9 @@ export function importBlob(spec: StoreSpec, raw: string, exec?: Exec): boolean {
     return runHelper(spec.command ?? [], "store", spec.id, raw, exec) !== null
   }
   if (spec.backend === "file" && spec.configDir) {
-    writeFileSync(join(spec.configDir, ".credentials.json"), raw, {
-      mode: 0o600,
-    })
+    const path = join(spec.configDir, ".credentials.json")
+    writeFileSync(path, raw, { mode: 0o600 })
+    chmodSync(path, 0o600) // the mode option applies only when the file is created
     return true
   }
   return false // Keychain logins are written by Claude Code itself on macOS.
@@ -103,7 +103,14 @@ export function runCli(argv: string[], stores: StoreSpec[], io: CliIO): number {
           ? io.stdin()
           : readFileSync(join(from, ".credentials.json"), "utf-8")
     } else {
-      const dir = mkdtempSync(join(io.ramDir(), "claude-login-"))
+      const ram = io.ramDir()
+      if (!ram) {
+        io.err(
+          "no RAM-backed directory ($XDG_RUNTIME_DIR or /dev/shm); refusing to log in to disk",
+        )
+        return 1
+      }
+      const dir = mkdtempSync(join(ram, "claude-login-"))
       try {
         io.err(
           `Complete the Claude login in the session that opens, then type /exit.`,
@@ -135,12 +142,17 @@ export function runCli(argv: string[], stores: StoreSpec[], io: CliIO): number {
   return 1
 }
 
-/** Prefer RAM-backed directories so a login never lands on a persistent disk. */
-export function pickRamDir(has: (p: string) => boolean = existsSync): string {
+/**
+ * A RAM-backed directory for the throwaway login, or null. There is no disk fallback:
+ * deleting a file does not overwrite it, so a login written to disk stays recoverable.
+ */
+export function pickRamDir(
+  has: (p: string) => boolean = existsSync,
+): string | null {
   const run = process.env.XDG_RUNTIME_DIR
   if (run && has(run)) return run
   if (has("/dev/shm")) return "/dev/shm"
-  return tmpdir()
+  return null
 }
 
 const isMain =

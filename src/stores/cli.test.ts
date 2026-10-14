@@ -1,6 +1,12 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -136,10 +142,12 @@ describe("login", () => {
 describe("importBlob", () => {
   it("writes a file store's credentials file 0600", () => {
     const dir = mkdtempSync(join(tmpdir(), "cli-file-"))
+    writeFileSync(join(dir, ".credentials.json"), "{}", { mode: 0o644 })
     assert.equal(
       importBlob({ id: "f", backend: "file", configDir: dir }, blob(NOW)),
       true,
     )
+    assert.equal(statSync(join(dir, ".credentials.json")).mode & 0o777, 0o600)
     assert.equal(
       JSON.parse(readFileSync(join(dir, ".credentials.json"), "utf-8"))
         .claudeAiOauth.accessToken,
@@ -162,10 +170,26 @@ describe("helpers", () => {
     )
     assert.equal(describeExpiry(NOW + 30 * 60_000, NOW), "expires in 30m")
   })
-  it("pickRamDir prefers /dev/shm over disk tmp", () => {
+  it("pickRamDir prefers /dev/shm and never falls back to disk", () => {
     assert.equal(
       pickRamDir((p) => p === "/dev/shm"),
       "/dev/shm",
     )
+    assert.equal(
+      pickRamDir(() => false),
+      null,
+    )
+  })
+  it("login refuses when no RAM directory exists", () => {
+    let ran = false
+    const o = io({
+      ramDir: () => null,
+      runClaude: () => {
+        ran = true
+        return 0
+      },
+    })
+    assert.equal(runCli(["login", "t1"], [helperSpec("t1")], o), 1)
+    assert.equal(ran, false)
   })
 })
