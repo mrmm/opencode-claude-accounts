@@ -10,6 +10,7 @@ import {
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { log } from "./logger.ts"
+import { isFileSource, readFileAccounts } from "./file-accounts.ts"
 
 export interface ClaudeCredentials {
   accessToken: string
@@ -366,15 +367,12 @@ export function buildAccountLabels(
 }
 
 export function readAllClaudeAccounts(): ClaudeAccount[] {
-  if (process.platform !== "darwin") {
-    const configDir =
-      process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
-    const creds = readCredentialsFile(configDir)
-    if (!creds) return []
-    const email = readEmailFromConfigDir(configDir)
-    const [label] = buildAccountLabels([creds], [email])
-    return [{ label, source: "file", configDir, credentials: creds }]
-  }
+  if (process.platform !== "darwin")
+    return readFileAccounts(
+      readCredentialsFile,
+      readEmailFromConfigDir,
+      buildAccountLabels,
+    )
 
   const services = listClaudeKeychainServices()
   const keychainAccounts: Array<{
@@ -500,7 +498,7 @@ export function writeBackCredentials(
     expiresAt: creds.expiresAt,
   }
 
-  if (source === "file") {
+  if (isFileSource(source, configDir)) {
     try {
       const dir =
         configDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
@@ -556,7 +554,7 @@ export function refreshAccount(
   source: string,
   configDir?: string,
 ): ClaudeCredentials | null {
-  if (source === "file") {
+  if (isFileSource(source, configDir)) {
     return readCredentialsFile(configDir)
   }
   const raw = readKeychainService(source)

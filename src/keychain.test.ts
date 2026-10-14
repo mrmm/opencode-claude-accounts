@@ -60,6 +60,12 @@ async function loadKeychainWithMockedSecurity(
     `export function log() {}\nexport function initLogger() {}\nexport function closeLogger() {}\n`,
     "utf8",
   )
+  // keychain.ts imports ./file-accounts.ts; the copy needs it beside it.
+  await writeFile(
+    join(tempDir, "file-accounts.ts"),
+    await readFile(new URL("./file-accounts.ts", import.meta.url), "utf8"),
+    "utf8",
+  )
 
   await writeFile(
     tempChildProcess,

@@ -22,6 +22,7 @@ import { resetExcludedBetas } from "./betas.ts"
 import { emitNotice } from "./notify.ts"
 import { acquireRefreshLock } from "./refresh-lock.ts"
 import { log } from "./logger.ts"
+import { isFileSource } from "./file-accounts.ts"
 
 export type { ClaudeAccount } from "./keychain.ts"
 export type { ClaudeCredentials } from "./keychain.ts"
@@ -552,8 +553,8 @@ export function refreshIfNeeded(
   // ~2x/min under load. macOS keychain sources stay on the in-memory path;
   // their state is mutated only by our own writeBackCredentials, so no
   // external-update vector exists for them.
-  if (target.source === "file") {
-    const onDisk = refreshAccount(target.source)
+  if (isFileSource(target.source, target.configDir)) {
+    const onDisk = refreshAccount(target.source, target.configDir)
     if (onDisk) target.credentials = onDisk
   }
 
