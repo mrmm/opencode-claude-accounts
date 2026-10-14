@@ -15,6 +15,10 @@ import { emitNotice } from "../notify.ts"
 import { runHelper, type Exec } from "./helper.ts"
 import type { CredentialStore } from "./registry.ts"
 
+/** How long a helper read is reused, and how close to expiry it stops being reused. */
+export const HELPER_CACHE_MS = 60_000
+export const HELPER_EXPIRY_MARGIN_MS = 5 * 60_000
+
 /** Claude Code's on-disk shape, for a helper that has nothing stored yet. */
 export function freshBlob(c: ClaudeCredentials): string {
   return JSON.stringify({ claudeAiOauth: { ...c } })
@@ -49,6 +53,15 @@ export function buildStore(spec: StoreSpec, exec?: Exec): CredentialStore {
 
   const command = spec.command ?? []
   let last: string | null = null
+  // The helper runs synchronously (the store API is sync) and a broker read can take
+  // seconds, which stalls the whole host process. A read is reused for a short window
+  // unless the token is about to expire; a write-back refreshes it.
+  let cached: ClaudeCredentials | null = null
+  let cachedAt = 0
+  const fresh = (now: number) =>
+    cached !== null &&
+    now - cachedAt < HELPER_CACHE_MS &&
+    cached.expiresAt - now > HELPER_EXPIRY_MARGIN_MS
   const get = () => {
     const raw = runHelper(command, "get", spec.id, undefined, exec)
     if (raw && raw.trim()) last = raw
@@ -59,9 +72,13 @@ export function buildStore(spec: StoreSpec, exec?: Exec): CredentialStore {
     kind: "helper",
     label,
     read: () => {
+      const now = Date.now()
+      if (fresh(now)) return cached
       const raw = get()
       const creds = raw && raw.trim() ? keychain.parseCredentials(raw) : null
       log("helper_read", { store: spec.id, found: creds !== null })
+      cached = creds
+      cachedAt = now
       return creds
     },
     write: (c) => {
@@ -74,6 +91,8 @@ export function buildStore(spec: StoreSpec, exec?: Exec): CredentialStore {
       for (let attempt = 1; attempt <= 3; attempt++) {
         if (runHelper(command, "store", spec.id, blob, exec) !== null) {
           last = blob
+          cached = c
+          cachedAt = Date.now()
           log("helper_write", { store: spec.id, success: true, attempt })
           return true
         }

@@ -155,3 +155,38 @@ describe("helper write-back budget", () => {
     assert.equal(n, 3)
   })
 })
+
+describe("helper store cache", () => {
+  const far = Date.now() + 3_600_000
+  const counting = (initial: Record<string, string>) => {
+    const h = fakeHelper(initial)
+    let gets = 0
+    const exec: Exec = (file, args, opts) => {
+      if (args.at(-2) === "get") gets++
+      return h.exec(file, args, opts)
+    }
+    return { exec, kv: h.kv, gets: () => gets }
+  }
+  it("reuses a read of a valid token instead of calling the helper again", () => {
+    const c = counting({ t1: blob("A", { expiresAt: far }) })
+    const s = buildStore({ id: "t1", backend: "helper", command: ["h"] }, c.exec)
+    assert.equal(s.read()?.accessToken, "A")
+    assert.equal(s.read()?.accessToken, "A")
+    assert.equal(c.gets(), 1)
+  })
+  it("re-reads a token close to expiry", () => {
+    const c = counting({ t1: blob("A", { expiresAt: Date.now() + 60_000 }) })
+    const s = buildStore({ id: "t1", backend: "helper", command: ["h"] }, c.exec)
+    s.read()
+    s.read()
+    assert.equal(c.gets(), 2)
+  })
+  it("serves the written-back token without a read", () => {
+    const c = counting({ t1: blob("OLD", { expiresAt: far }) })
+    const s = buildStore({ id: "t1", backend: "helper", command: ["h"] }, c.exec)
+    s.read()
+    s.write({ accessToken: "NEW", refreshToken: "r2", expiresAt: far })
+    assert.equal(s.read()?.accessToken, "NEW")
+    assert.equal(c.gets(), 1)
+  })
+})
