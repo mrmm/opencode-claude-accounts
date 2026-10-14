@@ -51,6 +51,17 @@ Runtime facts worth knowing before reading code:
   sessions cannot revoke each other's tokens.
 - [src/signing.ts](src/signing.ts): request signing helpers.
 
+## Credential stores (fork-owned)
+
+- [src/stores/registry.ts](src/stores/registry.ts): which store owns each account.
+  keychain.ts asks it first on every read and write-back; no runtime imports.
+- [src/stores/build.ts](src/stores/build.ts): declared `stores` → live stores
+  (file / helper / keychain), reusing upstream's readers and writers.
+- [src/stores/helper.ts](src/stores/helper.ts): the credential-helper protocol.
+- [src/stores/discover.ts](src/stores/discover.ts): non-macOS discovery of every
+  `~/.claude*` directory, with Keychain-style ids.
+- [src/stores/cli.ts](src/stores/cli.ts): `check`, `login`, `import` for operators.
+
 ## Request shaping (upstream-owned)
 
 - [src/transforms.ts](src/transforms.ts): body/stream transforms for API compatibility.

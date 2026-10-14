@@ -75,12 +75,70 @@ Just run OpenCode. The plugin handles auth automatically — it reads your Claud
 
 ## Credential sources
 
-The plugin checks these in order:
+When `stores` is declared (see below) it is the account list and nothing is
+discovered. Otherwise the plugin discovers accounts:
 
 1. macOS Keychain (all `Claude Code-credentials*` entries — multiple accounts are detected automatically)
-2. `~/.claude/.credentials.json` (fallback, works on all platforms; if `CLAUDE_CONFIG_DIR` is set, reads `$CLAUDE_CONFIG_DIR/.credentials.json` instead)
+2. Elsewhere (Linux, containers, Windows): `$CLAUDE_CONFIG_DIR` and every `~/.claude*` directory holding a `.credentials.json`, one account each. Ids follow Claude Code's Keychain naming (`Claude Code-credentials` for `~/.claude`, `Claude Code-credentials-<sha256(dir)[:8]>` otherwise), so `accounts`, `accountNames` and presets are written the same way on every platform. A single `~/.claude` keeps the plain `file` id.
 
-## Multiple accounts (macOS)
+### Declared stores
+
+Declare where each account's credentials live instead of letting the plugin
+look for them. Every read and every write-back of a refreshed token goes to the
+account's own store.
+
+```jsonc
+// claude-auth.jsonc
+{
+  "stores": [
+    // A Claude Code config directory.
+    { "id": "work", "backend": "file", "configDir": "~/.claude-work" },
+    // An external credential helper: the token never touches this disk.
+    {
+      "id": "team-1",
+      "name": "Team 1",
+      "backend": "helper",
+      "command": ["my-broker", "claude"],
+    },
+    // A macOS Keychain entry, listed explicitly.
+    {
+      "id": "home",
+      "backend": "keychain",
+      "service": "Claude Code-credentials",
+    },
+  ],
+  // Off: the live token is not copied into OpenCode's auth.json. Requests do
+  // not read that copy, so this only removes a plaintext file.
+  "authJsonMirror": false,
+}
+```
+
+**Helper protocol** — the same shape as git's and Docker's credential helpers,
+so any secret manager can serve it:
+
+| Call                    | Input                             | Output                                                                                                       |
+| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `<command…> get <id>`   | —                                 | Claude Code's credential JSON (`{"claudeAiOauth": {...}}`), exit 0. Non-zero exit or empty = no credentials. |
+| `<command…> store <id>` | the full credential JSON on stdin | exit 0 when stored                                                                                           |
+| `<command…> list`       | —                                 | one id per line (optional)                                                                                   |
+
+Output is never logged. Calls time out after 10 s.
+
+**Logging in on a headless host** — log in once per account without leaving a
+`.credentials.json` behind:
+
+```bash
+node dist/stores/cli.js login team-1    # opens `claude` in a RAM directory; /login, then /exit
+node dist/stores/cli.js check           # every store: present, and when it expires
+node dist/stores/cli.js import team-1 --from ~/.claude-team-1   # move an existing login
+```
+
+`login` runs Claude Code with `CLAUDE_CONFIG_DIR` pointing at a fresh directory
+on tmpfs (`$XDG_RUNTIME_DIR` or `/dev/shm`), moves the resulting credentials into
+the store and deletes the directory. Declared stores are read at plugin start;
+changing them needs a restart.
+
+## Multiple accounts
 
 If you have [multiple Claude Code accounts](https://gist.github.com/KMJ-007/0979814968722051620461ab2aa01bf2) authenticated on macOS, the plugin detects all of them from the Keychain automatically. Each account is labeled by its subscription tier (Claude Pro, Claude Max, etc.).
 

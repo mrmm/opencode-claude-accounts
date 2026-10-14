@@ -13,7 +13,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs"
-import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -27,13 +27,20 @@ import { pathToFileURL } from "node:url"
  * against a temp path. Callers write their stubs after this runs, so a stub
  * still overrides the real module.
  */
-async function copySiblingModules(tempDir: string): Promise<void> {
-  const here = new URL(".", import.meta.url)
-  for (const name of readdirSync(here)) {
+async function copySiblingModules(tempDir: string, sub = ""): Promise<void> {
+  const here = new URL(`./${sub}`, import.meta.url)
+  for (const entry of readdirSync(here, { withFileTypes: true })) {
+    const name = entry.name
+    // Domain folders (balance/, stores/, ui/) are reachable too, so recurse.
+    if (entry.isDirectory()) {
+      await mkdir(join(tempDir, sub, name), { recursive: true })
+      await copySiblingModules(tempDir, `${sub}${name}/`)
+      continue
+    }
     if (!name.endsWith(".ts") || name.endsWith(".test.ts")) continue
-    if (name === "credentials.ts") continue // the caller writes a rewritten copy
+    if (!sub && name === "credentials.ts") continue // the caller writes a rewritten copy
     const src = await readFile(new URL(name, here), "utf8")
-    await writeFile(join(tempDir, name), src, "utf8")
+    await writeFile(join(tempDir, sub, name), src, "utf8")
   }
 }
 

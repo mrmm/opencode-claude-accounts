@@ -75,6 +75,7 @@ if (upstreamFiles) {
 const EXEMPT = new Set([
   "index.ts",
   "balance/index.ts",
+  "stores/index.ts",
   "ui/index.ts",
   "ui/tools.ts",
 ])
@@ -112,7 +113,7 @@ for (const f of prod) {
 // edits down to one import line. Fork-owned files importing each other
 // precisely is better than dragging a whole domain in through a barrel, so the
 // rule applies only where the merge cost is real.
-const DOMAINS = new Set(["balance", "ui"])
+const DOMAINS = new Set(["balance", "stores", "ui"])
 for (const f of all) {
   const r = rel(f)
   if (r.includes("/")) continue

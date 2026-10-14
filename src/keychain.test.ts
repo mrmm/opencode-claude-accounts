@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs"
-import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -60,12 +60,10 @@ async function loadKeychainWithMockedSecurity(
     `export function log() {}\nexport function initLogger() {}\nexport function closeLogger() {}\n`,
     "utf8",
   )
-  // keychain.ts imports ./file-accounts.ts; the copy needs it beside it.
-  await writeFile(
-    join(tempDir, "file-accounts.ts"),
-    await readFile(new URL("./file-accounts.ts", import.meta.url), "utf8"),
-    "utf8",
-  )
+  // keychain.ts imports ./stores/index.ts; the copy needs the domain beside it.
+  await cp(new URL("./stores/", import.meta.url), join(tempDir, "stores"), {
+    recursive: true,
+  })
 
   await writeFile(
     tempChildProcess,

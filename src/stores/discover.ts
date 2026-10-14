@@ -15,7 +15,8 @@ import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-import type { ClaudeAccount, ClaudeCredentials } from "./keychain.ts"
+import type { ClaudeAccount, ClaudeCredentials } from "../keychain.ts"
+import { registerStore } from "./registry.ts"
 
 export const FILE_SOURCE = "file"
 const SERVICE = "Claude Code-credentials"
@@ -81,6 +82,7 @@ export function readFileAccounts(
   home: string = homedir(),
   envDir: string | undefined = process.env.CLAUDE_CONFIG_DIR,
   dirs: string[] = listCredentialDirs(home, envDir),
+  write?: (dir: string, creds: ClaudeCredentials) => boolean,
 ): ClaudeAccount[] {
   const found = fileAccountSources(dirs, home, envDir)
     .map(({ dir, source }) => ({ dir, source, creds: readCreds(dir) }))
@@ -93,17 +95,20 @@ export function readFileAccounts(
     found.map((f) => readEmail(f.dir)),
     found.map((f) => (f.source === FILE_SOURCE ? null : f.source)),
   )
-  return found.map((f, i) => ({
-    label: labels[i],
-    source: f.source,
-    configDir: f.dir,
-    credentials: f.creds,
-  }))
-}
-
-/** True when a source is backed by a .credentials.json file rather than the Keychain. */
-export function isFileSource(source: string, configDir?: string): boolean {
-  return (
-    source === FILE_SOURCE || (process.platform !== "darwin" && !!configDir)
-  )
+  return found.map((f, i) => {
+    const label = labels[i] ?? f.source
+    // Register every non-default directory, so read and write-back follow the
+    // account's own directory even on paths that pass no configDir.
+    if (write && f.source !== FILE_SOURCE) {
+      registerStore({
+        source: f.source,
+        kind: "file",
+        label,
+        configDir: f.dir,
+        read: () => readCreds(f.dir),
+        write: (c) => write(f.dir, c),
+      })
+    }
+    return { label, source: f.source, configDir: f.dir, credentials: f.creds }
+  })
 }

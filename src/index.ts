@@ -29,6 +29,7 @@ import {
 import crypto from "node:crypto"
 import { config } from "./model-config.ts"
 import { readAllClaudeAccounts, type ClaudeAccount } from "./keychain.ts"
+import { configureStores } from "./stores/index.ts"
 import { initLogger, log } from "./logger.ts"
 import { COMMIT, VERSION } from "./version.ts"
 import { emitNotice, setNoticeSink } from "./notify.ts"
@@ -302,6 +303,7 @@ const plugin: PluginWithOptions = async (
   // once; file layers are re-read on change afterwards.
   const initialConfig = primeConfig(worktree || directory, options)
   initLogger({ config: initialConfig })
+  configureStores(initialConfig)
 
   let accounts: ClaudeAccount[] = []
   try {

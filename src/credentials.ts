@@ -22,7 +22,7 @@ import { resetExcludedBetas } from "./betas.ts"
 import { emitNotice } from "./notify.ts"
 import { acquireRefreshLock } from "./refresh-lock.ts"
 import { log } from "./logger.ts"
-import { isFileSource } from "./file-accounts.ts"
+import { authJsonMirrorEnabled, storeFor } from "./stores/index.ts"
 
 export type { ClaudeAccount } from "./keychain.ts"
 export type { ClaudeCredentials } from "./keychain.ts"
@@ -257,6 +257,7 @@ function syncToPath(authPath: string, creds: ClaudeCredentials): void {
 }
 
 export function syncAuthJson(creds: ClaudeCredentials): void {
+  if (!authJsonMirrorEnabled()) return
   for (const authPath of getAuthJsonPaths()) {
     try {
       syncToPath(authPath, creds)
@@ -553,7 +554,7 @@ export function refreshIfNeeded(
   // ~2x/min under load. macOS keychain sources stay on the in-memory path;
   // their state is mutated only by our own writeBackCredentials, so no
   // external-update vector exists for them.
-  if (isFileSource(target.source, target.configDir)) {
+  if (target.source === "file" || storeFor(target.source)) {
     const onDisk = refreshAccount(target.source, target.configDir)
     if (onDisk) target.credentials = onDisk
   }

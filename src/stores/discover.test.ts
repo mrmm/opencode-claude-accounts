@@ -7,8 +7,8 @@ import {
   listCredentialDirs,
   readFileAccounts,
   sourceForConfigDir,
-} from "./file-accounts.ts"
-import type { ClaudeCredentials } from "./keychain.ts"
+} from "./discover.ts"
+import type { ClaudeCredentials } from "../keychain.ts"
 
 const HOME = "/home/u"
 const creds = (token: string): ClaudeCredentials =>

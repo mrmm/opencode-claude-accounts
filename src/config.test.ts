@@ -419,6 +419,8 @@ describe("config surface coverage", () => {
     accounts: "alpha,beta",
     pools: '[{"accounts":["alpha"]}]',
     presets: '{"p":{"accounts":["alpha"]}}',
+    stores: '[{"id":"t1","backend":"helper","command":["vault","claude"]}]',
+    authJsonMirror: "0",
   }
 
   it("has an environment variable for every key in DEFAULT_CONFIG", () => {

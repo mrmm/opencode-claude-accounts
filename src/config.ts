@@ -279,6 +279,69 @@ export type Preset = {
   pools?: Pool[]
 }
 
+/**
+ * Where each account's credentials live, declared rather than discovered.
+ *
+ *   file    a Claude Code config directory: <configDir>/.credentials.json
+ *   helper  an external credential helper (see stores/helper.ts) -- the token
+ *           never touches disk on this machine
+ *   keychain  a macOS Keychain service, listed explicitly
+ *
+ * When any are declared they ARE the account list: nothing is discovered. Ids
+ * are what `accounts`, `accountNames`, `pools` and presets refer to.
+ */
+export type StoreSpec = {
+  id: string
+  backend: "keychain" | "file" | "helper"
+  /** Display name; defaults to the id. */
+  name?: string
+  configDir?: string
+  command?: string[]
+  service?: string
+}
+
+const STORE_BACKENDS = new Set(["keychain", "file", "helper"])
+
+export function parseStores(v: unknown): StoreSpec[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out: StoreSpec[] = []
+  const seen = new Set<string>()
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const id = typeof r.id === "string" ? r.id.trim() : ""
+    // "file" is upstream's reserved id for ~/.claude; reusing it would route
+    // two different accounts through one source.
+    if (!id || id === "file" || seen.has(id)) continue
+    if (typeof r.backend !== "string" || !STORE_BACKENDS.has(r.backend))
+      continue
+    const spec: StoreSpec = { id, backend: r.backend as StoreSpec["backend"] }
+    if (typeof r.name === "string" && r.name.trim()) spec.name = r.name.trim()
+    if (spec.backend === "file") {
+      if (typeof r.configDir !== "string" || !r.configDir.trim()) continue
+      spec.configDir = r.configDir.trim()
+    }
+    if (spec.backend === "helper") {
+      const cmd = Array.isArray(r.command)
+        ? r.command.filter(
+            (x): x is string => typeof x === "string" && x !== "",
+          )
+        : typeof r.command === "string"
+          ? r.command.trim().split(/\s+/).filter(Boolean)
+          : []
+      if (cmd.length === 0) continue
+      spec.command = cmd
+    }
+    if (spec.backend === "keychain") {
+      if (typeof r.service !== "string" || !r.service.trim()) continue
+      spec.service = r.service.trim()
+    }
+    seen.add(id)
+    out.push(spec)
+  }
+  return out
+}
+
 export function parsePresets(v: unknown): Record<string, Preset> | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
   const out: Record<string, Preset> = {}
@@ -431,6 +494,13 @@ export type ClaudeAuthConfig = {
    * as the only front door.
    */
   tools: boolean
+  /** Declared credential stores; empty = discover accounts (Keychain / ~/.claude*). */
+  stores: StoreSpec[]
+  /**
+   * Copy the live token into OpenCode's auth.json. Turn off where tokens must
+   * not be written to disk; requests do not read that copy.
+   */
+  authJsonMirror: boolean
   /**
    * Record the SHAPE of outgoing requests for later analysis: which system
    * blocks, how large, which tools, how much is cacheable. "off" by default
@@ -511,6 +581,8 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   presets: {},
   preset: "",
   tools: true,
+  stores: [],
+  authJsonMirror: true,
 }
 
 /**
@@ -648,6 +720,11 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
 
   const presets = parsePresets(r.presets)
   if (presets !== undefined) out.presets = presets
+
+  const stores = parseStores(r.stores)
+  if (stores !== undefined) out.stores = stores
+  const mirror = bool(r.authJsonMirror)
+  if (mirror !== undefined) out.authJsonMirror = mirror
 
   if (typeof r.preset === "string") out.preset = r.preset.trim()
 
@@ -835,6 +912,14 @@ const ENV_PARSERS: Record<string, EnvParser> = {
       return undefined
     }
   },
+  stores: (v) => {
+    try {
+      return parseStores(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
+  authJsonMirror: (v) => v === "1",
 }
 
 /**
