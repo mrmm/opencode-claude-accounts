@@ -34,7 +34,7 @@ const ctx = {
             }
           : undefined,
       message: {
-        list: (id: string) =>
+        list: () =>
           loaded
             ? [
                 { id: "u1", type: "user", text: "hi" },
@@ -62,7 +62,7 @@ const ctx = {
                   ],
                 },
               ]
-            : (void id, undefined),
+            : undefined,
         sync: async (id: string) => {
           synced.push(id)
         },
