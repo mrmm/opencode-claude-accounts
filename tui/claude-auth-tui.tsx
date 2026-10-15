@@ -83,6 +83,7 @@ import {
   detailRows,
   enabledSources,
   quotaText,
+  resetClock,
   sessionRows,
   shortNames,
   sidebarLines,
@@ -90,6 +91,7 @@ import {
   type Health,
 } from "../dist/tui/chip.js"
 import { BUILD } from "../dist/version.js"
+import { forecast, forecastLines } from "../dist/tui/forecast.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { debugReport } from "../dist/tui/debug.js"
@@ -300,6 +302,37 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const timer = setInterval(() => setSnap(read()), POLL_MS)
   onCleanup(() => clearInterval(timer))
 
+  // The pace forecast scans up to two generations of the telemetry log, so it
+  // refreshes on its own slower clock rather than on every quota poll.
+  const FORECAST_MS = 60_000
+  const readForecast = () => {
+    try {
+      const samples = readUsage(Date.now() - 7 * 86_400_000).flatMap((e) =>
+        e.kind === "request"
+          ? [
+              {
+                account: e.account,
+                at: e.created_at,
+                u5: e.utilization_5h,
+                u7: e.utilization_7d,
+              },
+            ]
+          : [],
+      )
+      const f = forecast(
+        samples,
+        readQuotaCache(),
+        visible().map((a) => a.source),
+      )
+      return forecastLines(f, (epoch: number) => resetClock(epoch))
+    } catch {
+      return []
+    }
+  }
+  const [pace, setPace] = createSignal(readForecast())
+  const paceTimer = setInterval(() => setPace(readForecast()), FORECAST_MS)
+  onCleanup(() => clearInterval(paceTimer))
+
   api.slots.register({
     order: 200,
     slots: {
@@ -370,6 +403,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     </span>
                   </text>
                 </box>
+              )}
+            </For>
+            <For each={pace()}>
+              {(line) => (
+                <text
+                  style={{
+                    fg:
+                      line.level === "critical"
+                        ? api.theme.current.error
+                        : line.level === "warn"
+                          ? api.theme.current.warning
+                          : api.theme.current.textMuted,
+                  }}
+                >
+                  {line.text}
+                </text>
               )}
             </For>
           </box>
