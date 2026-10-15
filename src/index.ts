@@ -278,6 +278,34 @@ export function buildRequestHeaders(
   return headers
 }
 
+/**
+ * Top up quota readings for every account.
+ *
+ * Detached and self-skipping: refreshQuotas ignores any account whose
+ * reading is younger than quotaProbeMaxAge, so calling this often is cheap.
+ * An exhausted account answers 429 and costs nothing; a healthy one spends a
+ * single token.
+ */
+export function topUpQuota(trigger: string): void {
+  const cfg = getConfig()
+  if (!cfg.quotaProbe) return
+  const targets = refreshAccountsList()
+    .map((a) => ({
+      source: a.source,
+      accessToken: a.credentials?.accessToken ?? "",
+    }))
+    .filter((a) => a.accessToken)
+  if (targets.length === 0) return
+
+  void refreshQuotas(targets, {
+    maxAgeSeconds: Math.floor(cfg.quotaProbeMaxAge / 1000),
+  })
+    .then((r) => {
+      if (r.probed > 0) log("quota_refreshed", { trigger, ...r })
+    })
+    .catch(() => {})
+}
+
 // The installed @opencode-ai/plugin types declare a single parameter, but the
 // runtime passes inline options from opencode.jsonc as a second argument -- the
 // mechanism other plugins already rely on. Typed explicitly rather than left
@@ -379,34 +407,6 @@ const plugin: PluginWithOptions = async (
       // A display nicety must never break auth.
       return ""
     }
-  }
-
-  /**
-   * Top up quota readings for every account.
-   *
-   * Detached and self-skipping: refreshQuotas ignores any account whose
-   * reading is younger than quotaProbeMaxAge, so calling this often is cheap.
-   * An exhausted account answers 429 and costs nothing; a healthy one spends a
-   * single token.
-   */
-  const topUpQuota = (trigger: string) => {
-    const cfg = getConfig()
-    if (!cfg.quotaProbe) return
-    const targets = refreshAccountsList()
-      .map((a) => ({
-        source: a.source,
-        accessToken: a.credentials?.accessToken ?? "",
-      }))
-      .filter((a) => a.accessToken)
-    if (targets.length === 0) return
-
-    void refreshQuotas(targets, {
-      maxAgeSeconds: Math.floor(cfg.quotaProbeMaxAge / 1000),
-    })
-      .then((r) => {
-        if (r.probed > 0) log("quota_refreshed", { trigger, ...r })
-      })
-      .catch(() => {})
   }
 
   if (accounts.length > 0) {
