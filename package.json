@@ -53,7 +53,7 @@
     "./tui": "./tui/claude-auth-tui.tsx"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc && cp src/anthropic-prompt.txt dist/ && node scripts/stamp.mjs",
+    "build": "rm -rf .dist-next && tsc --outDir .dist-next && cp src/anthropic-prompt.txt .dist-next/ && rm -rf dist && mv .dist-next dist && node scripts/stamp.mjs",
     "test": "node --test --experimental-strip-types 'src/**/*.test.ts' 'scripts/**/*.test.ts'",
     "test:models": "pnpm run build && node scripts/test-models.ts",
     "test:headless": "pnpm run build && node --experimental-strip-types scripts/test-headless.ts",

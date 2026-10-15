@@ -9,3 +9,4 @@ docs/
 
 # derived knowledge graph — rebuild with `graphify update .`
 graphify-out/
+.dist-next/
