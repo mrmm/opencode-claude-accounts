@@ -675,7 +675,7 @@ guards and can be seen rather than remembered.
   never the account serving -- under a preset that changes constantly.
 - **Edit `pools`.** See above.
 - **Edit the keys consumed once at start-up**: `debug`, `logLevel`,
-  `logEvents`, `logMaxSize`, `logKeep`, `tools`, `accountLabel`.
+  `logEvents`, `logMaxSize`, `logKeep`, `tools`, `accountLabel`, `contextLimit`.
 
 ## The reported Claude Code version
 
@@ -834,6 +834,7 @@ true, because ten keys had previously drifted into being file-only.
 | `presets`              | `CLAUDE_AUTH_PRESETS` (JSON)             |
 | `preset`               | `CLAUDE_AUTH_PRESET`                     |
 | `tools`                | `CLAUDE_AUTH_TOOLS`                      |
+| `contextLimit`         | `CLAUDE_AUTH_CONTEXT_LIMIT`              |
 | `captureRequests`      | `CLAUDE_AUTH_CAPTURE_REQUESTS`           |
 
 Names follow `camelCase` -> `CLAUDE_AUTH_SCREAMING_SNAKE`, except the six that
@@ -915,6 +916,15 @@ every sync tick.
 1M token context is supported natively — the API no longer requires a beta flag for it, so the plugin doesn't send the legacy `context-1m-2025-08-07` header.
 
 If your plan doesn't cover long context billing, requests beyond the standard window fail with "Extra usage is required for long context requests". When a long context error is caused by a beta flag (e.g. one added via `ANTHROPIC_BETA_FLAGS`), the plugin retries without the offending flag.
+
+OpenCode compacts a session against the model's context window, so on a 1M model compaction waits until the history is close to 1M tokens. A summary of that much history can exceed the summary's output budget, and the session then fails with "Compaction summary reached the output token limit" on every attempt. `contextLimit` caps the window OpenCode is told every anthropic model has, so compaction runs while the history can still be summarized:
+
+```jsonc
+// ~/.config/opencode/claude-auth.jsonc
+{ "contextLimit": 400000 } // 0 (default) keeps the catalog value
+```
+
+OpenCode 2 only, read at start-up. Models whose window is already smaller are left alone.
 
 ## Validating OAuth refresh
 

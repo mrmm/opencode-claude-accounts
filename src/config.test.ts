@@ -301,6 +301,13 @@ describe("balancer config", () => {
     assert.equal(sanitize({ ejectFor: "90s" }).ejectFor, 90_000)
   })
 
+  it("reads contextLimit as a non-negative integer", () => {
+    assert.equal(sanitize({ contextLimit: 400000 }).contextLimit, 400000)
+    assert.equal(sanitize({ contextLimit: "0" }).contextLimit, 0)
+    assert.equal(sanitize({ contextLimit: -1 }).contextLimit, undefined)
+    assert.equal(sanitize({ contextLimit: "big" }).contextLimit, undefined)
+  })
+
   it("exposes the balancer knobs to the environment", () => {
     const layer = envLayer({
       CLAUDE_AUTH_AUTO_SWITCH: "1",
@@ -409,6 +416,7 @@ describe("config surface coverage", () => {
     bindBy: "none",
     pinBlocksRotation: "0",
     tools: "0",
+    contextLimit: "400000",
     weights: '{"Acme 1":3}',
     accountNames: '{"Acme 1":"Team 1"}',
     retryPrefillError: "1",

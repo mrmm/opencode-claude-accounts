@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
+import { primeConfig, resetConfigCache } from "./config.ts"
 import { PLUGIN_ID, setup } from "./v2.ts"
 
 type Callback = (event: Record<string, unknown>) => unknown
@@ -8,6 +9,7 @@ type Callback = (event: Record<string, unknown>) => unknown
 /** A V2 context that records what the adapter registers. */
 function fakeContext() {
   const providerEdits: Array<(editor: unknown) => void> = []
+  const modelEdits: Array<(editor: unknown) => void> = []
   const sessionHooks = new Map<string, Callback[]>()
   const tools: Array<{
     name: string
@@ -24,7 +26,12 @@ function fakeContext() {
         return registration
       },
     },
-    model: { transform: async () => registration },
+    model: {
+      transform: async (cb: (editor: unknown) => void) => {
+        modelEdits.push(cb)
+        return registration
+      },
+    },
     session: {
       hook: async (name: string, cb: Callback) => {
         sessionHooks.set(name, [...(sessionHooks.get(name) ?? []), cb])
@@ -45,7 +52,7 @@ function fakeContext() {
       },
     },
   }
-  return { ctx, providerEdits, sessionHooks, tools, methods }
+  return { ctx, providerEdits, modelEdits, sessionHooks, tools, methods }
 }
 
 describe("v2 adapter", () => {
@@ -126,6 +133,31 @@ describe("v2 adapter", () => {
       assert.deepEqual(await tools[0]!.execute({}, {}), { content: "echoed" })
     } finally {
       await (cleanup as () => void)()
+    }
+  })
+
+  it("caps the context window at contextLimit and leaves smaller models alone", async () => {
+    primeConfig("/tmp", { contextLimit: 400000 })
+    try {
+      const { ctx, modelEdits } = fakeContext()
+      await setup(ctx as never, (async () => ({})) as never)
+      const models = [
+        { providerID: "anthropic", id: "big", limit: { context: 1000000 } },
+        { providerID: "anthropic", id: "small", limit: { context: 200000 } },
+      ]
+      for (const edit of modelEdits) {
+        edit({
+          list: () => models,
+          update: (_p: string, id: string, fn: (m: unknown) => void) =>
+            fn(models.find((m) => m.id === id)),
+        })
+      }
+      assert.deepEqual(
+        models.map((m) => m.limit.context),
+        [400000, 200000],
+      )
+    } finally {
+      resetConfigCache()
     }
   })
 

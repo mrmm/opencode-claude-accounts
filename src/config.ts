@@ -432,6 +432,13 @@ export type ClaudeAuthConfig = {
    */
   tools: boolean
   /**
+   * Upper bound, in tokens, on the context window OpenCode is told each
+   * anthropic model has; 0 keeps the catalog value. OpenCode compacts against
+   * that window, so on a 1M model compaction otherwise waits until the history
+   * is too large to summarize. OpenCode 2 only; read once at start-up.
+   */
+  contextLimit: number
+  /**
    * Record the SHAPE of outgoing requests for later analysis: which system
    * blocks, how large, which tools, how much is cacheable. "off" by default
    * because a request body contains the conversation.
@@ -511,6 +518,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   presets: {},
   preset: "",
   tools: true,
+  contextLimit: 0,
 }
 
 /**
@@ -630,6 +638,11 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
 
   const tools = bool(r.tools)
   if (tools !== undefined) out.tools = tools
+
+  if (r.contextLimit !== undefined) {
+    const limit = strictInt(String(r.contextLimit))
+    if (limit !== undefined && limit >= 0) out.contextLimit = limit
+  }
 
   const autoSwitch = bool(r.autoSwitch)
   if (autoSwitch !== undefined) out.autoSwitch = autoSwitch
@@ -801,6 +814,7 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   bindBy: (v) => v,
   pinBlocksRotation: (v) => v === "1",
   tools: (v) => v === "1",
+  contextLimit: strictInt,
   weights: (v) => {
     try {
       return parseWeights(JSON.parse(v))

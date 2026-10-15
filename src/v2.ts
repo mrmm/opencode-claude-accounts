@@ -25,6 +25,7 @@ import type { Plugin as V1Plugin } from "@opencode-ai/plugin"
 import type { Plugin as V2Plugin } from "@opencode/plugin"
 import { z } from "zod"
 
+import { getConfig } from "./config.ts"
 import { log } from "./logger.ts"
 
 type Context = Parameters<V2Plugin.Plugin["setup"]>[0]
@@ -263,6 +264,19 @@ export async function setup(ctx: Context, v1: V1Plugin) {
 
   // --- Provider and model presentation ------------------------------------
   // Model cost is left to the catalog, as in the V1 loader.
+  const contextLimit = getConfig().contextLimit
+  if (contextLimit > 0) {
+    await ctx.model.transform((editor) => {
+      for (const model of editor.list(PROVIDER_ID)) {
+        if (model.limit.context <= contextLimit) continue
+        editor.update(String(model.providerID), String(model.id), (draft) => {
+          draft.limit.context = contextLimit
+        })
+      }
+    })
+    log("v2_context_limit", { contextLimit })
+  }
+
   if (hooks.config) {
     // The label is a start-up snapshot under V1 too; computed once, replayed cheaply.
     const fake = {
