@@ -2,7 +2,9 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  duplicateInstructions,
   hints,
+  optimizeReport,
   sessionCalls,
   toolKey,
   traffic,
@@ -103,5 +105,28 @@ describe("hints", () => {
     assert.equal(rows[0]!.label, "instructions")
     assert.equal(rows[1]!.label, "read")
     assert.equal(rows[2]!.label, "schema")
+  })
+})
+
+describe("duplicateInstructions + optimizeReport", () => {
+  it("flags the same content loaded twice and asks before changing anything", () => {
+    const files = [
+      { path: "~/.config/opencode/AGENTS.md", bytes: 37_000, hash: "h1" },
+      { path: "repo/AGENTS.md", bytes: 37_000, hash: "h1" },
+      { path: "repo/sub/AGENTS.md", bytes: 370, hash: "h2" },
+    ]
+    assert.deepEqual(duplicateInstructions(files), [
+      {
+        paths: ["~/.config/opencode/AGENTS.md", "repo/AGENTS.md"],
+        tokens: 10_000,
+      },
+    ])
+    const text = optimizeReport({
+      directory: "repo",
+      files,
+      sections: [{ title: "Optimize", rows: hints({}) }],
+    })
+    assert.match(text, /DUPLICATE content, ~10\.0k/)
+    assert.match(text, /Do NOT apply anything until I approve/)
   })
 })

@@ -111,14 +111,18 @@ import {
 } from "../dist/tui/tokens.js"
 import {
   hints,
+  optimizeReport,
   sessionCalls,
   traffic,
   trafficRows,
+  type InstructionFile,
   type ToolCall,
 } from "../dist/tui/traffic.js"
 import { capturePath } from "../dist/introspect.js"
+import { createHash } from "node:crypto"
+import { existsSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { debugReport } from "../dist/tui/debug.js"
 import { refreshQuotas, resetProbeBlocks } from "../dist/balance/quota.js"
 import {
@@ -470,6 +474,109 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       : compositionRows(c)
   }
 
+  // What OpenCode loads as instructions: the global AGENTS.md, then the nearest
+  // AGENTS.md (else CLAUDE.md) at each level from the session directory up to home.
+  // shortcut: mirrors OpenCode's lookup by hand and ignores `instructions` globs in
+  // opencode.json; read the resolved list from the server if that ever matters.
+  const instructionFiles = (directory: string): InstructionFile[] => {
+    const found: string[] = []
+    const global = join(
+      process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
+      "opencode",
+      "AGENTS.md",
+    )
+    if (existsSync(global)) found.push(global)
+    for (
+      let d = directory;
+      d && d !== dirname(d) && d !== homedir();
+      d = dirname(d)
+    ) {
+      const f = ["AGENTS.md", "CLAUDE.md"]
+        .map((n) => join(d, n))
+        .find((p) => existsSync(p))
+      if (f) found.push(f)
+    }
+    const out: InstructionFile[] = []
+    const seen = new Set<string>()
+    for (const f of found) {
+      try {
+        const real = realpathSync(f)
+        if (seen.has(real) && !f.startsWith(join(homedir(), ".config")))
+          continue
+        seen.add(real)
+        const text = readFileSync(f)
+        out.push({
+          path: f.replace(homedir(), "~"),
+          bytes: text.length,
+          hash: createHash("sha1").update(text).digest("hex"),
+        })
+      } catch {
+        /* unreadable file: OpenCode could not load it either */
+      }
+    }
+    return out
+  }
+  const sessionDir = (id: string) =>
+    api.state.session.get(id)?.directory ?? api.state.path.directory
+
+  type Section = { title: string; note?: string; rows: Row[] }
+  // One source for the sidebar, the new-session toast and /optimize, so all three agree.
+  const report = (id: string): Section[] => {
+    const messages = api.state.session.messages(id)
+    const totals = sessionTotals(messages)
+    const calls = traffic(sessionCalls(messages, (m) => api.state.part(m)))
+    const c = compo()
+    const g = globalTok()
+    const advice = hints({
+      session: totals,
+      traffic: calls,
+      composition: typeof c === "string" ? undefined : c,
+      global: g.totals,
+      files: instructionFiles(sessionDir(id)),
+    })
+    return [
+      { title: "Optimize", note: "(biggest first, /optimize)", rows: advice },
+      {
+        title: "Tokens",
+        note: "(this session)",
+        rows: tokenSessionRows(totals),
+      },
+      {
+        title: "Tool output",
+        note: "(this session, ↻ = re-read)",
+        rows: trafficRows(calls, true),
+      },
+      { title: "Tokens", note: "(all sessions)", rows: globalTokRows() },
+      {
+        title: "Tool output",
+        note: "(7 days)",
+        rows: g.tools ? trafficRows(g.tools, false) : [],
+      },
+      { title: "Last request", note: "(est., bytes/3.7)", rows: compoRows() },
+    ]
+  }
+
+  // New top-level session, any worktree: say what is worth fixing, without spending a
+  // token on it. Subagent sessions are skipped; they inherit the same setup.
+  api.event.on("session.created", (e) => {
+    const info = e.properties.info
+    if (info.parentID) return
+    const worth = report(info.id)[0]!.rows.filter(
+      (r) => r.level && r.level !== "ok",
+    )
+    if (worth.length === 0) return
+    api.ui.toast({
+      variant: worth.some((r) => r.level === "critical") ? "warning" : "info",
+      title: "Token savings available",
+      message:
+        worth
+          .slice(0, 2)
+          .map((r) => `${r.label.trim()}: ${r.value}`)
+          .join("\n") + "\nRun /optimize for a fix plan.",
+      duration: 10_000,
+    })
+  })
+
   const levelColour = (l?: string) =>
     l === "critical"
       ? api.theme.current.error
@@ -604,37 +711,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     order: 212,
     slots: {
       sidebar_content(_ctx, props: { session_id: string }) {
-        const messages = () => api.state.session.messages(props.session_id)
-        const totals = () => sessionTotals(messages())
-        const calls = () =>
-          traffic(sessionCalls(messages(), (id) => api.state.part(id)))
-        const advice = () => {
-          const c = compo()
-          return hints({
-            session: totals(),
-            traffic: calls(),
-            composition: typeof c === "string" ? undefined : c,
-            global: globalTok().totals,
-          })
-        }
         return (
           <box>
-            <Heading title="Optimize" note="(biggest first)" />
-            <Rows rows={advice()} />
-            <Heading title="Tokens" note="(this session)" />
-            <Rows rows={tokenSessionRows(totals())} />
-            <Heading title="Tool output" note="(this session, ↻ = re-read)" />
-            <Rows rows={trafficRows(calls(), true)} />
-            <Heading title="Tokens" note="(all sessions)" />
-            <Rows rows={globalTokRows()} />
-            <Heading title="Tool output" note="(7 days)" />
-            <Rows
-              rows={
-                globalTok().tools ? trafficRows(globalTok().tools!, false) : []
-              }
-            />
-            <Heading title="Last request" note="(est., bytes/3.7)" />
-            <Rows rows={compoRows()} />
+            <For each={report(props.session_id)}>
+              {(sec) => (
+                <box>
+                  <Heading title={sec.title} note={sec.note} />
+                  <Rows rows={sec.rows} />
+                </box>
+              )}
+            </For>
           </box>
         )
       },
@@ -815,6 +901,46 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               }))}
             />
           ))
+        },
+      },
+      {
+        name: "claude-auth.optimize",
+        title: "Propose token optimisations",
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "optimize",
+        run() {
+          const sid = lastSessionId
+          if (!sid) {
+            api.ui.toast({
+              variant: "warning",
+              message: "Open a session first, then run /optimize.",
+            })
+            return
+          }
+          const directory = sessionDir(sid)
+          const sections = report(sid)
+          const text = optimizeReport({
+            directory,
+            files: instructionFiles(directory),
+            sections: sections.map((sec) => ({
+              title: `${sec.title} ${sec.note ?? ""}`.trim(),
+              rows: sec.rows,
+            })),
+          })
+          // Sent as a normal user message: the agent answers with a plan, and the
+          // report says not to change anything before approval.
+          void api.client.session
+            .promptAsync({ sessionID: sid, parts: [{ type: "text", text }] })
+            .then((res) => {
+              if (res.error)
+                api.ui.toast({
+                  variant: "error",
+                  message:
+                    "optimize: " +
+                    String(JSON.stringify(res.error)).slice(0, 120),
+                })
+            })
         },
       },
       {

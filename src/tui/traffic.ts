@@ -168,6 +168,7 @@ export type HintInput = {
   composition?: Composition
   session?: SessionTotals
   global?: GlobalTotals
+  files?: InstructionFile[]
 }
 
 /**
@@ -183,6 +184,13 @@ export function hints(h: HintInput, max = 5): Row[] {
     level: Row["level"] = "warn",
   ) => out.push({ weight, row: { label, value, level } })
 
+  // Ranked first on purpose: deleting a duplicate is the cheapest fix there is.
+  for (const d of duplicateInstructions(h.files ?? []))
+    add(
+      d.tokens * 10,
+      "duplicate",
+      `${d.paths[0]!.split("/").slice(-2).join("/")} loaded twice: ~${si(d.tokens)}/turn`,
+    )
   const c = h.composition
   if (c) {
     if (c.instructions > 30_000)
@@ -259,4 +267,58 @@ export function hints(h: HintInput, max = 5): Row[] {
     .sort((a, b) => b.weight - a.weight)
     .slice(0, max)
     .map((o) => o.row)
+}
+
+export type InstructionFile = { path: string; bytes: number; hash: string }
+
+/**
+ * Instruction files whose content is loaded more than once. A global AGENTS.md that
+ * symlinks to a repo, opened from a worktree of that repo, is the usual cause.
+ */
+export function duplicateInstructions(
+  files: InstructionFile[],
+): { paths: string[]; tokens: number }[] {
+  const by = new Map<string, InstructionFile[]>()
+  for (const f of files) by.set(f.hash, [...(by.get(f.hash) ?? []), f])
+  return [...by.values()]
+    .filter((g) => g.length > 1)
+    .map((g) => ({
+      paths: g.map((f) => f.path),
+      tokens: tok(g[0]!.bytes) * (g.length - 1),
+    }))
+}
+
+export type ReportInput = HintInput & {
+  directory: string
+  files: InstructionFile[]
+  sections: { title: string; rows: Row[] }[]
+}
+
+/** The message /optimize sends: the numbers, then a precise ask. */
+export function optimizeReport(r: ReportInput): string {
+  const lines = [
+    `Token optimisation report for this OpenCode setup (directory: ${r.directory}).`,
+    "Token counts are estimates (bytes/3.7) unless they come from the session store.",
+    "",
+    "Instruction files loaded at session start:",
+    ...r.files.map((f) => `- ${f.path}: ~${si(tok(f.bytes))} tok`),
+  ]
+  for (const d of duplicateInstructions(r.files))
+    lines.push(
+      `- DUPLICATE content, ~${si(d.tokens)} tok wasted per turn: ${d.paths.join(" == ")}`,
+    )
+  for (const s of r.sections) {
+    lines.push("", `${s.title}:`)
+    for (const row of s.rows)
+      lines.push(
+        `- ${row.label.trim()}: ${row.value}${row.level && row.level !== "ok" ? ` [${row.level}]` : ""}`,
+      )
+  }
+  lines.push(
+    "",
+    "Task: propose concrete fixes ranked by tokens saved per turn. For each: the exact file or",
+    "config to change, the change, the estimated saving, and the risk. Check the files above",
+    "before proposing. Do NOT apply anything until I approve.",
+  )
+  return lines.join("\n")
 }
