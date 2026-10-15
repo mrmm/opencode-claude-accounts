@@ -109,6 +109,13 @@ import {
   sessionTotals,
   type Row,
 } from "../dist/tui/tokens.js"
+import {
+  hints,
+  sessionCalls,
+  traffic,
+  trafficRows,
+  type ToolCall,
+} from "../dist/tui/traffic.js"
 import { capturePath } from "../dist/introspect.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -359,7 +366,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     "opencode",
     "opencode.db",
   )
-  const readGlobal = async (): Promise<Row[]> => {
+  type Global = {
+    totals?: ReturnType<typeof globalTotals>
+    tools?: ReturnType<typeof traffic>
+    error?: string
+  }
+  const readGlobal = async (): Promise<Global> => {
     try {
       const { Database } = (await import("bun:sqlite" as string)) as {
         Database: new (
@@ -381,36 +393,35 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           .all(Date.now() - 7 * 86_400_000) as Parameters<
           typeof globalTotals
         >[0]
-        return globalRows(globalTotals(rows), "7 days")
+        // Every tool call OpenCode recorded: the traffic is already on disk.
+        const calls = db
+          .query(
+            "select json_extract(data,'$.tool') as tool, json_extract(data,'$.state.input.command') as command, " +
+              "length(json_extract(data,'$.state.output')) as outBytes " +
+              "from part where time_created > ? and json_extract(data,'$.type') = 'tool' " +
+              "and json_extract(data,'$.state.status') = 'completed'",
+          )
+          .all(Date.now() - 7 * 86_400_000) as ToolCall[]
+        return { totals: globalTotals(rows), tools: traffic(calls) }
       } finally {
         db.close()
       }
     } catch (e) {
-      return [
-        {
-          label: "7 days",
-          value:
-            "store unreadable: " +
-            String((e as Error)?.message ?? e).slice(0, 40),
-          level: "warn",
-        },
-      ]
+      return {
+        error:
+          "store unreadable: " +
+          String((e as Error)?.message ?? e).slice(0, 40),
+      }
     }
   }
   // The newest captured request: the only place the prompt's composition exists. Read
   // from the file's tail so an 8 MB capture is not parsed every minute.
-  const readComposition = (): Row[] => {
+  const readComposition = (): ReturnType<typeof composition> | string => {
     if (
       (getConfig() as { captureRequests?: string }).captureRequests === "off" ||
       !(getConfig() as { captureRequests?: string }).captureRequests
     ) {
-      return [
-        {
-          label: "request",
-          value: "set captureRequests: shape",
-          level: "warn",
-        },
-      ]
+      return "set captureRequests: shape"
     }
     try {
       const fd = openSync(capturePath(), "r")
@@ -421,23 +432,43 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         readSync(fd, buf, 0, len, size - len)
         const lines = buf.toString("utf-8").trimEnd().split("\n")
         const shape = JSON.parse(lines[lines.length - 1]!)
-        return compositionRows(composition(shape))
+        return composition(shape)
       } finally {
         closeSync(fd)
       }
     } catch {
-      return [{ label: "request", value: "no capture yet", level: "ok" }]
+      return "no capture yet"
     }
   }
-  const [globalTok, setGlobalTok] = createSignal<Row[]>([])
-  const [compo, setCompo] = createSignal<Row[]>(readComposition())
-  const refreshTokens = () => {
-    void readGlobal().then(setGlobalTok)
-    setCompo(readComposition())
+  const [globalTok, setGlobalTok] = createSignal<Global>({})
+  const [compo, setCompo] = createSignal(readComposition())
+  // The 7-day scan reads every tool part (~1 s on a busy store), so it runs every 5 min;
+  // the capture tail is cheap and follows the forecast's minute.
+  const refreshGlobal = () => void readGlobal().then(setGlobalTok)
+  refreshGlobal()
+  const globalTimer = setInterval(refreshGlobal, 5 * FORECAST_MS)
+  const compoTimer = setInterval(() => setCompo(readComposition()), FORECAST_MS)
+  onCleanup(() => {
+    clearInterval(globalTimer)
+    clearInterval(compoTimer)
+  })
+  const globalTokRows = (): Row[] => {
+    const g = globalTok()
+    if (g.error) return [{ label: "7 days", value: g.error, level: "warn" }]
+    return g.totals ? globalRows(g.totals, "7 days") : []
   }
-  refreshTokens()
-  const tokTimer = setInterval(refreshTokens, FORECAST_MS)
-  onCleanup(() => clearInterval(tokTimer))
+  const compoRows = (): Row[] => {
+    const c = compo()
+    return typeof c === "string"
+      ? [
+          {
+            label: "request",
+            value: c,
+            level: c.startsWith("set") ? "warn" : "ok",
+          },
+        ]
+      : compositionRows(c)
+  }
 
   const levelColour = (l?: string) =>
     l === "critical"
@@ -573,18 +604,37 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     order: 212,
     slots: {
       sidebar_content(_ctx, props: { session_id: string }) {
-        const mine = () =>
-          tokenSessionRows(
-            sessionTotals(api.state.session.messages(props.session_id)),
-          )
+        const messages = () => api.state.session.messages(props.session_id)
+        const totals = () => sessionTotals(messages())
+        const calls = () =>
+          traffic(sessionCalls(messages(), (id) => api.state.part(id)))
+        const advice = () => {
+          const c = compo()
+          return hints({
+            session: totals(),
+            traffic: calls(),
+            composition: typeof c === "string" ? undefined : c,
+            global: globalTok().totals,
+          })
+        }
         return (
           <box>
+            <Heading title="Optimize" note="(biggest first)" />
+            <Rows rows={advice()} />
             <Heading title="Tokens" note="(this session)" />
-            <Rows rows={mine()} />
+            <Rows rows={tokenSessionRows(totals())} />
+            <Heading title="Tool output" note="(this session, ↻ = re-read)" />
+            <Rows rows={trafficRows(calls(), true)} />
             <Heading title="Tokens" note="(all sessions)" />
-            <Rows rows={globalTok()} />
+            <Rows rows={globalTokRows()} />
+            <Heading title="Tool output" note="(7 days)" />
+            <Rows
+              rows={
+                globalTok().tools ? trafficRows(globalTok().tools!, false) : []
+              }
+            />
             <Heading title="Last request" note="(est., bytes/3.7)" />
-            <Rows rows={compo()} />
+            <Rows rows={compoRows()} />
           </box>
         )
       },

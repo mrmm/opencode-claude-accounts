@@ -194,7 +194,7 @@ export function composition(shape: ShapeLike, topN = 3): Composition {
       .slice(0, topN)
       .map((b) => ({ head: b.head.trim(), tokens: tok(b.bytes) })),
     toolGroups: [...groups.entries()]
-      .map(([group, g]) => ({ group, ...g }))
+      .map(([group, g]) => ({ group, tokens: g.tokens, count: g.count }))
       .sort((a, b) => b.tokens - a.tokens)
       .slice(0, topN),
   }
