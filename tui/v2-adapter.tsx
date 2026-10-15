@@ -141,7 +141,82 @@ function adapt(ctx: Context): TuiPluginApi {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const theme = ctx.theme as any
+
+  // V1 read sessions as messages + separate parts; V2 keeps tool calls inside the
+  // assistant message's `content`, with output as text content. Translate on read
+  // so the V1 module keeps one shape. Tool parts are remembered by message id for
+  // `part()`, which V1 callers use right after `messages()`.
+  const toolParts = new Map<string, unknown[]>()
+  const requested = new Set<string>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const v1Message = (m: any) => {
+    if (m?.type !== "assistant")
+      return { id: m?.id, role: m?.type === "user" ? "user" : String(m?.type) }
+    toolParts.set(
+      m.id,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (m.content ?? [])
+        .filter((c: any) => c?.type === "tool")
+        .map((c: any) => ({
+          type: "tool",
+          tool: c.name,
+          state: {
+            status: c.state?.status,
+            input: c.state?.input ?? {},
+            output: Array.isArray(c.state?.content)
+              ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                c.state.content
+                  .map((x: any) => (x?.type === "text" ? x.text : ""))
+                  .join("")
+              : "",
+          },
+        })),
+    )
+    return { id: m.id, role: "assistant", cost: m.cost, tokens: m.tokens }
+  }
+  const state = {
+    session: {
+      get(id: string) {
+        const s = ctx.data.session.get(id)
+        return s && { ...s, directory: s.location?.directory }
+      },
+      messages(id: string) {
+        const list = ctx.data.session.message.list(id)
+        // Not loaded yet: ask once; the store is reactive, so the slot re-renders.
+        if (!list && !requested.has(id)) {
+          requested.add(id)
+          void ctx.data.session.message.sync(id).catch(() => {})
+        }
+        return (list ?? []).map(v1Message)
+      },
+    },
+    part: (messageID: string) => toolParts.get(messageID) ?? [],
+    path: {
+      get directory() {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (ctx.location as any)?.directory ?? process.cwd()
+      },
+    },
+  }
+  const client = {
+    session: {
+      // V1 sent parts; V2 takes the prompt text directly.
+      promptAsync: (input: { sessionID: string; parts: { text: string }[] }) =>
+        ctx.client.session
+          .prompt({
+            sessionID: input.sessionID,
+            text: input.parts.map((p) => p.text).join("\n"),
+          })
+          .then(() => ({ error: undefined }))
+          .catch((e: unknown) => ({
+            error: e instanceof Error ? e.message : String(e),
+          })),
+    },
+  }
+
   const api = {
+    state,
+    client,
     ui: {
       dialog: {
         replace,

@@ -557,13 +557,21 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   }
 
   // New top-level session, any worktree: say what is worth fixing, without spending a
-  // token on it. Subagent sessions are skipped; they inherit the same setup.
-  api.event.on("session.created", (e) => {
-    const info = e.properties.info
-    if (info.parentID) return
-    const worth = report(info.id)[0]!.rows.filter(
-      (r) => r.level && r.level !== "ok",
-    )
+  // token on it. Subagent sessions are skipped; they inherit the same setup. The
+  // sidebar slot renders for whichever session is on screen, so the toast keys off
+  // that: the V2 adapter has no event bus, and this works on both runtimes.
+  const toasted = new Set<string>()
+  const maybeToast = (id: string) => {
+    if (toasted.has(id)) return
+    const info = api.state.session.get(id) as
+      | { parentID?: string; time?: { created?: number } }
+      | undefined
+    if (!info) return // not loaded yet: the next render tries again
+    toasted.add(id)
+    // Only fresh sessions; reopening an old one is not the moment.
+    const created = info.time?.created ?? 0
+    if (info.parentID || Date.now() - created > 2 * 60_000) return
+    const worth = report(id)[0]!.rows.filter((r) => r.level && r.level !== "ok")
     if (worth.length === 0) return
     api.ui.toast({
       variant: worth.some((r) => r.level === "critical") ? "warning" : "info",
@@ -575,7 +583,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           .join("\n") + "\nRun /optimize for a fix plan.",
       duration: 10_000,
     })
-  })
+  }
 
   const levelColour = (l?: string) =>
     l === "critical"
@@ -639,6 +647,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         // and nothing else -- but this slot does, and it re-renders constantly
         // for whichever session is on screen. So the dialogs borrow it here.
         lastSessionId = props.session_id
+        maybeToast(props.session_id)
         const view = () =>
           sidebarLines({
             accounts: visible(),
@@ -930,17 +939,34 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           })
           // Sent as a normal user message: the agent answers with a plan, and the
           // report says not to change anything before approval.
+          // If sending fails, the report is still worth having: it lands in a file.
+          const fallback = (why: string) => {
+            const file = join(
+              homedir(),
+              ".local",
+              "share",
+              "opencode",
+              "claude-auth-optimize.md",
+            )
+            writeFileSync(file, text)
+            api.ui.toast({
+              variant: "warning",
+              message: `optimize: ${why}. Report saved to ${file.replace(homedir(), "~")}`,
+              duration: 10_000,
+            })
+          }
+          const send = api.client?.session?.promptAsync
+          if (typeof send !== "function")
+            return fallback("no client in this TUI")
           void api.client.session
             .promptAsync({ sessionID: sid, parts: [{ type: "text", text }] })
             .then((res) => {
               if (res.error)
-                api.ui.toast({
-                  variant: "error",
-                  message:
-                    "optimize: " +
-                    String(JSON.stringify(res.error)).slice(0, 120),
-                })
+                fallback(String(JSON.stringify(res.error)).slice(0, 80))
             })
+            .catch((e: unknown) =>
+              fallback(String((e as Error)?.message ?? e).slice(0, 80)),
+            )
         },
       },
       {

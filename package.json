@@ -72,6 +72,7 @@
     "capture": "node --experimental-strip-types scripts/capture.ts",
     "dash": "pnpm run build && node --experimental-strip-types scripts/dash.ts",
     "prompt": "pnpm run build && node --experimental-strip-types scripts/prompt-analyze.ts",
+    "check:v2": "bun tui/v2-adapter.runtime-check.ts",
     "check:tui": "tsc -p tui/tsconfig.json"
   },
   "dependencies": {
