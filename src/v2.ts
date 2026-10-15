@@ -262,22 +262,7 @@ export async function setup(ctx: Context, v1: V1Plugin) {
   }
 
   // --- Provider and model presentation ------------------------------------
-  if (claudeFetch) {
-    // V1 zeroed model cost in the auth loader: the subscription pays, not tokens.
-    await ctx.model.transform((editor) => {
-      for (const model of editor.list(PROVIDER_ID)) {
-        editor.update(String(model.providerID), String(model.id), (draft) => {
-          draft.cost = draft.cost.map((tier) => ({
-            ...tier,
-            input: 0,
-            output: 0,
-            cache: { read: 0, write: 0 },
-          })) as never
-        })
-      }
-    })
-  }
-
+  // Model cost is left to the catalog, as in the V1 loader.
   if (hooks.config) {
     // The label is a start-up snapshot under V1 too; computed once, replayed cheaply.
     const fake = {

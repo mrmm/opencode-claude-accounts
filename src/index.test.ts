@@ -1069,6 +1069,8 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       const plugin = await helpersModule.default({} as never)
       const typedPlugin = plugin as { auth?: { loader?: TestAuthLoader } }
       assert.equal(typeof typedPlugin.auth?.loader, "function")
+      const cost = { input: 1, output: 5, cache: { read: 0.1, write: 1.25 } }
+      const models = { "claude-haiku-4-5": { cost: structuredClone(cost) } }
       const authConfig = await typedPlugin.auth!.loader!(
         async () => ({
           type: "oauth",
@@ -1076,8 +1078,9 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
           access: "access",
           expires: Date.now() + 60_000,
         }),
-        { models: {} },
+        { models },
       )
+      assert.deepEqual(models["claude-haiku-4-5"].cost, cost)
 
       const originalInput = "https://api.anthropic.com/v1/messages"
       await authConfig.fetch(originalInput, {

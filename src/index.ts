@@ -758,14 +758,8 @@ const plugin: PluginWithOptions = async (
           return {}
         }
 
-        for (const model of Object.values(provider.models)) {
-          model.cost = {
-            input: 0,
-            output: 0,
-            cache: { read: 0, write: 0 },
-          }
-        }
-
+        // Catalog pricing is kept: the subscription pays, but the API-equivalent
+        // cost is what tells a heavy session from a light one.
         log("auth_loader_ready", {
           modelCount: Object.keys(provider.models).length,
         })
