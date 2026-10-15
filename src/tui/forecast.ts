@@ -234,27 +234,31 @@ const pctH = (v: number) => `${Math.round(v * 100)}%/h`
 export function forecastLines(
   f: Forecast,
   clock: (epoch: number) => string,
-): { text: string; level: "ok" | "warn" | "critical" }[] {
+): { label: string; value: string; level: "ok" | "warn" | "critical" }[] {
   const spike =
     f.spike !== undefined && f.spike >= 1.5 ? ` ↑${f.spike.toFixed(1)}×` : ""
-  const pace = f.idle
-    ? `pace idle · typ ${pctH(f.typicalPace)}`
-    : `pace ${pctH(f.nowPace)} · typ ${pctH(f.typicalPace)}${spike}`
-  const line = (label: string, w: WindowForecast, critical: boolean) =>
+  const line = (label: string, w: WindowForecast) =>
     w.runsOutAt === undefined
       ? {
-          text: `${label} lasts past ${clock(w.horizon)}`,
+          label,
+          value: `✓ lasts past ${clock(w.horizon)}`,
           level: "ok" as const,
         }
       : {
-          text: `${label} runs out ~${clock(w.runsOutAt)}`,
-          level: critical ? ("critical" as const) : ("warn" as const),
+          label,
+          value: `✗ runs out ~${clock(w.runsOutAt)}`,
+          level: "critical" as const,
         }
   return [
-    { text: pace, level: spike ? "warn" : "ok" },
+    {
+      label: "now",
+      value: f.idle ? "idle" : `${pctH(f.nowPace)}${spike}`,
+      level: spike ? "warn" : "ok",
+    },
+    { label: "typical", value: pctH(f.typicalPace), level: "ok" },
     f.idle
-      ? { text: "5h  idle — no forecast", level: "ok" }
-      : line("5h ", f.five, true),
-    line("wk ", f.week, true),
+      ? { label: "5h", value: "idle — no forecast", level: "ok" }
+      : line("5h", f.five),
+    line("week", f.week),
   ]
 }

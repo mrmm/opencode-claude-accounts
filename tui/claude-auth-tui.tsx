@@ -27,7 +27,15 @@ import type {
 } from "@opencode-ai/plugin/tui"
 import { createSignal, For, onCleanup } from "solid-js"
 import { setupV2 } from "./v2-adapter.tsx"
-import { readFileSync, renameSync, writeFileSync } from "node:fs"
+import {
+  closeSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs"
 
 import {
   loadPersistedAccountSource,
@@ -92,6 +100,16 @@ import {
 } from "../dist/tui/chip.js"
 import { BUILD } from "../dist/version.js"
 import { forecast, forecastLines } from "../dist/tui/forecast.js"
+import {
+  composition,
+  compositionRows,
+  globalRows,
+  globalTotals,
+  sessionRows as tokenSessionRows,
+  sessionTotals,
+  type Row,
+} from "../dist/tui/tokens.js"
+import { capturePath } from "../dist/introspect.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { debugReport } from "../dist/tui/debug.js"
@@ -333,6 +351,132 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const paceTimer = setInterval(() => setPace(readForecast()), FORECAST_MS)
   onCleanup(() => clearInterval(paceTimer))
 
+  // Global token totals come from OpenCode's own store (real counts, every session),
+  // opened read-only. bun:sqlite exists only inside the host, hence the dynamic import;
+  // without it the section says so instead of guessing.
+  const dbPath = join(
+    process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
+    "opencode",
+    "opencode.db",
+  )
+  const readGlobal = async (): Promise<Row[]> => {
+    try {
+      const { Database } = (await import("bun:sqlite" as string)) as {
+        Database: new (
+          p: string,
+          o: { readonly: boolean },
+        ) => {
+          query: (sql: string) => { all: (...a: unknown[]) => unknown[] }
+          close: () => void
+        }
+      }
+      const db = new Database(dbPath, { readonly: true })
+      try {
+        const rows = db
+          .query(
+            "select id, title, parent_id as parentId, tokens_input as input, tokens_output as output, " +
+              "tokens_cache_read as cacheRead, tokens_cache_write as cacheWrite, cost " +
+              "from session where time_updated > ?",
+          )
+          .all(Date.now() - 7 * 86_400_000) as Parameters<
+          typeof globalTotals
+        >[0]
+        return globalRows(globalTotals(rows), "7 days")
+      } finally {
+        db.close()
+      }
+    } catch (e) {
+      return [
+        {
+          label: "7 days",
+          value:
+            "store unreadable: " +
+            String((e as Error)?.message ?? e).slice(0, 40),
+          level: "warn",
+        },
+      ]
+    }
+  }
+  // The newest captured request: the only place the prompt's composition exists. Read
+  // from the file's tail so an 8 MB capture is not parsed every minute.
+  const readComposition = (): Row[] => {
+    if (
+      (getConfig() as { captureRequests?: string }).captureRequests === "off" ||
+      !(getConfig() as { captureRequests?: string }).captureRequests
+    ) {
+      return [
+        {
+          label: "request",
+          value: "set captureRequests: shape",
+          level: "warn",
+        },
+      ]
+    }
+    try {
+      const fd = openSync(capturePath(), "r")
+      try {
+        const size = fstatSync(fd).size
+        const len = Math.min(size, 2 * 1024 * 1024)
+        const buf = Buffer.alloc(len)
+        readSync(fd, buf, 0, len, size - len)
+        const lines = buf.toString("utf-8").trimEnd().split("\n")
+        const shape = JSON.parse(lines[lines.length - 1]!)
+        return compositionRows(composition(shape))
+      } finally {
+        closeSync(fd)
+      }
+    } catch {
+      return [{ label: "request", value: "no capture yet", level: "ok" }]
+    }
+  }
+  const [globalTok, setGlobalTok] = createSignal<Row[]>([])
+  const [compo, setCompo] = createSignal<Row[]>(readComposition())
+  const refreshTokens = () => {
+    void readGlobal().then(setGlobalTok)
+    setCompo(readComposition())
+  }
+  refreshTokens()
+  const tokTimer = setInterval(refreshTokens, FORECAST_MS)
+  onCleanup(() => clearInterval(tokTimer))
+
+  const levelColour = (l?: string) =>
+    l === "critical"
+      ? api.theme.current.error
+      : l === "warn"
+        ? api.theme.current.warning
+        : api.theme.current.textMuted
+  // One look for every section: a bold heading, then label/value rows with the labels in
+  // a fixed column, so numbers line up down the sidebar.
+  const Rows = (props: { rows: Row[] }) => (
+    <For each={props.rows}>
+      {(row) => (
+        <box flexDirection="row" gap={1}>
+          <text flexShrink={0} width={12} fg={api.theme.current.textMuted}>
+            {row.label}
+          </text>
+          <text
+            style={{
+              fg:
+                row.level && row.level !== "ok"
+                  ? levelColour(row.level)
+                  : api.theme.current.text,
+            }}
+          >
+            {row.value}
+          </text>
+        </box>
+      )}
+    </For>
+  )
+  const Heading = (props: { title: string; note?: string }) => (
+    <text fg={api.theme.current.text}>
+      <b>{props.title}</b>
+      <span style={{ fg: api.theme.current.textMuted }}>
+        {props.note ? ` ${props.note}` : ""}
+      </span>
+    </text>
+  )
+
   api.slots.register({
     order: 200,
     slots: {
@@ -405,22 +549,42 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 </box>
               )}
             </For>
-            <For each={pace()}>
-              {(line) => (
-                <text
-                  style={{
-                    fg:
-                      line.level === "critical"
-                        ? api.theme.current.error
-                        : line.level === "warn"
-                          ? api.theme.current.warning
-                          : api.theme.current.textMuted,
-                  }}
-                >
-                  {line.text}
-                </text>
-              )}
-            </For>
+          </box>
+        )
+      },
+    },
+  })
+
+  api.slots.register({
+    order: 211,
+    slots: {
+      sidebar_content() {
+        return (
+          <box>
+            <Heading title="Forecast" note="(at current pace)" />
+            <Rows rows={pace()} />
+          </box>
+        )
+      },
+    },
+  })
+
+  api.slots.register({
+    order: 212,
+    slots: {
+      sidebar_content(_ctx, props: { session_id: string }) {
+        const mine = () =>
+          tokenSessionRows(
+            sessionTotals(api.state.session.messages(props.session_id)),
+          )
+        return (
+          <box>
+            <Heading title="Tokens" note="(this session)" />
+            <Rows rows={mine()} />
+            <Heading title="Tokens" note="(all sessions)" />
+            <Rows rows={globalTok()} />
+            <Heading title="Last request" note="(est., bytes/3.7)" />
+            <Rows rows={compo()} />
           </box>
         )
       },
