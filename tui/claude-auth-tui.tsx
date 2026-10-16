@@ -119,7 +119,6 @@ import {
   sessionCalls,
   traffic,
   trafficRows,
-  type ToolCall,
 } from "../dist/tui/traffic.js"
 import { capturePath } from "../dist/introspect.js"
 import { readStore } from "../dist/tui/store.js"
