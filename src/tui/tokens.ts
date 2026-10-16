@@ -298,3 +298,89 @@ export function compositionRows(c: Composition): Row[] {
     })
   return rows
 }
+
+const BLOCKS = "▁▂▃▄▅▆▇█"
+
+/**
+ * A one-line chart. Longer series are averaged into `width` buckets so the newest
+ * values stay on the right; zero draws as the lowest block, so gaps still show.
+ */
+export function sparkline(values: number[], width = 24): string {
+  if (values.length === 0) return ""
+  const step = Math.max(1, values.length / width)
+  const buckets: number[] = []
+  for (let i = 0; i < values.length; i += step) {
+    const slice = values.slice(Math.floor(i), Math.floor(i + step))
+    buckets.push(slice.reduce((s, v) => s + v, 0) / slice.length)
+  }
+  const max = Math.max(...buckets)
+  if (max <= 0) return BLOCKS[0]!.repeat(buckets.length)
+  return buckets
+    .map(
+      (v) =>
+        BLOCKS[
+          Math.min(BLOCKS.length - 1, Math.floor((v / max) * BLOCKS.length))
+        ],
+    )
+    .join("")
+}
+
+/** Context size of each billed assistant turn, oldest first. */
+export function contextSeries(messages: ReadonlyArray<unknown>): number[] {
+  const out: number[] = []
+  for (const raw of messages) {
+    const m = raw as {
+      role?: string
+      tokens?: {
+        input?: number
+        output?: number
+        cache?: { read?: number; write?: number }
+      }
+    }
+    if (m?.role !== "assistant" || !m.tokens) continue
+    const ctx =
+      n(m.tokens.input) + n(m.tokens.cache?.read) + n(m.tokens.cache?.write)
+    if (ctx > 0) out.push(ctx)
+  }
+  return out
+}
+
+/** Tokens read per calendar day for the last `days` days, oldest first. */
+export function dailySeries(
+  rows: {
+    updated: number
+    input: number
+    cacheRead: number
+    cacheWrite: number
+  }[],
+  now: number,
+  days = 7,
+): number[] {
+  const out: number[] = Array.from({ length: days }, () => 0)
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  for (const r of rows) {
+    const ago = Math.floor(
+      (today.getTime() + 86_400_000 - 1 - r.updated) / 86_400_000,
+    )
+    if (ago >= 0 && ago < days)
+      out[days - 1 - ago]! += n(r.input) + n(r.cacheRead) + n(r.cacheWrite)
+  }
+  return out
+}
+
+export function chartRows(context: number[], daily: number[]): Row[] {
+  const rows: Row[] = []
+  if (context.length > 1)
+    rows.push({
+      label: "context",
+      value: `${sparkline(context)} ${si(context[context.length - 1]!)}`,
+      level: context[context.length - 1]! > 150_000 ? "warn" : "ok",
+    })
+  if (daily.some((v) => v > 0))
+    rows.push({
+      label: "7d read",
+      value: `${sparkline(daily, 7)} ${si(daily[daily.length - 1]!)} today`,
+    })
+  return rows
+}

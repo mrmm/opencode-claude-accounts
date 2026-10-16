@@ -129,3 +129,47 @@ describe("si", () => {
     assert.equal(si(12), "12")
   })
 })
+
+import { chartRows, contextSeries, dailySeries, sparkline } from "./tokens.ts"
+
+describe("charts", () => {
+  it("draws a sparkline, scaling to the max and bucketing long series", () => {
+    assert.equal(sparkline([0, 1, 2, 4]), "▁▃▅█")
+    assert.equal(sparkline([5, 5, 5, 5, 0, 0, 0, 0], 2), "█▁")
+    assert.equal(sparkline([0, 0]), "▁▁")
+    assert.equal(sparkline([]), "")
+  })
+
+  it("builds per-turn context and per-day reads", () => {
+    assert.deepEqual(
+      contextSeries([
+        { role: "user" },
+        turn(1, 10, 0, 1),
+        turn(0, 0, 0, 0),
+        turn(2, 20, 0, 1),
+      ]),
+      [11, 22],
+    )
+    const now = new Date(2026, 9, 16, 12).getTime()
+    const yesterday = new Date(2026, 9, 15, 23).getTime()
+    const d = dailySeries(
+      [
+        { updated: now, input: 1, cacheRead: 2, cacheWrite: 0 },
+        { updated: yesterday, input: 0, cacheRead: 5, cacheWrite: 0 },
+        {
+          updated: now - 30 * 86_400_000,
+          input: 99,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      ],
+      now,
+      3,
+    )
+    assert.deepEqual(d, [0, 5, 3])
+    assert.deepEqual(
+      chartRows([11, 22], d).map((r) => r.label),
+      ["context", "7d read"],
+    )
+  })
+})

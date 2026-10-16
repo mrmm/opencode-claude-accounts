@@ -108,6 +108,9 @@ import {
   sessionRows as tokenSessionRows,
   sessionTotals,
   si,
+  chartRows,
+  contextSeries,
+  dailySeries,
   type Row,
 } from "../dist/tui/tokens.js"
 import {
@@ -119,6 +122,7 @@ import {
   type ToolCall,
 } from "../dist/tui/traffic.js"
 import { capturePath } from "../dist/introspect.js"
+import { readStore } from "../dist/tui/store.js"
 import { spawnSync } from "node:child_process"
 import { scanSetup, type SetupScan } from "../dist/tui/setup.js"
 import { homedir } from "node:os"
@@ -384,6 +388,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   type Global = {
     totals?: ReturnType<typeof globalTotals>
     tools?: ReturnType<typeof traffic>
+    daily?: number[]
     error?: string
   }
   const readGlobal = async (): Promise<Global> => {
@@ -399,25 +404,19 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       }
       const db = new Database(dbPath, { readonly: true })
       try {
-        const rows = db
-          .query(
-            "select id, title, parent_id as parentId, tokens_input as input, tokens_output as output, " +
-              "tokens_cache_read as cacheRead, tokens_cache_write as cacheWrite, cost " +
-              "from session where time_updated > ?",
-          )
-          .all(Date.now() - 7 * 86_400_000) as Parameters<
-          typeof globalTotals
-        >[0]
-        // Every tool call OpenCode recorded: the traffic is already on disk.
-        const calls = db
-          .query(
-            "select json_extract(data,'$.tool') as tool, json_extract(data,'$.state.input.command') as command, " +
-              "length(json_extract(data,'$.state.output')) as outBytes " +
-              "from part where time_created > ? and json_extract(data,'$.type') = 'tool' " +
-              "and json_extract(data,'$.state.status') = 'completed'",
-          )
-          .all(Date.now() - 7 * 86_400_000) as ToolCall[]
-        return { totals: globalTotals(rows), tools: traffic(calls) }
+        // Every session and tool call OpenCode recorded: the traffic is already on disk.
+        const { sessions: rows, calls } = readStore(
+          (sql, since) => db.query(sql).all(since),
+          Date.now() - 7 * 86_400_000,
+        )
+        return {
+          totals: globalTotals(rows),
+          tools: traffic(calls),
+          daily: dailySeries(
+            rows as unknown as Parameters<typeof dailySeries>[0],
+            Date.now(),
+          ),
+        }
       } finally {
         db.close()
       }
@@ -521,6 +520,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     })
     return [
       { title: "Optimize", note: "(biggest first, /optimize)", rows: advice },
+      {
+        title: "Charts",
+        note: "(context per turn, reads per day)",
+        rows: chartRows(contextSeries(messages), g.daily ?? []),
+      },
       {
         title: "Tokens",
         note: "(this session)",
@@ -758,6 +762,36 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       </span>
     </text>
   )
+  // A clickable label. Mouse-up, not down: a press that drags off cancels, as in
+  // every other TUI button.
+  const Button = (props: { label: string; onClick: () => void }) => {
+    const [hover, setHover] = createSignal(false)
+    return (
+      <box
+        onMouseUp={() => props.onClick()}
+        onMouseOver={() => setHover(true)}
+        onMouseOut={() => setHover(false)}
+      >
+        <text fg={hover() ? api.theme.current.text : api.theme.current.info}>
+          [{props.label}]
+        </text>
+      </box>
+    )
+  }
+  // Everything the sidebar reads, now instead of on the next timer tick.
+  const refreshAll = () => {
+    scans.clear()
+    setPace(readForecast())
+    setCompo(readComposition())
+    void readGlobal().then((g) => {
+      setGlobalTok(g)
+      api.ui.toast({
+        variant: "success",
+        message: "Token stats refreshed",
+        duration: 2_000,
+      })
+    })
+  }
 
   api.slots.register({
     order: 200,
@@ -884,9 +918,24 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             <Heading title="Optimize" note="(top 3)" />
             <Rows rows={top()} />
             <Rows rows={usage()} />
-            <text fg={api.theme.current.textMuted}>
-              details + copy: /tokens
-            </text>
+            <Rows rows={sections()[1]!.rows} />
+            <box flexDirection="row" gap={1}>
+              <Button label="↻ refresh" onClick={refreshAll} />
+              <Button
+                label="details"
+                onClick={() => openDetails(props.session_id)}
+              />
+            </box>
+            <box flexDirection="row" gap={1}>
+              <Button
+                label="→ prompt"
+                onClick={() => toPrompt(reportText(props.session_id), "Report")}
+              />
+              <Button
+                label="fix plan"
+                onClick={() => sendOptimize(props.session_id)}
+              />
+            </box>
           </box>
         )
       },
