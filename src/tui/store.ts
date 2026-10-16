@@ -14,9 +14,12 @@ import type { ToolCall } from "./traffic.ts"
 
 export type StoreSession = SessionRow & { updated: number }
 
-const SESSION_COLS =
-  "select id, title, parent_id as parentId, tokens_input as input, tokens_output as output, " +
-  "tokens_cache_read as cacheRead, tokens_cache_write as cacheWrite, cost, time_updated as updated "
+// Sums the window's own turns. A session's stored totals cover its whole lifetime, so summing
+// those over-counted any long session, and a migrated session appears in both table sets.
+const turnCols = (prefix: string) =>
+  `sum(json_extract(m.data,'${prefix}.input')) as input, sum(json_extract(m.data,'${prefix}.output')) as output, ` +
+  `sum(json_extract(m.data,'${prefix}.cache.read')) as cacheRead, sum(json_extract(m.data,'${prefix}.cache.write')) as cacheWrite, ` +
+  "sum(json_extract(m.data,'$.cost')) as cost, max(m.time_created) as updated "
 
 export function readStore(
   all: (sql: string, since: number) => unknown[],
@@ -29,12 +32,20 @@ export function readStore(
       return []
     }
   }
-  const sessions = [
-    ...safe<StoreSession>(SESSION_COLS + "from session where time_updated > ?"),
-    ...safe<StoreSession>(
-      SESSION_COLS + "from session_v2 where time_updated > ?",
-    ),
-  ]
+  const v2 = safe<StoreSession>(
+    "select s.id, s.title, s.parent_id as parentId, " +
+      turnCols("$.tokens") +
+      "from session_message m join session_v2 s on s.id = m.session_id " +
+      "where m.type = 'assistant' and m.time_created > ? group by s.id",
+  )
+  const seen = new Set(v2.map((s) => s.id))
+  const v1 = safe<StoreSession>(
+    "select s.id, s.title, s.parent_id as parentId, " +
+      turnCols("$.tokens") +
+      "from message m join session s on s.id = m.session_id " +
+      "where json_extract(m.data,'$.role') = 'assistant' and m.time_created > ? group by s.id",
+  ).filter((s) => !seen.has(s.id))
+  const sessions = [...v1, ...v2]
   // shortcut: a full scan, ~1-2 s on a busy store; scan incrementally by rowid if the
   // pause on refresh is noticed.
   const calls = [

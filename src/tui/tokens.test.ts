@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  latestShapes,
+  workMixRows,
   composition,
   compositionRows,
   globalTotals,
@@ -171,5 +173,66 @@ describe("charts", () => {
       chartRows([11, 22], d).map((r) => r.label),
       ["context", "7d read"],
     )
+  })
+})
+
+describe("latestShapes", () => {
+  it("keeps each session's newest request and skips a cut first line", () => {
+    const shape = (sessionId: string, systemBytes: number) =>
+      JSON.stringify({
+        sessionId,
+        systemBytes,
+        toolBytes: 0,
+        messageBytes: 0,
+        system: [],
+        tools: [],
+      })
+    const got = latestShapes([
+      '{"cut',
+      shape("a", 1),
+      shape("b", 2),
+      shape("a", 3),
+    ])
+    assert.deepEqual([...got.keys()], ["a", "b"])
+    assert.equal(got.get("a")!.systemBytes, 3)
+  })
+})
+
+describe("workMixRows", () => {
+  it("shows money and quota, the policy's figure when it differs, and folds the tail", () => {
+    const rows = workMixRows(
+      {
+        cost_usd: 100,
+        quota_points: 10,
+        policy_cost_usd: 60,
+        policy_quota_points: 6,
+        rows: [
+          {
+            class: "edit",
+            steps: 5,
+            cost_usd: 50,
+            quota_points: 5,
+            policy_cost_usd: 50,
+            policy_quota_points: 5,
+          },
+          {
+            class: "explore",
+            steps: 9,
+            cost_usd: 40,
+            quota_points: 4,
+            policy_cost_usd: 8,
+            policy_quota_points: 0.8,
+          },
+          { class: "clarify", steps: 1, cost_usd: 10, quota_points: 1 },
+        ],
+      },
+      2,
+    )
+    assert.deepEqual(rows, [
+      { label: "total", value: "$100 · 10.0 pts → $60 · 6.0 pts" },
+      { label: "edit", value: "$50 · 5.0 pts" },
+      { label: "explore", value: "$40 · 4.0 pts → $8 · 0.8 pts" },
+      { label: "1 more", value: "$10 · 1.0 pts" },
+    ])
   })
 })

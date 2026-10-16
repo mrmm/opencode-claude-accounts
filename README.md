@@ -567,6 +567,17 @@ and messages, which separates the overhead paid on every request from the
 conversation. Token figures are shown as `~`, from four bytes each -- a rule of
 thumb that holds badly for code and JSON, which is most of a system prompt.
 
+The token view's "Last request" section shows the newest captured request of the
+session on screen, not of whichever session sent last. The 7-day totals sum the
+turns inside the window, so a long-running session counts only its recent turns.
+
+If `~/.local/share/opencode/work-report.json` exists, the token view adds a
+"Work mix" section: cost and weekly-quota points per kind of work (commit, edit,
+explore, …), and what the same steps would cost on the models a routing policy
+assigns. The plugin only displays that file; another tool writes it, as a JSON
+object with `cost_usd`, `quota_points`, optional `policy_cost_usd` /
+`policy_quota_points`, and `rows` of `{class, steps, cost_usd, quota_points, …}`.
+
 ### Writes
 
 Every screen writes the same way: surgically into the JSONC, via a temp file and

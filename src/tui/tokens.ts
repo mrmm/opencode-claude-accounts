@@ -164,6 +164,24 @@ export function toolGroup(name: string): string {
   return i > 0 ? bare.slice(0, i) : bare
 }
 
+/**
+ * The newest captured request of each session, from the capture file's tail. The
+ * file interleaves every session, so its last line is usually some other one's.
+ * The first line of a tail read is usually cut and is skipped by the parse.
+ */
+export function latestShapes(lines: string[]): Map<string, ShapeLike> {
+  const out = new Map<string, ShapeLike>()
+  for (const line of lines) {
+    try {
+      const shape = JSON.parse(line) as ShapeLike & { sessionId?: string }
+      if (shape.sessionId) out.set(shape.sessionId, shape)
+    } catch {
+      // a partial first line
+    }
+  }
+  return out
+}
+
 export function composition(shape: ShapeLike, topN = 3): Composition {
   const groups = new Map<string, { tokens: number; count: number }>()
   for (const t of shape.tools ?? []) {
@@ -383,4 +401,77 @@ export function chartRows(context: number[], daily: number[]): Row[] {
       value: `${sparkline(daily, 7)} ${si(daily[daily.length - 1]!)} today`,
     })
   return rows
+}
+
+/** One work type of an external work report (cost and weekly-quota points per kind of work). */
+export type WorkRow = {
+  class: string
+  steps: number
+  cost_usd: number
+  quota_points: number
+  policy_cost_usd?: number
+  policy_quota_points?: number
+}
+
+export type WorkReport = {
+  since?: string
+  cost_usd: number
+  quota_points: number
+  policy_cost_usd?: number
+  policy_quota_points?: number
+  rows: WorkRow[]
+}
+
+const money = (v: number) => `$${Math.round(v)}`
+const pts = (v: number) => `${v.toFixed(1)} pts`
+const both = (cost: number, quota: number) => `${money(cost)} · ${pts(quota)}`
+
+/**
+ * Rows for the "Work mix" section: what each kind of work cost in money and in
+ * weekly quota (1 pt = 1% of one account's weekly limit), and what it would cost
+ * on the routing policy's models. Biggest first; the rest folded into one row.
+ */
+export function workMixRows(r: WorkReport, top = 6): Row[] {
+  const after = (cost: number, quota: number, pc?: number, pq?: number) =>
+    pc === undefined || Math.round(pc) === Math.round(cost)
+      ? both(cost, quota)
+      : `${both(cost, quota)} → ${both(pc, pq ?? 0)}`
+  const rows = [...r.rows].sort((a, b) => b.cost_usd - a.cost_usd)
+  const out: Row[] = [
+    {
+      label: "total",
+      value: after(
+        r.cost_usd,
+        r.quota_points,
+        r.policy_cost_usd,
+        r.policy_quota_points,
+      ),
+    },
+  ]
+  for (const w of rows.slice(0, top)) {
+    out.push({
+      label: w.class,
+      value: after(
+        w.cost_usd,
+        w.quota_points,
+        w.policy_cost_usd,
+        w.policy_quota_points,
+      ),
+    })
+  }
+  const rest = rows.slice(top)
+  if (rest.length > 0) {
+    const sum = (f: (w: WorkRow) => number) =>
+      rest.reduce((s, w) => s + f(w), 0)
+    out.push({
+      label: `${rest.length} more`,
+      value: after(
+        sum((w) => w.cost_usd),
+        sum((w) => w.quota_points),
+        sum((w) => w.policy_cost_usd ?? w.cost_usd),
+        sum((w) => w.policy_quota_points ?? w.quota_points),
+      ),
+    })
+  }
+  return out
 }

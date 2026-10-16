@@ -102,6 +102,7 @@ import { BUILD } from "../dist/version.js"
 import { forecast, forecastLines } from "../dist/tui/forecast.js"
 import {
   composition,
+  latestShapes,
   compositionRows,
   globalRows,
   globalTotals,
@@ -112,6 +113,9 @@ import {
   contextSeries,
   dailySeries,
   type Row,
+  type ShapeLike,
+  type WorkReport,
+  workMixRows,
 } from "../dist/tui/tokens.js"
 import {
   hints,
@@ -125,7 +129,7 @@ import { readStore } from "../dist/tui/store.js"
 import { spawnSync } from "node:child_process"
 import { scanSetup, type SetupScan } from "../dist/tui/setup.js"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { debugReport } from "../dist/tui/debug.js"
 import { refreshQuotas, resetProbeBlocks } from "../dist/balance/quota.js"
 import {
@@ -429,7 +433,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   }
   // The newest captured request: the only place the prompt's composition exists. Read
   // from the file's tail so an 8 MB capture is not parsed every minute.
-  const readComposition = (): ReturnType<typeof composition> | string => {
+  const readComposition = (): Map<string, ShapeLike> | string => {
     if (
       (getConfig() as { captureRequests?: string }).captureRequests === "off" ||
       !(getConfig() as { captureRequests?: string }).captureRequests
@@ -443,9 +447,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         const len = Math.min(size, 2 * 1024 * 1024)
         const buf = Buffer.alloc(len)
         readSync(fd, buf, 0, len, size - len)
-        const lines = buf.toString("utf-8").trimEnd().split("\n")
-        const shape = JSON.parse(lines[lines.length - 1]!)
-        return composition(shape)
+        return latestShapes(buf.toString("utf-8").trimEnd().split("\n"))
       } finally {
         closeSync(fd)
       }
@@ -453,11 +455,25 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       return "no capture yet"
     }
   }
+  // A work report another tool wrote (cost and weekly quota per kind of work); absent = no section.
+  const workReportPath = () => join(dirname(capturePath()), "work-report.json")
+  const readWork = (): Row[] => {
+    try {
+      const r = JSON.parse(readFileSync(workReportPath(), "utf8")) as WorkReport
+      return Array.isArray(r.rows) ? workMixRows(r) : []
+    } catch {
+      return []
+    }
+  }
+  const [work, setWork] = createSignal(readWork())
   const [globalTok, setGlobalTok] = createSignal<Global>({})
   const [compo, setCompo] = createSignal(readComposition())
   // The 7-day scan reads every tool part (~1 s on a busy store), so it runs every 5 min;
   // the capture tail is cheap and follows the forecast's minute.
-  const refreshGlobal = () => void readGlobal().then(setGlobalTok)
+  const refreshGlobal = () => {
+    setWork(readWork())
+    void readGlobal().then(setGlobalTok)
+  }
   refreshGlobal()
   const globalTimer = setInterval(refreshGlobal, 5 * FORECAST_MS)
   const compoTimer = setInterval(() => setCompo(readComposition()), FORECAST_MS)
@@ -470,8 +486,17 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     if (g.error) return [{ label: "7 days", value: g.error, level: "warn" }]
     return g.totals ? globalRows(g.totals, "7 days") : []
   }
-  const compoRows = (): Row[] => {
+  // This session's newest request; another session's would describe the wrong prompt.
+  const compoOf = (id: string) => {
     const c = compo()
+    if (typeof c === "string") return c
+    const shape = c.get(id)
+    return shape
+      ? composition(shape)
+      : "no request from this session in the capture"
+  }
+  const compoRows = (id: string): Row[] => {
+    const c = compoOf(id)
     return typeof c === "string"
       ? [
           {
@@ -506,7 +531,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     const messages = api.state.session.messages(id)
     const totals = sessionTotals(messages)
     const calls = traffic(sessionCalls(messages, (m) => api.state.part(m)))
-    const c = compo()
+    const c = compoOf(id)
     const g = globalTok()
     const setup = setupOf(sessionDir(id))
     const advice = hints({
@@ -540,7 +565,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         note: "(7 days)",
         rows: g.tools ? trafficRows(g.tools, false) : [],
       },
-      { title: "Last request", note: "(est., bytes/3.7)", rows: compoRows() },
+      {
+        title: "Work mix",
+        note: "(cost · quota, → on routed models)",
+        rows: work(),
+      },
+      { title: "Last request", note: "(est., bytes/3.7)", rows: compoRows(id) },
     ]
   }
 
@@ -782,6 +812,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     scans.clear()
     setPace(readForecast())
     setCompo(readComposition())
+    setWork(readWork())
     void readGlobal().then((g) => {
       setGlobalTok(g)
       api.ui.toast({
