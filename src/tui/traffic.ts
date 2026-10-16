@@ -169,6 +169,8 @@ export type HintInput = {
   session?: SessionTotals
   global?: GlobalTotals
   files?: InstructionFile[]
+  /** Agents listed both globally and in the project; each costs Subagent schema. */
+  duplicateAgents?: string[]
 }
 
 /**
@@ -189,29 +191,48 @@ export function hints(h: HintInput, max = 5): Row[] {
     add(
       d.tokens * 10,
       "duplicate",
-      `${d.paths[0]!.split("/").slice(-2).join("/")} loaded twice: ~${si(d.tokens)}/turn`,
+      // Short for the sidebar; the full paths are in the /tokens report.
+      `${base(d.paths[0]!)} ×${d.paths.length}: ~${si(d.tokens)}/turn, keep one`,
     )
   const c = h.composition
   if (c) {
-    if (c.instructions > 30_000)
+    if (c.instructions > 30_000) {
+      // Name the biggest files; the duplicate already has its own hint.
+      const dup = new Set(
+        duplicateInstructions(h.files ?? []).flatMap((d) => d.paths.slice(1)),
+      )
+      const big = (h.files ?? [])
+        .filter((f) => !dup.has(f.path))
+        .sort((a, b) => b.bytes - a.bytes)
+        .slice(0, 2)
+        .map((f) => `${base(f.path)} ${si(tok(f.bytes))}`)
       add(
         c.instructions,
         "instructions",
-        `~${si(c.instructions)}/turn: dedupe AGENTS.md, move rules to skills`,
+        big.length
+          ? `~${si(c.instructions)}/turn, biggest: ${big.join(", ")}`
+          : `~${si(c.instructions)}/turn: see /tokens`,
       )
+    }
     if (c.injected > 15_000)
       add(
         c.injected,
         "injected",
         `~${si(c.injected)} of reminders re-sent each turn`,
       )
-    for (const g of c.toolGroups)
-      if (g.tokens > 2_500)
-        add(
-          g.tokens,
-          "schema",
-          `${g.group} ~${si(g.tokens)}/turn: disable or trim`,
-        )
+    for (const g of c.toolGroups) {
+      if (g.tokens <= 2_500) continue
+      const dups = g.group === "Subagent" ? (h.duplicateAgents ?? []) : []
+      add(
+        g.tokens,
+        "schema",
+        dups.length
+          ? `Subagent ~${si(g.tokens)}: ${dups.length} agents listed twice (${dups[0]}…)`
+          : g.count > 1
+            ? `${g.group} ~${si(g.tokens)}/turn, ${g.count} tools: disable if unused`
+            : `${g.group} ~${si(g.tokens)}/turn: long description`,
+      )
+    }
   }
   const s = h.session
   if (s && s.turns > 0) {
@@ -237,7 +258,9 @@ export function hints(h: HintInput, max = 5): Row[] {
     add(
       tr.carried,
       "re-reads",
-      `tool output re-read ~${si(tr.carried)}: compact sooner`,
+      s && s.lastContext > 0
+        ? `~${si(tr.carried)} re-read; context ${si(s.lastContext)}: compact below 150k`
+        : `tool output re-read ~${si(tr.carried)}: compact sooner`,
     )
   for (const t of tr?.top ?? []) {
     if (t.calls >= 3 && t.avg > 5_000)
@@ -269,7 +292,14 @@ export function hints(h: HintInput, max = 5): Row[] {
     .map((o) => o.row)
 }
 
-export type InstructionFile = { path: string; bytes: number; hash: string }
+export type InstructionFile = {
+  path: string
+  bytes: number
+  hash: string
+  kind?: string
+}
+
+const base = (p: string) => p.split("/").pop() ?? p
 
 /**
  * Instruction files whose content is loaded more than once. A global AGENTS.md that
@@ -306,6 +336,11 @@ export function optimizeReport(r: ReportInput): string {
   for (const d of duplicateInstructions(r.files))
     lines.push(
       `- DUPLICATE content, ~${si(d.tokens)} tok wasted per turn: ${d.paths.join(" == ")}`,
+    )
+  if (r.duplicateAgents?.length)
+    lines.push(
+      "",
+      `Agents defined both globally and in the project (each listed twice in the Subagent tool): ${r.duplicateAgents.join(", ")}`,
     )
   for (const s of r.sections) {
     lines.push("", `${s.title}:`)

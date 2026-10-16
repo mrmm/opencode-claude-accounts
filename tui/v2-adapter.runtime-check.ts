@@ -119,19 +119,51 @@ console.log("v2 adapter runtime check: ok")
 // command list actually invoked: a missing V1 member throws here, not in the TUI.
 const { default: plugin } = await import("./claude-auth-tui.tsx")
 const failures: string[] = []
+const toasts: string[] = []
 const slots: Array<(p: unknown) => unknown> = []
+const dispatched: string[] = []
+let dialogOptions: Array<{ title: string; value: unknown; category?: string }> =
+  []
+let pick: unknown
 let layer: any
+
+// A clipboard stand-in on PATH, so the check never overwrites the real clipboard.
+const {
+  mkdtempSync,
+  writeFileSync: write,
+  chmodSync,
+  readFileSync: readF,
+} = await import("node:fs")
+const { tmpdir } = await import("node:os")
+const bin = mkdtempSync(`${tmpdir()}/clip-`)
+for (const name of ["pbcopy", "wl-copy"]) {
+  write(`${bin}/${name}`, `#!/bin/sh\ncat > ${bin}/clipboard\n`)
+  chmodSync(`${bin}/${name}`, 0o755)
+}
+process.env.PATH = `${bin}:${process.env.PATH}`
+
 const full = {
   ...ctx,
   ui: {
     ...ctx.ui,
     toast: {
-      show: (t: { message: string; variant?: string }) =>
-        t.variant === "error" && failures.push(t.message),
+      show: (t: { message: string; variant?: string }) => {
+        toasts.push(t.message)
+        if (t.variant === "error") failures.push(t.message)
+      },
     },
     slot: (s: { render: (p: unknown) => unknown }) => slots.push(s.render),
+    dialog: {
+      select: async (o: { options: typeof dialogOptions }) => {
+        dialogOptions = o.options
+        return pick
+      },
+    },
   },
-  keymap: { layer: (f: () => unknown) => (layer = f()) },
+  keymap: {
+    layer: (f: () => unknown) => (layer = f()),
+    dispatch: (id: string) => dispatched.push(id),
+  },
 }
 plugin.setup(full as never)
 await new Promise((r) => setTimeout(r, 200))
@@ -154,8 +186,27 @@ await layer.commands.find((c: any) => c.slash?.name === "optimize").run()
 await new Promise((r) => setTimeout(r, 50))
 assert.equal(prompts.length, 2, "/optimize sent one prompt")
 assert.match((prompts[1] as { text: string }).text, /Token optimisation report/)
+// /tokens: the dialog lists actions and every report row; "paste" copies the full
+// report and fires the TUI's own paste command.
+const tokens = layer.commands.find((c: any) => c.slash?.name === "tokens")
+assert.ok(tokens, "/tokens registered")
+pick = "paste"
+await tokens.run()
+await new Promise((r) => setTimeout(r, 120))
+assert.deepEqual(
+  dialogOptions.slice(0, 3).map((o) => o.value),
+  ["paste", "copy", "optimize"],
+)
+assert.ok(
+  dialogOptions.some((o) => o.category?.startsWith("Optimize")),
+  "report rows listed",
+)
+assert.deepEqual(dispatched, ["prompt.paste"])
+assert.match(readF(`${bin}/clipboard`, "utf-8"), /Token optimisation report/)
+assert.deepEqual(failures, [])
+
 console.log(
-  `plugin setup through adapter: ok (${slots.length} slots, /optimize sent)`,
+  `plugin setup through adapter: ok (${slots.length} slots, /optimize sent, /tokens pastes ${dialogOptions.length} rows)`,
 )
 // The plugin keeps refresh timers running; nothing else to wait for.
 process.exit(0)

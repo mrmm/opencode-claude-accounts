@@ -276,6 +276,8 @@ function adapt(ctx: Context): TuiPluginApi {
       },
     },
     keymap: {
+      // Runs a built-in TUI command, e.g. "prompt.paste".
+      dispatch: (id: string, input?: string) => ctx.keymap.dispatch(id, input),
       registerLayer(input: {
         commands: Array<{
           name: string

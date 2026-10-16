@@ -107,6 +107,7 @@ import {
   globalTotals,
   sessionRows as tokenSessionRows,
   sessionTotals,
+  si,
   type Row,
 } from "../dist/tui/tokens.js"
 import {
@@ -115,14 +116,13 @@ import {
   sessionCalls,
   traffic,
   trafficRows,
-  type InstructionFile,
   type ToolCall,
 } from "../dist/tui/traffic.js"
 import { capturePath } from "../dist/introspect.js"
-import { createHash } from "node:crypto"
-import { existsSync, realpathSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { scanSetup, type SetupScan } from "../dist/tui/setup.js"
 import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { debugReport } from "../dist/tui/debug.js"
 import { refreshQuotas, resetProbeBlocks } from "../dist/balance/quota.js"
 import {
@@ -153,6 +153,17 @@ function read() {
     activeSource: mostRecentlyObserved(quota),
   }
 }
+
+// One sidebar section as plain text, for pasting into the prompt.
+const sectionText = (sec: { title: string; note?: string; rows: Row[] }) =>
+  [`${sec.title} ${sec.note ?? ""}`.trim() + ":"]
+    .concat(
+      sec.rows.map(
+        (r) =>
+          `- ${r.label.trim()}: ${r.value}${r.level && r.level !== "ok" ? ` [${r.level}]` : ""}`,
+      ),
+    )
+    .join("\n")
 
 const tui: TuiPlugin = async (api: TuiPluginApi) => {
   // refreshAccountsList(), not listAccounts(): the latter returns the list
@@ -474,47 +485,19 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       : compositionRows(c)
   }
 
-  // What OpenCode loads as instructions: the global AGENTS.md, then the nearest
-  // AGENTS.md (else CLAUDE.md) at each level from the session directory up to home.
-  // shortcut: mirrors OpenCode's lookup by hand and ignores `instructions` globs in
-  // opencode.json; read the resolved list from the server if that ever matters.
-  const instructionFiles = (directory: string): InstructionFile[] => {
-    const found: string[] = []
-    const global = join(
+  // What the setup loads (instruction files, duplicate agents), cached per directory:
+  // the sidebar re-renders constantly and these files change rarely.
+  const scans = new Map<string, { at: number; scan: SetupScan }>()
+  const setupOf = (directory: string): SetupScan => {
+    const hit = scans.get(directory)
+    if (hit && Date.now() - hit.at < FORECAST_MS) return hit.scan
+    const scan = scanSetup(
+      directory,
+      homedir(),
       process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
-      "opencode",
-      "AGENTS.md",
     )
-    if (existsSync(global)) found.push(global)
-    for (
-      let d = directory;
-      d && d !== dirname(d) && d !== homedir();
-      d = dirname(d)
-    ) {
-      const f = ["AGENTS.md", "CLAUDE.md"]
-        .map((n) => join(d, n))
-        .find((p) => existsSync(p))
-      if (f) found.push(f)
-    }
-    const out: InstructionFile[] = []
-    const seen = new Set<string>()
-    for (const f of found) {
-      try {
-        const real = realpathSync(f)
-        if (seen.has(real) && !f.startsWith(join(homedir(), ".config")))
-          continue
-        seen.add(real)
-        const text = readFileSync(f)
-        out.push({
-          path: f.replace(homedir(), "~"),
-          bytes: text.length,
-          hash: createHash("sha1").update(text).digest("hex"),
-        })
-      } catch {
-        /* unreadable file: OpenCode could not load it either */
-      }
-    }
-    return out
+    scans.set(directory, { at: Date.now(), scan })
+    return scan
   }
   const sessionDir = (id: string) =>
     api.state.session.get(id)?.directory ?? api.state.path.directory
@@ -527,12 +510,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     const calls = traffic(sessionCalls(messages, (m) => api.state.part(m)))
     const c = compo()
     const g = globalTok()
+    const setup = setupOf(sessionDir(id))
     const advice = hints({
       session: totals,
       traffic: calls,
       composition: typeof c === "string" ? undefined : c,
       global: g.totals,
-      files: instructionFiles(sessionDir(id)),
+      files: setup.files,
+      duplicateAgents: setup.duplicateAgents,
     })
     return [
       { title: "Optimize", note: "(biggest first, /optimize)", rows: advice },
@@ -554,6 +539,157 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
       { title: "Last request", note: "(est., bytes/3.7)", rows: compoRows() },
     ]
+  }
+
+  // The full report: what /optimize sends and what /tokens copies.
+  const reportText = (id: string) => {
+    const directory = sessionDir(id)
+    const setup = setupOf(directory)
+    return optimizeReport({
+      directory,
+      files: setup.files,
+      duplicateAgents: setup.duplicateAgents,
+      sections: report(id).map((sec) => ({
+        title: `${sec.title} ${sec.note ?? ""}`.trim(),
+        rows: sec.rows,
+      })),
+    })
+  }
+
+  // System clipboard, by platform. Returns false when no tool is available.
+  const copyText = (text: string): boolean => {
+    const tools: [string, string[]][] =
+      process.platform === "darwin"
+        ? [["pbcopy", []]]
+        : [
+            ["wl-copy", []],
+            ["xclip", ["-selection", "clipboard"]],
+            ["xsel", ["--clipboard", "--input"]],
+          ]
+    for (const [cmd, args] of tools) {
+      const r = spawnSync(cmd, args, {
+        input: text,
+        timeout: 3_000,
+        env: process.env,
+      })
+      if (r.status === 0) return true
+    }
+    return false
+  }
+  // Into the prompt box: copy, then the TUI's own paste command, so nothing is sent
+  // until you press enter. Without the command, the text stays on the clipboard.
+  const toPrompt = (text: string, what: string) => {
+    if (!copyText(text)) {
+      writeFileSync(
+        join(
+          homedir(),
+          ".local",
+          "share",
+          "opencode",
+          "claude-auth-optimize.md",
+        ),
+        text,
+      )
+      api.ui.toast({
+        variant: "warning",
+        message: `No clipboard tool; ${what} saved to ~/.local/share/opencode/claude-auth-optimize.md`,
+      })
+      return
+    }
+    const dispatch = (api.keymap as { dispatch?: (id: string) => void })
+      .dispatch
+    if (typeof dispatch === "function") {
+      // After the dialog has closed, or the paste lands in the dialog.
+      setTimeout(() => dispatch("prompt.paste"), 50)
+      api.ui.toast({
+        variant: "success",
+        message: `${what} pasted into the prompt`,
+      })
+    } else {
+      api.ui.toast({
+        variant: "success",
+        message: `${what} copied; paste with ctrl+v`,
+      })
+    }
+  }
+
+  // Sent as a normal user message: the agent answers with a plan, and the report says
+  // not to change anything before approval. If sending fails, the report lands in a file.
+  const sendOptimize = (sid: string) => {
+    const text = reportText(sid)
+    const fallback = (why: string) => {
+      const file = join(
+        homedir(),
+        ".local",
+        "share",
+        "opencode",
+        "claude-auth-optimize.md",
+      )
+      writeFileSync(file, text)
+      api.ui.toast({
+        variant: "warning",
+        message: `optimize: ${why}. Report saved to ${file.replace(homedir(), "~")}`,
+        duration: 10_000,
+      })
+    }
+    const send = api.client?.session?.promptAsync
+    if (typeof send !== "function") return fallback("no client in this TUI")
+    void api.client.session
+      .promptAsync({ sessionID: sid, parts: [{ type: "text", text }] })
+      .then((res) => {
+        if (res.error) fallback(String(JSON.stringify(res.error)).slice(0, 80))
+      })
+      .catch((e: unknown) =>
+        fallback(String((e as Error)?.message ?? e).slice(0, 80)),
+      )
+  }
+
+  const openDetails = (id: string) => {
+    const sections = report(id)
+    const options = [
+      {
+        title: "Paste full report into prompt",
+        value: "paste",
+        category: "Actions",
+      },
+      {
+        title: "Copy full report to clipboard",
+        value: "copy",
+        category: "Actions",
+      },
+      {
+        title: "Ask the agent for a fix plan (/optimize)",
+        value: "optimize",
+        category: "Actions",
+      },
+      ...sections.flatMap((sec, i) =>
+        sec.rows.map((r, j) => ({
+          title: r.label.trim(),
+          description: r.value,
+          value: `sec:${i}:${j}`,
+          category: `${sec.title} ${sec.note ?? ""}`.trim(),
+        })),
+      ),
+    ]
+    api.ui.dialog.replace(() => (
+      <api.ui.DialogSelect
+        title="Token usage · enter on a row pastes its section"
+        options={options}
+        onSelect={(row: { value: unknown }) => {
+          const v = String(row.value)
+          if (v === "paste") return toPrompt(reportText(id), "Report")
+          if (v === "copy")
+            return api.ui.toast(
+              copyText(reportText(id))
+                ? { variant: "success", message: "Report copied to clipboard" }
+                : { variant: "warning", message: "No clipboard tool found" },
+            )
+          if (v === "optimize") return void sendOptimize(id)
+          const sec = sections[Number(v.split(":")[1])]
+          if (sec) toPrompt(sectionText(sec), sec.title)
+        }}
+      />
+    ))
   }
 
   // New top-level session, any worktree: say what is worth fixing, without spending a
@@ -706,10 +842,17 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     order: 211,
     slots: {
       sidebar_content() {
+        // Only the two answers; pace and typical are in /tokens.
+        const windows = () =>
+          pace().filter((r) => r.label === "5h" || r.label === "week")
+        const now = () => pace().find((r) => r.label === "now")?.value
         return (
           <box>
-            <Heading title="Forecast" note="(at current pace)" />
-            <Rows rows={pace()} />
+            <Heading
+              title="Forecast"
+              note={now() ? `(now ${now()})` : undefined}
+            />
+            <Rows rows={windows()} />
           </box>
         )
       },
@@ -720,16 +863,30 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     order: 212,
     slots: {
       sidebar_content(_ctx, props: { session_id: string }) {
+        // Short on purpose: the top fixes and one line of usage. Everything else is
+        // in /tokens, which can paste it into the prompt.
+        const sections = () => report(props.session_id)
+        const top = () => sections()[0]!.rows.slice(0, 3)
+        const usage = (): Row[] => {
+          const t = sessionTotals(api.state.session.messages(props.session_id))
+          return t.turns === 0
+            ? []
+            : [
+                {
+                  label: "session",
+                  value: `${t.turns} turns · $${t.cost.toFixed(2)} · ctx ${si(t.lastContext)}`,
+                  level: t.lastContext > 150_000 ? "warn" : "ok",
+                },
+              ]
+        }
         return (
           <box>
-            <For each={report(props.session_id)}>
-              {(sec) => (
-                <box>
-                  <Heading title={sec.title} note={sec.note} />
-                  <Rows rows={sec.rows} />
-                </box>
-              )}
-            </For>
+            <Heading title="Optimize" note="(top 3)" />
+            <Rows rows={top()} />
+            <Rows rows={usage()} />
+            <text fg={api.theme.current.textMuted}>
+              details + copy: /tokens
+            </text>
           </box>
         )
       },
@@ -927,46 +1084,25 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             })
             return
           }
-          const directory = sessionDir(sid)
-          const sections = report(sid)
-          const text = optimizeReport({
-            directory,
-            files: instructionFiles(directory),
-            sections: sections.map((sec) => ({
-              title: `${sec.title} ${sec.note ?? ""}`.trim(),
-              rows: sec.rows,
-            })),
-          })
-          // Sent as a normal user message: the agent answers with a plan, and the
-          // report says not to change anything before approval.
-          // If sending fails, the report is still worth having: it lands in a file.
-          const fallback = (why: string) => {
-            const file = join(
-              homedir(),
-              ".local",
-              "share",
-              "opencode",
-              "claude-auth-optimize.md",
-            )
-            writeFileSync(file, text)
+          sendOptimize(sid)
+        },
+      },
+      {
+        name: "claude-auth.tokens",
+        title: "Token usage details",
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "tokens",
+        run() {
+          const sid = lastSessionId
+          if (!sid) {
             api.ui.toast({
               variant: "warning",
-              message: `optimize: ${why}. Report saved to ${file.replace(homedir(), "~")}`,
-              duration: 10_000,
+              message: "Open a session first, then run /tokens.",
             })
+            return
           }
-          const send = api.client?.session?.promptAsync
-          if (typeof send !== "function")
-            return fallback("no client in this TUI")
-          void api.client.session
-            .promptAsync({ sessionID: sid, parts: [{ type: "text", text }] })
-            .then((res) => {
-              if (res.error)
-                fallback(String(JSON.stringify(res.error)).slice(0, 80))
-            })
-            .catch((e: unknown) =>
-              fallback(String((e as Error)?.message ?? e).slice(0, 80)),
-            )
+          openDetails(sid)
         },
       },
       {
