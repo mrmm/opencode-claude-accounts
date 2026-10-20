@@ -384,7 +384,7 @@ export function formatChip(input: ChipInput): string {
     ? `⇄ ${input.selection.slice(PRESET.length)}`
     : input.selection === AUTO
       ? "⇄ auto"
-      : "⏻"
+      : "📌 pinned"
 
   return `${mode}${SEP}${name}${load}`
 }

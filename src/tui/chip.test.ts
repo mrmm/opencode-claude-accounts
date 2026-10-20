@@ -146,6 +146,7 @@ describe("formatChip", () => {
       !pinned.includes("⇄"),
       "a pin is not balancing and must not claim to be",
     )
+    assert.match(pinned, /pinned/, "a pin says so in words, not a glyph")
   })
 
   it("says so when no account is serving", () => {
