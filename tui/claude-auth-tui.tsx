@@ -823,6 +823,72 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     })
   }
 
+  // One picker for the palette command and for clicks on the chip or sidebar.
+  const openAccountPicker = () => {
+    // Notice an account added since start-up, the way the switcher does.
+    accounts = loadAccounts()
+    const current = snap()
+    const options = buildPickerOptions({
+      accounts: visible(),
+      presets: getConfig().presets,
+      quota: current.quota,
+      selection: current.selection,
+      resetFormat: getConfig().resetFormat,
+    })
+    // A per-session choice belongs beside the per-session account, not in
+    // the global settings screen. Offered only when there is a session to
+    // attach it to, and only when credits are globally allowed -- a row
+    // that cannot change the outcome is worse than an absent one.
+    const sid = lastSessionId
+    const canDecline = sid !== null && getConfig().useCredits
+    const CREDITS = "__credits_toggle__"
+    if (canDecline) {
+      const off = creditsDenied(sid)
+      options.push({
+        title: off
+          ? "Paid credits: declined for this session"
+          : "Paid credits: allowed for this session",
+        value: CREDITS,
+        description: off
+          ? "this session stops instead of spending once every allowance is gone"
+          : "this session may spend overflow once every allowance is gone",
+        category: "This session",
+      })
+    }
+    // `dialog` is a stack: `replace` pushes this dialog, `clear` closes
+    // it. There is no open()/close() pair.
+    api.ui.dialog.replace(() => (
+      <api.ui.DialogSelect
+        title="Claude account"
+        current={current.selection}
+        options={options}
+        onSelect={(option) => {
+          if (String(option.value) === CREDITS && sid) {
+            // Written to disk, not held in memory: the balancer runs in
+            // the server process and would never see a flag set here.
+            const off = creditsDenied(sid)
+            if (off) allowCredits(sid)
+            else denyCredits(sid)
+            api.ui.toast({
+              variant: "success",
+              title: "Paid credits",
+              message: off
+                ? "This session may spend overflow again."
+                : "This session will stop rather than spend overflow.",
+            })
+            api.ui.dialog.clear()
+            return
+          }
+          // The whole point: one file write. No authorize(), no auth.json
+          // rewrite, no provider rebuild. The next request routes to it.
+          saveAccountSource(String(option.value))
+          setSnap(read())
+          api.ui.dialog.clear()
+        }}
+      />
+    ))
+  }
+
   api.slots.register({
     order: 200,
     slots: {
@@ -831,9 +897,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         // even when the Keychain gives no labels; gating on labels is exactly
         // what made this render as nothing.
         return (
-          <text fg={api.theme.current.textMuted}>
-            {formatChip({ accounts: visible(), ...snap() })}
-          </text>
+          <box onMouseUp={openAccountPicker}>
+            <text fg={api.theme.current.textMuted}>
+              {formatChip({ accounts: visible(), ...snap() })}
+            </text>
+          </box>
         )
       },
     },
@@ -860,7 +928,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             ...snap(),
           })
         return (
-          <box>
+          <box onMouseUp={openAccountPicker}>
             <text fg={api.theme.current.text}>
               <b>Claude Auth</b>
               <span style={{ fg: api.theme.current.textMuted }}>
@@ -980,70 +1048,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         category: "Claude Auth",
         namespace: "palette",
         slashName: "cc-account",
-        run() {
-          // Notice an account added since start-up, the way the switcher does.
-          accounts = loadAccounts()
-          const current = snap()
-          const options = buildPickerOptions({
-            accounts: visible(),
-            presets: getConfig().presets,
-            quota: current.quota,
-            selection: current.selection,
-            resetFormat: getConfig().resetFormat,
-          })
-          // A per-session choice belongs beside the per-session account, not in
-          // the global settings screen. Offered only when there is a session to
-          // attach it to, and only when credits are globally allowed -- a row
-          // that cannot change the outcome is worse than an absent one.
-          const sid = lastSessionId
-          const canDecline = sid !== null && getConfig().useCredits
-          const CREDITS = "__credits_toggle__"
-          if (canDecline) {
-            const off = creditsDenied(sid)
-            options.push({
-              title: off
-                ? "Paid credits: declined for this session"
-                : "Paid credits: allowed for this session",
-              value: CREDITS,
-              description: off
-                ? "this session stops instead of spending once every allowance is gone"
-                : "this session may spend overflow once every allowance is gone",
-              category: "This session",
-            })
-          }
-          // `dialog` is a stack: `replace` pushes this dialog, `clear` closes
-          // it. There is no open()/close() pair.
-          api.ui.dialog.replace(() => (
-            <api.ui.DialogSelect
-              title="Claude account"
-              current={current.selection}
-              options={options}
-              onSelect={(option) => {
-                if (String(option.value) === CREDITS && sid) {
-                  // Written to disk, not held in memory: the balancer runs in
-                  // the server process and would never see a flag set here.
-                  const off = creditsDenied(sid)
-                  if (off) allowCredits(sid)
-                  else denyCredits(sid)
-                  api.ui.toast({
-                    variant: "success",
-                    title: "Paid credits",
-                    message: off
-                      ? "This session may spend overflow again."
-                      : "This session will stop rather than spend overflow.",
-                  })
-                  api.ui.dialog.clear()
-                  return
-                }
-                // The whole point: one file write. No authorize(), no auth.json
-                // rewrite, no provider rebuild. The next request routes to it.
-                saveAccountSource(String(option.value))
-                setSnap(read())
-                api.ui.dialog.clear()
-              }}
-            />
-          ))
-        },
+        run: () => openAccountPicker(),
       },
       {
         name: "claude-auth.debug",
