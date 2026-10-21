@@ -132,7 +132,13 @@ describe("si", () => {
   })
 })
 
-import { chartRows, contextSeries, dailySeries, sparkline } from "./tokens.ts"
+import {
+  chartRows,
+  contextSeries,
+  dailySeries,
+  lineChart,
+  sparkline,
+} from "./tokens.ts"
 
 describe("charts", () => {
   it("draws a sparkline, scaling to the max and bucketing long series", () => {
@@ -234,5 +240,25 @@ describe("workMixRows", () => {
       { label: "explore", value: "$40 · 4.0 pts → $8 · 0.8 pts" },
       { label: "1 more", value: "$10 · 1.0 pts" },
     ])
+  })
+})
+
+describe("lineChart", () => {
+  it("draws a rising line bottom-left to top-right, joined", () => {
+    const [top, mid, bottom] = lineChart([0, 1, 2, 3, 4, 5], 3, 3)
+    assert.equal(top!.length, 3)
+    assert.notEqual(bottom![0], "⠀")
+    assert.notEqual(top![2], "⠀")
+    assert.equal(top![0], "⠀")
+    // Every column has a dot somewhere: the line is continuous.
+    for (let c = 0; c < 3; c++)
+      assert.ok([top, mid, bottom].some((r) => r![c] !== "⠀"))
+  })
+
+  it("draws nothing for no data and a floor line for all zeros", () => {
+    assert.deepEqual(lineChart([]), [])
+    const rows = lineChart([0, 0, 0], 2, 2)
+    assert.equal(rows[0], "⠀⠀")
+    assert.equal(rows[1], "⣀⣀")
   })
 })

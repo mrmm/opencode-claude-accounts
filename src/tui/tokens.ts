@@ -317,6 +317,55 @@ export function compositionRows(c: Composition): Row[] {
   return rows
 }
 
+// Braille dot bits, [column][row from top]. U+2800 is the empty cell.
+const DOTS = [
+  [0x01, 0x02, 0x04, 0x40],
+  [0x08, 0x10, 0x20, 0x80],
+]
+
+/**
+ * A line chart `height` rows tall, top row first. Each braille cell holds a 2x4
+ * dot grid, so the line has twice the width and four times the height of a bar
+ * chart in the same space. Consecutive points are joined vertically so a steep
+ * move stays a line rather than two floating dots.
+ */
+export function lineChart(
+  values: number[],
+  width = 20,
+  height = 3,
+  /** Fixed top of the scale; defaults to the series' own max. */
+  scale?: number,
+): string[] {
+  const cols = width * 2
+  const rows = height * 4
+  if (values.length === 0) return []
+  const pts = Array.from({ length: cols }, (_, x) => {
+    const from = Math.floor((x * values.length) / cols)
+    const to = Math.max(from + 1, Math.floor(((x + 1) * values.length) / cols))
+    const slice = values.slice(from, to)
+    return slice.reduce((a, v) => a + v, 0) / slice.length
+  })
+  const max = scale ?? Math.max(...pts)
+  const ys = pts.map((v) =>
+    max > 0
+      ? Math.round((Math.min(Math.max(v, 0), max) / max) * (rows - 1))
+      : 0,
+  )
+  const grid = Array.from({ length: height }, () =>
+    Array.from({ length: width }, () => 0),
+  )
+  ys.forEach((y, x) => {
+    const prev = x > 0 ? ys[x - 1]! : y
+    for (let d = Math.min(y, prev); d <= Math.max(y, prev); d++) {
+      const r = rows - 1 - d
+      grid[Math.floor(r / 4)]![Math.floor(x / 2)]! |= DOTS[x % 2]![r % 4]!
+    }
+  })
+  return grid.map((line) =>
+    line.map((b) => String.fromCodePoint(0x2800 + b)).join(""),
+  )
+}
+
 const BLOCKS = "▁▂▃▄▅▆▇█"
 
 /**

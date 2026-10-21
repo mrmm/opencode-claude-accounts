@@ -163,14 +163,17 @@ describe("burn charts", () => {
     const rows = chartLines(f)
     assert.equal(rows[0]!.label, "burn -5h")
     assert.match(rows[0]!.value, /50%$/)
-    assert.equal(rows[1]!.label, "left +5h")
-    assert.equal(rows[1]!.level, "critical")
+    assert.equal(rows[1]!.label, "", "continuation rows keep the column")
+    assert.equal(rows[3]!.label, "left +5h")
+    assert.equal(rows[3]!.level, "critical")
   })
 
   it("shows a flat full pool when idle", () => {
     const quota = { a: { fiveHour: { utilization: 0, resetsAt: NOW + 3600 } } }
     const rows = chartLines(forecast([], quota as never, ["a"], NOW))
-    assert.match(rows[1]!.value, /^█+ 100%$/)
-    assert.equal(rows[1]!.level, "ok")
+    // A full, flat pool is a line along the top row and nothing below it.
+    assert.match(rows[3]!.value, /^[⠉]+ 100%$/)
+    assert.match(rows[5]!.value, /^⠀+$/)
+    assert.equal(rows[3]!.level, "ok")
   })
 })

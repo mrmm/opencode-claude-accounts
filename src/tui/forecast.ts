@@ -23,7 +23,7 @@
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
 import type { QuotaCache } from "../balance/index.ts"
-import { sparkline } from "./tokens.ts"
+import { lineChart } from "./tokens.ts"
 
 export type PaceSample = {
   account: string
@@ -64,6 +64,7 @@ const FIVE_H = 5 * HOUR
 const WEEK = 7 * 24 * HOUR
 const CHART_S = FIVE_H
 const CHART_BUCKETS = 20
+const CHART_ROWS = 3
 
 /** Sum of rises per account, counting only pairs that both fall in [from, to] ms. */
 export function consumed(
@@ -324,20 +325,37 @@ export function chartLines(
     value: string
     level: "ok" | "warn" | "critical"
   }[] = []
+  // The label and the figure sit on the chart's top row; the rows below carry
+  // an empty label so the sidebar's label column stays aligned.
+  const chart = (
+    label: string,
+    lines: string[],
+    figure: string,
+    level: "ok" | "warn" | "critical",
+  ) =>
+    lines.forEach((l, i) =>
+      rows.push({
+        label: i === 0 ? label : "",
+        value: i === 0 ? `${l} ${figure}` : l,
+        level,
+      }),
+    )
   const burned = f.history.reduce((a, v) => a + v, 0)
   if (f.history.length > 0)
-    rows.push({
-      label: "burn -5h",
-      value: `${sparkline(f.history, CHART_BUCKETS)} ${pct(burned)}`,
-      level: "ok",
-    })
+    chart(
+      "burn -5h",
+      lineChart(f.history, CHART_BUCKETS, CHART_ROWS),
+      pct(burned),
+      "ok",
+    )
   if (f.ahead.length > 0) {
     const end = f.ahead[f.ahead.length - 1]!
-    rows.push({
-      label: "left +5h",
-      value: `${sparkline(f.ahead, CHART_BUCKETS, Math.max(...f.ahead, 1))} ${pct(end)}`,
-      level: end <= 0 ? "critical" : end < 0.2 ? "warn" : "ok",
-    })
+    chart(
+      "left +5h",
+      lineChart(f.ahead, CHART_BUCKETS, CHART_ROWS, Math.max(...f.ahead, 1)),
+      pct(end),
+      end <= 0 ? "critical" : end < 0.2 ? "warn" : "ok",
+    )
   }
   return rows
 }
