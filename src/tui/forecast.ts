@@ -22,7 +22,7 @@
  *  - Utilisation is a fraction of ONE account's window, so a pool of two holds
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
-import { formatDuration, type QuotaCache } from "../balance/index.ts"
+import type { QuotaCache } from "../balance/index.ts"
 import { lineChart, type Row } from "./tokens.ts"
 
 export type PaceSample = {
@@ -417,11 +417,5 @@ export function chartLines(
       })),
     )
   }
-  for (const r of f.resets)
-    rows.push({
-      label: name(r.account).slice(0, 12),
-      value: `↻ ${clock(r.at)} in ${formatDuration(r.at - f.now)} · ${pct(r.used)}`,
-      level: r.used >= 0.95 ? "warn" : "ok",
-    })
   return rows
 }

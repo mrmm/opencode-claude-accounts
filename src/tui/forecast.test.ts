@@ -135,7 +135,7 @@ describe("forecast", () => {
 })
 
 describe("burn charts", () => {
-  it("marks each account's reset on the axis and counts it down", () => {
+  it("marks each account's reset on the axis", () => {
     const quota = {
       a: { fiveHour: { utilization: 0.4, resetsAt: NOW + 3600 } },
       b: { fiveHour: { utilization: 0.97, resetsAt: NOW + 4 * 3600 } },
@@ -152,10 +152,8 @@ describe("burn charts", () => {
     // 20 columns over 5h: 1h lands in column 4, 4h in column 16.
     assert.equal(axis.value[4], "2")
     assert.equal(axis.value[16], "3")
-    const a = rows.find((r) => r.label === "Team 2")!
-    assert.equal(a.value, "↻ HH:MM in 1h · 40%")
-    assert.equal(rows.find((r) => r.label === "Team 3")!.level, "warn")
-    assert.ok(rows.indexOf(a) < rows.findIndex((r) => r.label === "Team 3"))
+    // Countdowns live in the accounts block; the charts only mark the resets.
+    assert.ok(!rows.some((r) => r.value.includes("↻")))
   })
 
   it("books each rise to the bucket of the response that carried it", () => {
