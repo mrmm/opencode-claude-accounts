@@ -371,7 +371,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         readQuotaCache(),
         visible().map((a) => a.source),
       )
-      return forecastLines(f, (epoch: number) => resetClock(epoch))
+      return forecastLines(
+        f,
+        (epoch: number) => resetClock(epoch),
+        displayNames(),
+      )
     } catch {
       return []
     }

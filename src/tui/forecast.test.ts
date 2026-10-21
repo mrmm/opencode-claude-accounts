@@ -135,6 +135,27 @@ describe("forecast", () => {
 })
 
 describe("burn charts", () => {
+  it("marks each account's reset on the axis and counts it down", () => {
+    const quota = {
+      a: { fiveHour: { utilization: 0.4, resetsAt: NOW + 3600 } },
+      b: { fiveHour: { utilization: 0.97, resetsAt: NOW + 4 * 3600 } },
+    }
+    const names = new Map([
+      ["a", "Team 2"],
+      ["b", "Team 3"],
+    ])
+    const f = forecast([], quota as never, ["a", "b"], NOW)
+    const rows = chartLines(f, () => "HH:MM", names)
+    const axis = rows.find((r) => r.value.endsWith("+5h"))!
+    // 20 columns over 5h: 1h lands in column 4, 4h in column 16.
+    assert.equal(axis.value[4], "2")
+    assert.equal(axis.value[16], "3")
+    const a = rows.find((r) => r.label === "Team 2")!
+    assert.equal(a.value, "↻ HH:MM in 1h · 40%")
+    assert.equal(rows.find((r) => r.label === "Team 3")!.level, "warn")
+    assert.ok(rows.indexOf(a) < rows.findIndex((r) => r.label === "Team 3"))
+  })
+
   it("books each rise to the bucket of the response that carried it", () => {
     const s = [
       { account: "a", at: at(290), u5: 0.1 }, // baseline, no rise
@@ -164,16 +185,18 @@ describe("burn charts", () => {
     assert.equal(rows[0]!.label, "burn -5h")
     assert.match(rows[0]!.value, /50%$/)
     assert.equal(rows[1]!.label, "", "continuation rows keep the column")
-    assert.equal(rows[3]!.label, "left +5h")
-    assert.equal(rows[3]!.level, "critical")
+    assert.equal(rows[3]!.label, "", "axis under the burn chart")
+    assert.match(rows[3]!.value, /─ now$/)
+    assert.equal(rows[4]!.label, "left +5h")
+    assert.equal(rows[4]!.level, "critical")
   })
 
   it("shows a flat full pool when idle", () => {
     const quota = { a: { fiveHour: { utilization: 0, resetsAt: NOW + 3600 } } }
     const rows = chartLines(forecast([], quota as never, ["a"], NOW))
     // A full, flat pool is a line along the top row and nothing below it.
-    assert.match(rows[3]!.value, /^[⠉]+ 100%$/)
-    assert.match(rows[5]!.value, /^⠀+$/)
-    assert.equal(rows[3]!.level, "ok")
+    assert.match(rows[4]!.value, /^[⠉]+ 100%$/)
+    assert.match(rows[6]!.value, /^⠀+$/)
+    assert.equal(rows[4]!.level, "ok")
   })
 })

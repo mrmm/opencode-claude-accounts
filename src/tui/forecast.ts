@@ -22,7 +22,7 @@
  *  - Utilisation is a fraction of ONE account's window, so a pool of two holds
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
-import type { QuotaCache } from "../balance/index.ts"
+import { formatDuration, type QuotaCache } from "../balance/index.ts"
 import { lineChart } from "./tokens.ts"
 
 export type PaceSample = {
@@ -54,6 +54,10 @@ export type Forecast = {
   history: number[]
   /** Pool room left per simulation step over the next CHART_S at nowPace. */
   ahead: number[]
+  /** Unix seconds the forecast was taken at. */
+  now: number
+  /** Each account's next 5h reset, soonest first. */
+  resets: { account: string; at: number; used: number }[]
 }
 
 const HOUR = 3600
@@ -271,6 +275,14 @@ export function forecast(
     idle: nowPace === 0,
     history: burnHistory(own, nowMs, CHART_S * 1000, CHART_BUCKETS),
     ahead,
+    now,
+    resets: fiveSlots
+      .flatMap((x, i) =>
+        x.resetsAt === undefined || x.blocked
+          ? []
+          : [{ account: accounts[i]!, at: x.resetsAt, used: x.used }],
+      )
+      .sort((a, b) => a.at - b.at),
   }
 }
 
@@ -280,6 +292,7 @@ const pctH = (v: number) => `${Math.round(v * 100)}%/h`
 export function forecastLines(
   f: Forecast,
   clock: (epoch: number) => string,
+  names: Map<string, string> = new Map(),
 ): { label: string; value: string; level: "ok" | "warn" | "critical" }[] {
   const spike =
     f.spike !== undefined && f.spike >= 1.5 ? ` ↑${f.spike.toFixed(1)}×` : ""
@@ -306,7 +319,7 @@ export function forecastLines(
       ? { label: "5h", value: "idle — no forecast", level: "ok" }
       : line("5h", f.five),
     line("week", f.week),
-    ...chartLines(f),
+    ...chartLines(f, clock, names),
   ]
 }
 
@@ -319,6 +332,8 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
  */
 export function chartLines(
   f: Forecast,
+  clock: (epoch: number) => string = String,
+  names: Map<string, string> = new Map(),
 ): { label: string; value: string; level: "ok" | "warn" | "critical" }[] {
   const rows: {
     label: string
@@ -357,5 +372,30 @@ export function chartLines(
       end <= 0 ? "critical" : end < 0.2 ? "warn" : "ok",
     )
   }
+  // Time axes. Under the projection, each account's reset is marked where it
+  // lands by the account's number, so a jump in the line has a visible cause.
+  const name = (a: string) => names.get(a) ?? a
+  const mark = (a: string) =>
+    name(a).match(/\d(?!.*\d)/)?.[0] ?? name(a)[0] ?? "?"
+  if (f.history.length > 0)
+    rows.splice(CHART_ROWS, 0, {
+      label: "",
+      value: `${"─".repeat(CHART_BUCKETS)} now`,
+      level: "ok",
+    })
+  if (f.ahead.length > 0) {
+    const axis = Array.from({ length: CHART_BUCKETS }, () => "─")
+    for (const r of f.resets) {
+      const col = Math.floor(((r.at - f.now) / CHART_S) * CHART_BUCKETS)
+      if (col >= 0 && col < CHART_BUCKETS) axis[col] = mark(r.account)
+    }
+    rows.push({ label: "", value: `${axis.join("")} +5h`, level: "ok" })
+  }
+  for (const r of f.resets)
+    rows.push({
+      label: name(r.account).slice(0, 12),
+      value: `↻ ${clock(r.at)} in ${formatDuration(r.at - f.now)} · ${pct(r.used)}`,
+      level: r.used >= 0.95 ? "warn" : "ok",
+    })
   return rows
 }
