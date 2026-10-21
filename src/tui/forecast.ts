@@ -23,7 +23,7 @@
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
 import { formatDuration, type QuotaCache } from "../balance/index.ts"
-import { lineChart } from "./tokens.ts"
+import { lineChart, type Row } from "./tokens.ts"
 
 export type PaceSample = {
   account: string
@@ -293,7 +293,7 @@ export function forecastLines(
   f: Forecast,
   clock: (epoch: number) => string,
   names: Map<string, string> = new Map(),
-): { label: string; value: string; level: "ok" | "warn" | "critical" }[] {
+): Row[] {
   const spike =
     f.spike !== undefined && f.spike >= 1.5 ? ` ↑${f.spike.toFixed(1)}×` : ""
   const line = (label: string, w: WindowForecast) =>
@@ -325,71 +325,97 @@ export function forecastLines(
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
 
+/** `text` at `col` in a `width`-wide line, kept inside it. */
+function place(line: string[], col: number, text: string): void {
+  const at = Math.max(0, Math.min(line.length - text.length, col))
+  for (let i = 0; i < text.length; i++) line[at + i] = text[i]!
+}
+
 /**
- * Two sparklines on one scale story: what the last 5h burned, and how much of
- * the pool is left over the next 5h if the current pace holds. The second is
- * scaled to the pool's size, so a full bar means every account untouched.
+ * Two line charts with axes: what the last 5h burned (%/h of one account), and
+ * how much of the pool is left over the next 5h if the current pace holds (% of
+ * one account, so a pool of two tops out at 200%). The scale sits at the right
+ * of the top and bottom rows; clock times run under each chart, and under the
+ * projection each account's reset is marked by its number where it lands, so a
+ * jump in the line has a visible cause.
  */
 export function chartLines(
   f: Forecast,
   clock: (epoch: number) => string = String,
   names: Map<string, string> = new Map(),
-): { label: string; value: string; level: "ok" | "warn" | "critical" }[] {
-  const rows: {
-    label: string
-    value: string
-    level: "ok" | "warn" | "critical"
-  }[] = []
-  // The label and the figure sit on the chart's top row; the rows below carry
-  // an empty label so the sidebar's label column stays aligned.
-  const chart = (
-    label: string,
-    lines: string[],
-    figure: string,
-    level: "ok" | "warn" | "critical",
-  ) =>
-    lines.forEach((l, i) =>
-      rows.push({
-        label: i === 0 ? label : "",
-        value: i === 0 ? `${l} ${figure}` : l,
-        level,
-      }),
-    )
-  const burned = f.history.reduce((a, v) => a + v, 0)
-  if (f.history.length > 0)
-    chart(
-      "burn -5h",
-      lineChart(f.history, CHART_BUCKETS, CHART_ROWS),
-      pct(burned),
-      "ok",
-    )
-  if (f.ahead.length > 0) {
-    const end = f.ahead[f.ahead.length - 1]!
-    chart(
-      "left +5h",
-      lineChart(f.ahead, CHART_BUCKETS, CHART_ROWS, Math.max(...f.ahead, 1)),
-      pct(end),
-      end <= 0 ? "critical" : end < 0.2 ? "warn" : "ok",
-    )
-  }
-  // Time axes. Under the projection, each account's reset is marked where it
-  // lands by the account's number, so a jump in the line has a visible cause.
+): Row[] {
+  const rows: Row[] = []
+  const W = CHART_BUCKETS
   const name = (a: string) => names.get(a) ?? a
   const mark = (a: string) =>
     name(a).match(/\d(?!.*\d)/)?.[0] ?? name(a)[0] ?? "?"
-  if (f.history.length > 0)
-    rows.splice(CHART_ROWS, 0, {
+
+  const chart = (
+    labels: string[],
+    lines: string[],
+    top: string,
+    tone: Row["tone"],
+    level: Row["level"] = "ok",
+  ) =>
+    lines.forEach((l, i) =>
+      rows.push({
+        label: labels[i] ?? "",
+        value: i === 0 ? `${l} ${top}` : i === lines.length - 1 ? `${l} 0` : l,
+        level,
+        tone,
+      }),
+    )
+  // Three clock ticks: start, middle, end of the chart's span.
+  const ticks = (from: number, marks: { col: number; ch: string }[] = []) => {
+    const axis = Array.from({ length: W }, () => "─")
+    for (const m of marks) if (m.col >= 0 && m.col < W) axis[m.col] = m.ch
+    rows.push({
       label: "",
-      value: `${"─".repeat(CHART_BUCKETS)} now`,
+      value: `${axis.join("")}┘`,
       level: "ok",
+      tone: "axis",
     })
+    const times = Array.from({ length: W + 6 }, () => " ")
+    place(times, 0, clock(from))
+    place(times, Math.round(W / 2) - 2, clock(from + CHART_S / 2))
+    place(times, W - 2, clock(from + CHART_S))
+    rows.push({
+      label: "",
+      value: times.join("").trimEnd(),
+      level: "ok",
+      tone: "axis",
+    })
+  }
+
+  if (f.history.length > 0) {
+    const perHour = f.history.map((v) => (v * CHART_BUCKETS * HOUR) / CHART_S)
+    const top = Math.max(...perHour)
+    const burned = f.history.reduce((a, v) => a + v, 0)
+    chart(
+      ["burn %/h", `total ${pct(burned)}`],
+      lineChart(perHour, W, CHART_ROWS),
+      `${Math.round(top * 100)}`,
+      "burn",
+    )
+    ticks(f.now - CHART_S)
+  }
   if (f.ahead.length > 0) {
-    const axis = Array.from({ length: CHART_BUCKETS }, () => "─")
-    for (const r of f.resets) {
-      const col = Math.floor(((r.at - f.now) / CHART_S) * CHART_BUCKETS)
-      if (col >= 0 && col < CHART_BUCKETS) axis[col] = mark(r.account)
-    }
-    rows.push({ label: "", value: `${axis.join("")} +5h`, level: "ok" })
+    const end = f.ahead[f.ahead.length - 1]!
+    const top = Math.max(...f.ahead, 1)
+    chart(
+      ["left %", `at end ${pct(end)}`],
+      lineChart(f.ahead, W, CHART_ROWS, top),
+      `${Math.round(top * 100)}`,
+      "projection",
+      end <= 0 ? "critical" : end < 0.2 ? "warn" : "ok",
+    )
+    ticks(
+      f.now,
+      f.resets.map((r) => ({
+        col: Math.floor(((r.at - f.now) / CHART_S) * W),
+        ch: mark(r.account),
+      })),
+    )
   }
   for (const r of f.resets)
     rows.push({

@@ -146,7 +146,9 @@ describe("burn charts", () => {
     ])
     const f = forecast([], quota as never, ["a", "b"], NOW)
     const rows = chartLines(f, () => "HH:MM", names)
-    const axis = rows.find((r) => r.value.endsWith("+5h"))!
+    const axes = rows.filter((r) => r.value.endsWith("┘"))
+    assert.equal(axes.length, 2, "one axis under each chart")
+    const axis = axes[1]!
     // 20 columns over 5h: 1h lands in column 4, 4h in column 16.
     assert.equal(axis.value[4], "2")
     assert.equal(axis.value[16], "3")
@@ -182,21 +184,32 @@ describe("burn charts", () => {
     assert.ok(f.ahead[0]! < 0.5, "room shrinks from the first step")
     assert.equal(f.ahead[f.ahead.length - 1], 0)
     const rows = chartLines(f)
-    assert.equal(rows[0]!.label, "burn -5h")
-    assert.match(rows[0]!.value, /50%$/)
-    assert.equal(rows[1]!.label, "", "continuation rows keep the column")
-    assert.equal(rows[3]!.label, "", "axis under the burn chart")
-    assert.match(rows[3]!.value, /─ now$/)
-    assert.equal(rows[4]!.label, "left +5h")
-    assert.equal(rows[4]!.level, "critical")
+    // Burn: 50% in the last bucket of 15 minutes is 200%/h at the top of scale.
+    assert.equal(rows[0]!.label, "burn %/h")
+    assert.match(rows[0]!.value, / 200$/)
+    assert.equal(rows[1]!.label, "total 50%")
+    assert.match(rows[2]!.value, / 0$/, "scale floor on the bottom row")
+    assert.equal(rows[0]!.tone, "burn")
+    assert.match(rows[3]!.value, /^─+┘$/)
+    assert.equal(rows[3]!.tone, "axis")
+    assert.equal(rows[5]!.label, "left %")
+    assert.equal(rows[6]!.label, "at end 0%")
+    assert.equal(rows[5]!.level, "critical")
+    assert.equal(rows[5]!.tone, "projection")
   })
 
   it("shows a flat full pool when idle", () => {
     const quota = { a: { fiveHour: { utilization: 0, resetsAt: NOW + 3600 } } }
-    const rows = chartLines(forecast([], quota as never, ["a"], NOW))
+    const rows = chartLines(
+      forecast([], quota as never, ["a"], NOW),
+      (t) => `t${(t - NOW) / 3600}`,
+    )
     // A full, flat pool is a line along the top row and nothing below it.
-    assert.match(rows[4]!.value, /^[⠉]+ 100%$/)
-    assert.match(rows[6]!.value, /^⠀+$/)
-    assert.equal(rows[4]!.level, "ok")
+    assert.match(rows[5]!.value, /^[⠉]+ 100$/)
+    assert.match(rows[7]!.value, /^⠀+ 0$/)
+    assert.equal(rows[5]!.level, "ok")
+    // Clock ticks at the start, middle and end of each span.
+    assert.match(rows[4]!.value, /^t-5 +t-2.5 +t0$/)
+    assert.match(rows[9]!.value, /^t0 +t2.5 +t5$/)
   })
 })

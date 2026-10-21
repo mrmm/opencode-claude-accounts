@@ -778,7 +778,13 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               fg:
                 row.level && row.level !== "ok"
                   ? levelColour(row.level)
-                  : api.theme.current.text,
+                  : row.tone === "burn"
+                    ? api.theme.current.accent
+                    : row.tone === "projection"
+                      ? api.theme.current.primary
+                      : row.tone === "axis"
+                        ? api.theme.current.textMuted
+                        : api.theme.current.text,
             }}
           >
             {row.value}

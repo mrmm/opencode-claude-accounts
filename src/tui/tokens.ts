@@ -233,6 +233,8 @@ export type Row = {
   label: string
   value: string
   level?: "ok" | "warn" | "critical"
+  /** Colour role when level is ok: a chart's line, or its axis and scale. */
+  tone?: "burn" | "projection" | "axis"
 }
 
 /** Sidebar rows for the session on screen. */
