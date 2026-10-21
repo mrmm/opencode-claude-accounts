@@ -130,7 +130,18 @@ describe("forecast", () => {
     const lines = forecastLines(f, (e) => String(e - NOW))
     assert.equal(lines[0]!.value, "idle")
     assert.match(lines[2]!.value, /idle/)
-    assert.match(lines[3]!.value, /lasts past/)
+    assert.match(lines[3]!.value, /^✓ lasts >7d · past /)
+  })
+
+  it("says how long the pool lasts and when it runs out", () => {
+    const burst = [
+      { account: "a", at: at(29), u5: 0.0 },
+      { account: "a", at: at(1), u5: 1.0 }, // 200%/h
+    ]
+    const f = forecast(burst, quota, ["a", "b"], NOW)
+    const lines = forecastLines(f, (e) => `T${e - NOW}`)
+    assert.match(lines[2]!.value, /^✗ out in \d+m · ~T\d+$/)
+    assert.equal(lines[2]!.level, "critical", "under an hour left")
   })
 })
 

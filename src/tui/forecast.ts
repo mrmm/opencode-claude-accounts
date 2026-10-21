@@ -22,7 +22,7 @@
  *  - Utilisation is a fraction of ONE account's window, so a pool of two holds
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
-import type { QuotaCache } from "../balance/index.ts"
+import { formatDuration, type QuotaCache } from "../balance/index.ts"
 import { lineChart, type Row } from "./tokens.ts"
 
 export type PaceSample = {
@@ -245,12 +245,12 @@ export function forecast(
 
   const fiveSlots = slots("fiveHour", FIVE_H)
   const fiveHorizon = Math.max(
-    now + FIVE_H,
+    now + 24 * HOUR,
     ...fiveSlots.map((s) => s.resetsAt ?? 0),
   )
   const weekSlots = slots("sevenDay", WEEK)
   const weekHorizon = Math.max(
-    now + 24 * HOUR,
+    now + WEEK,
     ...weekSlots.map((s) => s.resetsAt ?? 0),
   )
 
@@ -296,17 +296,18 @@ export function forecastLines(
 ): Row[] {
   const spike =
     f.spike !== undefined && f.spike >= 1.5 ? ` ↑${f.spike.toFixed(1)}×` : ""
-  const line = (label: string, w: WindowForecast) =>
+  // How long the pool lasts at the window's pace, and the clock time it ends.
+  const line = (label: string, w: WindowForecast): Row =>
     w.runsOutAt === undefined
       ? {
           label,
-          value: `✓ lasts past ${clock(w.horizon)}`,
-          level: "ok" as const,
+          value: `✓ lasts >${formatDuration(w.horizon - f.now)} · past ${clock(w.horizon)}`,
+          level: "ok",
         }
       : {
           label,
-          value: `✗ runs out ~${clock(w.runsOutAt)}`,
-          level: "critical" as const,
+          value: `✗ out in ${formatDuration(w.runsOutAt - f.now)} · ~${clock(w.runsOutAt)}`,
+          level: w.runsOutAt - f.now < HOUR ? "critical" : "warn",
         }
   return [
     {
