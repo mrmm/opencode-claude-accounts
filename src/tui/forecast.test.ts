@@ -3,6 +3,8 @@ import { describe, it } from "node:test"
 
 import {
   activeHours,
+  burnHistory,
+  chartLines,
   consumed,
   forecast,
   forecastLines,
@@ -129,5 +131,46 @@ describe("forecast", () => {
     assert.equal(lines[0]!.value, "idle")
     assert.match(lines[2]!.value, /idle/)
     assert.match(lines[3]!.value, /lasts past/)
+  })
+})
+
+describe("burn charts", () => {
+  it("books each rise to the bucket of the response that carried it", () => {
+    const s = [
+      { account: "a", at: at(290), u5: 0.1 }, // baseline, no rise
+      { account: "a", at: at(200), u5: 0.3 }, // +0.2, straddles buckets
+      { account: "a", at: at(100), u5: 0.05 }, // reset, not use
+      { account: "a", at: at(5), u5: 0.25 }, // +0.2, last bucket
+    ]
+    const h = burnHistory(s, at(0), 300 * 60 * 1000, 10)
+    assert.equal(h.length, 10)
+    assert.equal(h[3]!.toFixed(2), "0.20")
+    assert.equal(h[9]!.toFixed(2), "0.20")
+    assert.equal(h.reduce((a, v) => a + v, 0).toFixed(2), "0.40")
+  })
+
+  it("projects the pool draining to zero and flags it", () => {
+    const quota = {
+      a: { fiveHour: { utilization: 0.5, resetsAt: NOW + 10 * 3600 } },
+    }
+    const samples = [
+      { account: "a", at: at(30), u5: 0.0 },
+      { account: "a", at: at(0), u5: 0.5 }, // 100%/h
+    ]
+    const f = forecast(samples, quota as never, ["a"], NOW)
+    assert.ok(f.ahead[0]! < 0.5, "room shrinks from the first step")
+    assert.equal(f.ahead[f.ahead.length - 1], 0)
+    const rows = chartLines(f)
+    assert.equal(rows[0]!.label, "burn -5h")
+    assert.match(rows[0]!.value, /50%$/)
+    assert.equal(rows[1]!.label, "left +5h")
+    assert.equal(rows[1]!.level, "critical")
+  })
+
+  it("shows a flat full pool when idle", () => {
+    const quota = { a: { fiveHour: { utilization: 0, resetsAt: NOW + 3600 } } }
+    const rows = chartLines(forecast([], quota as never, ["a"], NOW))
+    assert.match(rows[1]!.value, /^█+ 100%$/)
+    assert.equal(rows[1]!.level, "ok")
   })
 })

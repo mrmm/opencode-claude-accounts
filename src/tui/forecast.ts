@@ -23,6 +23,7 @@
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
 import type { QuotaCache } from "../balance/index.ts"
+import { sparkline } from "./tokens.ts"
 
 export type PaceSample = {
   account: string
@@ -49,6 +50,10 @@ export type Forecast = {
   five: WindowForecast
   week: WindowForecast
   idle: boolean
+  /** 5h-window burn per bucket over the last CHART_S, oldest first. */
+  history: number[]
+  /** Pool room left per simulation step over the next CHART_S at nowPace. */
+  ahead: number[]
 }
 
 const HOUR = 3600
@@ -57,6 +62,8 @@ const BUCKET_MS = 10 * 60 * 1000
 const STEP_S = 5 * 60
 const FIVE_H = 5 * HOUR
 const WEEK = 7 * 24 * HOUR
+const CHART_S = FIVE_H
+const CHART_BUCKETS = 20
 
 /** Sum of rises per account, counting only pairs that both fall in [from, to] ms. */
 export function consumed(
@@ -75,6 +82,34 @@ export function consumed(
     last.set(s.account, v)
   }
   return total
+}
+
+/**
+ * Burn per bucket over [toMs - spanMs, toMs]. Each rise is booked to the bucket
+ * of the response that carried it, so a rise straddling a boundary is not lost.
+ */
+export function burnHistory(
+  samples: PaceSample[],
+  toMs: number,
+  spanMs: number,
+  buckets: number,
+): number[] {
+  const out = Array.from({ length: buckets }, () => 0)
+  const fromMs = toMs - spanMs
+  const last = new Map<string, number>()
+  for (const s of [...samples].sort((a, b) => a.at - b.at)) {
+    const v = s.u5
+    if (typeof v !== "number" || s.at > toMs) continue
+    const prev = last.get(s.account)
+    last.set(s.account, v)
+    if (prev === undefined || v <= prev || s.at < fromMs) continue
+    const i = Math.min(
+      buckets - 1,
+      Math.floor(((s.at - fromMs) / spanMs) * buckets),
+    )
+    out[i]! += v - prev
+  }
+  return out
 }
 
 /** Hours with at least one request, in 10-minute buckets. */
@@ -107,8 +142,9 @@ export function simulate(
   pace: number,
   now: number,
   horizon: number,
+  trace?: (room: number) => void,
 ): number | undefined {
-  if (pace <= 0) return undefined
+  if (pace <= 0 && !trace) return undefined
   const s = slots.map((x) => ({ ...x }))
   let need = 0
   for (let t = now; t < horizon; t += STEP_S) {
@@ -127,6 +163,9 @@ export function simulate(
       x.used += take
       need -= take
     }
+    trace?.(
+      s.reduce((r, x) => r + (x.blocked ? 0 : Math.max(0, 1 - x.used)), 0),
+    )
     if (need > 1e-9) return t
   }
   return undefined
@@ -210,6 +249,10 @@ export function forecast(
     ...weekSlots.map((s) => s.resetsAt ?? 0),
   )
 
+  const ahead: number[] = []
+  simulate(fiveSlots, nowPace, now, now + CHART_S, (r) => ahead.push(r))
+  while (ahead.length < CHART_S / STEP_S) ahead.push(0)
+
   return {
     nowPace,
     typicalPace,
@@ -225,6 +268,8 @@ export function forecast(
       horizon: weekHorizon,
     },
     idle: nowPace === 0,
+    history: burnHistory(own, nowMs, CHART_S * 1000, CHART_BUCKETS),
+    ahead,
   }
 }
 
@@ -260,5 +305,39 @@ export function forecastLines(
       ? { label: "5h", value: "idle — no forecast", level: "ok" }
       : line("5h", f.five),
     line("week", f.week),
+    ...chartLines(f),
   ]
+}
+
+const pct = (v: number) => `${Math.round(v * 100)}%`
+
+/**
+ * Two sparklines on one scale story: what the last 5h burned, and how much of
+ * the pool is left over the next 5h if the current pace holds. The second is
+ * scaled to the pool's size, so a full bar means every account untouched.
+ */
+export function chartLines(
+  f: Forecast,
+): { label: string; value: string; level: "ok" | "warn" | "critical" }[] {
+  const rows: {
+    label: string
+    value: string
+    level: "ok" | "warn" | "critical"
+  }[] = []
+  const burned = f.history.reduce((a, v) => a + v, 0)
+  if (f.history.length > 0)
+    rows.push({
+      label: "burn -5h",
+      value: `${sparkline(f.history, CHART_BUCKETS)} ${pct(burned)}`,
+      level: "ok",
+    })
+  if (f.ahead.length > 0) {
+    const end = f.ahead[f.ahead.length - 1]!
+    rows.push({
+      label: "left +5h",
+      value: `${sparkline(f.ahead, CHART_BUCKETS, Math.max(...f.ahead, 1))} ${pct(end)}`,
+      level: end <= 0 ? "critical" : end < 0.2 ? "warn" : "ok",
+    })
+  }
+  return rows
 }

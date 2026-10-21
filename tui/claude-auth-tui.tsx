@@ -976,7 +976,9 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       sidebar_content() {
         // Only the two answers; pace and typical are in /tokens.
         const windows = () =>
-          pace().filter((r) => r.label === "5h" || r.label === "week")
+          pace().filter((r) =>
+            ["5h", "week", "burn -5h", "left +5h"].includes(r.label),
+          )
         const now = () => pace().find((r) => r.label === "now")?.value
         return (
           <box>

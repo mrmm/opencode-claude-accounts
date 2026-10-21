@@ -323,7 +323,12 @@ const BLOCKS = "▁▂▃▄▅▆▇█"
  * A one-line chart. Longer series are averaged into `width` buckets so the newest
  * values stay on the right; zero draws as the lowest block, so gaps still show.
  */
-export function sparkline(values: number[], width = 24): string {
+export function sparkline(
+  values: number[],
+  width = 24,
+  /** Fixed top of the scale; defaults to the series' own max. */
+  scale?: number,
+): string {
   if (values.length === 0) return ""
   const step = Math.max(1, values.length / width)
   const buckets: number[] = []
@@ -331,7 +336,7 @@ export function sparkline(values: number[], width = 24): string {
     const slice = values.slice(Math.floor(i), Math.floor(i + step))
     buckets.push(slice.reduce((s, v) => s + v, 0) / slice.length)
   }
-  const max = Math.max(...buckets)
+  const max = scale ?? Math.max(...buckets)
   if (max <= 0) return BLOCKS[0]!.repeat(buckets.length)
   return buckets
     .map(
