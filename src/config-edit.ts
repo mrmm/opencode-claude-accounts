@@ -154,6 +154,13 @@ export const EDITABLE: Editable[] = [
     hint: "soft lets a session reach reserved quota; hard never does",
   },
   {
+    key: "agentReserve",
+    label: "Agent may use reserved quota",
+    section: "Balancing",
+    kind: "boolean",
+    hint: "let the claude_auth_reserve tool turn the override on; off = operator only",
+  },
+  {
     key: "cacheTtl",
     label: "Cache TTL",
     section: "Balancing",

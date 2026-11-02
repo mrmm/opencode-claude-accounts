@@ -27,6 +27,7 @@ import { log } from "../logger.ts"
 import {
   type CredentialState,
   type Decision,
+  assess,
   clearEjection,
   eject,
   recoveryTimes,
@@ -520,6 +521,42 @@ export function noteSuccess(source: string | null): void {
 }
 
 /**
+ * Whether anything in the current selection can serve, and which account is
+ * back first when nothing can. Shared by the 429 rewrite and the sidebar, so
+ * the two never disagree. Never throws.
+ */
+export function selectionRecovery(nowMs: number = Date.now()): {
+  anyUsable: boolean
+  next?: { name: string; at: number }
+} {
+  try {
+    const { cfg } = resolveActiveConfig(
+      getConfig(),
+      loadPersistedAccountSource(),
+    )
+    const all = listAccounts().map((a) => ({
+      source: a.source,
+      label: a.label,
+      credential: credentialState(a, nowMs),
+    }))
+    const inPool = new Set(resolvePools(all, cfg).flatMap((p) => p.accounts))
+    const members = all.filter((m) => inPool.has(m.source))
+    const cache = readQuotaCache()
+    const anyUsable = assess(members, cache, cfg, nowMs).some((h) => h.healthy)
+    const first = recoveryTimes(members, cache, cfg, nowMs)[0]
+    if (!first) return { anyUsable }
+    const id = accountKey(first.source)
+    const name =
+      cfg.accountIds[id]?.name ??
+      members.find((m) => m.source === first.source)?.label ??
+      id
+    return { anyUsable, next: { name, at: first.at } }
+  } catch {
+    return { anyUsable: true }
+  }
+}
+
+/**
  * The retry to hand OpenCode when the request was refused on every account it
  * could try: the selection's next account back, and when. Never throws.
  */
@@ -533,32 +570,10 @@ export function spentRetryNow(
       minute: "2-digit",
       hour12: false,
     })
-  try {
-    const { cfg } = resolveActiveConfig(
-      getConfig(),
-      loadPersistedAccountSource(),
-    )
-    const all = listAccounts().map((a) => ({
-      source: a.source,
-      label: a.label,
-      credential: credentialState(a),
-    }))
-    const inPool = new Set(resolvePools(all, cfg).flatMap((p) => p.accounts))
-    const members = all.filter((m) => inPool.has(m.source))
-    const first = recoveryTimes(members, readQuotaCache(), cfg, nowMs)[0]
-    const id = first ? accountKey(first.source) : undefined
-    const name = first
-      ? (cfg.accountIds[id!]?.name ??
-        members.find((m) => m.source === first.source)?.label ??
-        id!)
-      : undefined
-    return spentRetry(
-      first ? { name: name!, at: first.at } : undefined,
-      nowMs,
-      clock,
-      serverRetryAfterS,
-    )
-  } catch {
-    return spentRetry(undefined, nowMs, clock, serverRetryAfterS)
-  }
+  return spentRetry(
+    selectionRecovery(nowMs).next,
+    nowMs,
+    clock,
+    serverRetryAfterS,
+  )
 }

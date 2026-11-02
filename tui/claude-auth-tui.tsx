@@ -48,7 +48,17 @@ import {
   expandGroupRefs,
   liveIdToSource,
   resolveRef,
+  selectionRecovery,
 } from "../dist/balance/index.js"
+import { spentBanner } from "../dist/tui/spent.js"
+import {
+  createGroup,
+  deleteGroup,
+  groupLabel,
+  presetsUsingGroup,
+  renameGroup,
+  toggleGroupMember,
+} from "../dist/tui/groups-edit.js"
 import {
   addPool,
   indentJson,
@@ -1244,6 +1254,21 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               weeklyWarnAt: getConfig().quotaWeeklyWarnAt,
             },
           })
+        // Read with the quota snapshot so it refreshes when the readings do.
+        const spent = () => {
+          void snap()
+          const r = selectionRecovery()
+          return spentBanner({
+            ...r,
+            nowMs: Date.now(),
+            clock: (ms: number) =>
+              new Date(ms).toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              }),
+          })
+        }
         const rowBySource = () =>
           new Map(visible().map((a, i) => [a.source, view().rows[i]!]))
         type SidebarRow = ReturnType<typeof view>["rows"][number]
@@ -1291,6 +1316,9 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 ({view().heading})
               </span>
             </text>
+            <Show when={spent()}>
+              <text fg={api.theme.current.error}>{spent()}</text>
+            </Show>
             <Show when={!isFolded("accounts")}>
               <Show
                 when={sections().length > 0}
@@ -1836,6 +1864,18 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                       "ask every account for its usage, ignoring the freshness gate",
                     category: "Accounts",
                   },
+                  ...Object.entries(cfg.groups).map(([id, g]) => ({
+                    title: `${groupLabel(id, g)} (${g.accounts.length})`,
+                    value: `g:${id}`,
+                    description: `group id ${id}`,
+                    category: "Groups",
+                  })),
+                  {
+                    title: "New group",
+                    value: "__newgroup__",
+                    description: "a name; accounts are added next",
+                    category: "Groups",
+                  },
                   ...presetRows(cfg.presets, selectionOf()),
                   {
                     title: "New preset",
@@ -1883,6 +1923,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     })
                     menu()
                   } else if (v === "__new__") newPreset()
+                  else if (v === "__newgroup__") newGroup()
+                  else if (v.startsWith("g:")) openGroup(v.slice(2))
                   else openPreset(v)
                 }}
               />
@@ -2226,6 +2268,136 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 escapeTo(openAccounts),
               )
             prompt(current)
+          }
+
+          // Groups: keyed by a stable id, so renaming touches only the label
+          // and every preset routing to the id keeps working.
+          const saveGroups = (next: Record<string, unknown>, note: string) =>
+            writeKey("groups", indentJson(next, 2), note)
+
+          const newGroup = () =>
+            askText(
+              "Name for the new group",
+              "",
+              (value) => {
+                const made = createGroup(getConfig().groups, value)
+                if ("error" in made) {
+                  api.ui.toast({
+                    variant: "error",
+                    title: "Group",
+                    message: made.error,
+                  })
+                  return menu()
+                }
+                saveGroups(
+                  made.groups,
+                  `Group "${value.trim()}" created (id ${made.id}).`,
+                )
+                openGroup(made.id)
+              },
+              menu,
+              "Main",
+            )
+
+          const openGroup = (id: string) => {
+            const cfg = getConfig()
+            const g = cfg.groups[id]
+            if (!g) return menu()
+            const inGroup = new Set(
+              g.accounts.flatMap((r) => {
+                const s = refToSource(r)
+                return s ? [s] : []
+              }),
+            )
+            const names = displayNames()
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title={`Group ${groupLabel(id, g)} (id ${id})`}
+                  options={[
+                    backRow("accounts"),
+                    ...accounts.map((a) => ({
+                      title: `${inGroup.has(a.source) ? "[x]" : "[ ]"} ${names.get(a.source) ?? a.source}`,
+                      value: `m:${a.source}`,
+                      description: accountKey(a.source),
+                      category: "Members",
+                    })),
+                    {
+                      title: "Rename",
+                      value: "__rename__",
+                      description: "changes the shown name; the id stays",
+                      category: "Group",
+                    },
+                    {
+                      title: "Delete",
+                      value: "__delete__",
+                      description: "presets naming it lose those accounts",
+                      category: "Group",
+                    },
+                  ]}
+                  onSelect={(row) => {
+                    const v = String(row.value)
+                    if (v === BACK) return menu()
+                    if (v.startsWith("m:")) {
+                      saveGroups(
+                        toggleGroupMember(
+                          getConfig().groups,
+                          id,
+                          v.slice(2),
+                          refToSource,
+                          accountKey,
+                        ),
+                        "Group updated.",
+                      )
+                      return openGroup(id)
+                    }
+                    if (v === "__rename__")
+                      return askText(
+                        "New name for the group",
+                        groupLabel(id, g),
+                        (value) => {
+                          const next = renameGroup(
+                            getConfig().groups,
+                            id,
+                            value,
+                          )
+                          if ("error" in next)
+                            api.ui.toast({
+                              variant: "error",
+                              title: "Group",
+                              message: next.error,
+                            })
+                          else
+                            saveGroups(
+                              next.groups,
+                              `Renamed to "${value.trim()}".`,
+                            )
+                          openGroup(id)
+                        },
+                        () => openGroup(id),
+                      )
+                    if (v === "__delete__") {
+                      const used = presetsUsingGroup(getConfig().presets, id)
+                      return confirmThen(
+                        `Delete group ${groupLabel(id, g)}?`,
+                        used.length
+                          ? `Presets ${used.join(", ")} name it and would lose its accounts.`
+                          : "No preset names it.",
+                        () => {
+                          saveGroups(
+                            deleteGroup(getConfig().groups, id),
+                            "Group deleted.",
+                          )
+                          menu()
+                        },
+                        () => openGroup(id),
+                      )
+                    }
+                  }}
+                />
+              ),
+              escapeTo(menu),
+            )
           }
 
           const savePresets = (next: Record<string, unknown>, note: string) =>
