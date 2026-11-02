@@ -2327,7 +2327,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             const pool = poolsOf(preset)[index]
             if (!pool) return openTiers(name, preset)
             const names = displayNames()
-            const { sources } = refsMembership(pool.accounts ?? [], accounts)
+            const { sources } = refsMembership(
+              pool.accounts ?? [],
+              accounts,
+              getConfig().groups,
+            )
 
             const save = (
               next: Record<string, unknown> | null,
@@ -2491,6 +2495,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             const { sources: inSet, unresolved } = presetMembership(
               preset,
               accounts,
+              getConfig().groups,
             )
             const names = displayNames()
             api.ui.dialog.replace(() => (
@@ -2555,6 +2560,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                       preset,
                       v.slice(2),
                       accounts.map((x) => ({ ...x, id: accountKey(x.source) })),
+                      getConfig().groups,
                     )
                     if (!next) {
                       api.ui.toast({

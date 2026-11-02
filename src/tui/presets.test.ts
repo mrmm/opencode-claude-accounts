@@ -442,3 +442,23 @@ describe("tiered presets", () => {
     assert.match(rows[0]!.description, /2 tiers, 3 accounts/)
   })
 })
+
+// Regression: a group name in a preset was listed as unresolved and its
+// members showed unticked, although routing expanded it.
+describe("presets with group references", () => {
+  const groups = { Main: { accounts: ["s1", "s2"] } }
+  it("counts group members as in the preset, not unresolved", () => {
+    const m = presetMembership({ accounts: ["Main", "s3"] }, MEMBERS, groups)
+    assert.deepEqual([...m.sources].sort(), ["s1", "s2", "s3"])
+    assert.deepEqual(m.unresolved, [])
+  })
+  it("removing one member replaces the group with the rest, in place", () => {
+    const p = togglePresetAccount(
+      { accounts: ["Main", "s3"] },
+      "s1",
+      MEMBERS,
+      groups,
+    )
+    assert.deepEqual(p?.accounts, ["s2", "s3"])
+  })
+})

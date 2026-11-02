@@ -112,14 +112,27 @@ export type Member = { source: string; label?: string; id?: string }
  * account, or matches two and is therefore refused, makes the preset quietly
  * smaller than it reads. That is worth showing.
  */
+export type Groups = Readonly<Record<string, { accounts: string[] }>>
+
 export function refsMembership(
   refs: readonly string[],
   members: readonly Member[],
+  groups: Groups = {},
 ): { sources: Set<string>; refFor: Map<string, string>; unresolved: string[] } {
   const sources = new Set<string>()
   const refFor = new Map<string, string>()
   const unresolved: string[] = []
   for (const ref of refs) {
+    // A group name is a reference to its members, not an account that is gone.
+    if (Object.hasOwn(groups, ref)) {
+      for (const inner of groups[ref]!.accounts) {
+        const s = resolveRef(inner, members)
+        if (!s) continue
+        sources.add(s)
+        if (!refFor.has(s)) refFor.set(s, ref)
+      }
+      continue
+    }
     const source = resolveRef(ref, members)
     if (!source) {
       unresolved.push(ref)
@@ -134,8 +147,9 @@ export function refsMembership(
 export function presetMembership(
   preset: Preset,
   members: readonly Member[],
+  groups: Groups = {},
 ): { sources: Set<string>; refFor: Map<string, string>; unresolved: string[] } {
-  return refsMembership(preset.accounts ?? [], members)
+  return refsMembership(preset.accounts ?? [], members, groups)
 }
 
 /**
@@ -152,14 +166,26 @@ export function togglePresetAccount(
   preset: Preset,
   source: string,
   members: readonly Member[],
+  groups: Groups = {},
 ): Preset | null {
-  const { sources, refFor } = presetMembership(preset, members)
+  const { sources, refFor } = presetMembership(preset, members, groups)
   const current = preset.accounts ?? []
 
   if (sources.has(source)) {
     if (sources.size === 1) return null
     // Drop the reference that resolved to it, whatever spelling it used.
     const ref = refFor.get(source)
+    // Removing one member of a group: the group is replaced by the members
+    // that stay, in place, since a group cannot express "all but one".
+    if (ref !== undefined && Object.hasOwn(groups, ref)) {
+      const rest = groups[ref]!.accounts.filter(
+        (r) => resolveRef(r, members) !== source,
+      )
+      return {
+        ...preset,
+        accounts: current.flatMap((r) => (r === ref ? rest : [r])),
+      }
+    }
     return { ...preset, accounts: current.filter((r) => r !== ref) }
   }
   return { ...preset, accounts: [...current, refOf(source, members)] }
