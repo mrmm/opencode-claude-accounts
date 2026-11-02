@@ -8,6 +8,13 @@
  * thin glue between those decisions and the SDK.
  */
 
+import {
+  MISS_CAUSE_LABEL,
+  topCause,
+  type CacheBreakdown,
+  type CacheSummary,
+} from "../balance/cache-stats.ts"
+
 export type SelectionKind =
   | { kind: "none" }
   | { kind: "auto" }
@@ -61,4 +68,43 @@ export function reserveRefusal(
 ): string | undefined {
   if (state === "off" || agentReserve) return undefined
   return "Refused: spending reserved quota needs the operator. Turn it on from the TUI (This session > Use reserved quota), or set agentReserve: true in the config to let the agent do it."
+}
+
+/**
+ * Per-account cache lines for claude_auth_status, in `order` (account ids as
+ * configured), then any account seen in the log but not configured.
+ */
+export function cacheAccountLines(
+  b: CacheBreakdown,
+  order: readonly string[],
+  name: (id: string) => string = (id) => id,
+): string[] {
+  const rank = (id: string) => {
+    const i = order.indexOf(id)
+    return i === -1 ? order.length : i
+  }
+  return [...b.accounts]
+    .sort((x, y) => rank(x.account) - rank(y.account))
+    .map(
+      (a) =>
+        `  ${a.account.padEnd(16)} ${name(a.account).padEnd(24)} ${cacheLine(a)}`,
+    )
+}
+
+/** The `n` sessions with the most misses, by the last 8 characters of their id. */
+export function cacheSessionLines(b: CacheBreakdown, n = 3): string[] {
+  return b.sessions
+    .filter((s) => s.misses > 0)
+    .slice(0, n)
+    .map((s) => `  …${s.session.slice(-8).padEnd(9)} ${cacheLine(s)}`)
+}
+
+/** `92% reused · input cost 81% lower · 120 req · 4 misses, mostly account switch` */
+export function cacheLine(s: CacheSummary): string {
+  const cause = topCause(s)
+  const misses =
+    s.misses === 0
+      ? "no misses"
+      : `${s.misses} miss${s.misses === 1 ? "" : "es"}${cause ? `, mostly ${MISS_CAUSE_LABEL[cause]}` : ""}`
+  return `${Math.round(s.hitRate * 100)}% reused · input cost ${Math.round(s.saved * 100)}% lower · ${s.requests} req · ${misses}`
 }

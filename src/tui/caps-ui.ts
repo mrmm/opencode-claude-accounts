@@ -12,12 +12,14 @@
  * ceiling bar and the cache view be tested without the picker's machinery.
  */
 import type {
+  CacheBreakdown,
   CacheImpact,
   CacheRow,
   CacheStats,
+  CacheSummary,
   MissCause,
 } from "../balance/index.ts"
-import { cacheStats } from "../balance/index.ts"
+import { MISS_CAUSE_LABEL } from "../balance/index.ts"
 import { SEP } from "./chip.ts"
 import { si, type Row } from "./tokens.ts"
 
@@ -217,93 +219,108 @@ export function toCacheRows(
     })
 }
 
-const CAUSE_LABEL: Record<MissCause, string> = {
-  "first-request": "first request",
-  "account-switch": "account switch",
-  "model-change": "model change",
-  "ttl-expired": "TTL expired",
-  "prefix-change": "prefix change",
-  compaction: "compaction",
+const CAUSE_LABEL = MISS_CAUSE_LABEL
+
+/** Usage-log events to request rows; anything not a request is dropped. */
+export function requestsFromUsage(
+  events: readonly { kind: string }[],
+): RequestLike[] {
+  return events.flatMap((ev) => {
+    if (ev.kind !== "request") return []
+    const e = ev as unknown as RequestLike
+    return [
+      {
+        account: e.account,
+        model: e.model,
+        created_at: e.created_at,
+        ...(e.session ? { session: e.session } : {}),
+        input: e.input,
+        output: e.output,
+        cacheRead: e.cacheRead,
+        cacheWrite: e.cacheWrite,
+        cacheWrite1h: e.cacheWrite1h,
+        ...(e.ttl ? { ttl: e.ttl } : {}),
+        ...(e.contextEdited ? { contextEdited: true } : {}),
+      },
+    ]
+  })
 }
 
-/** `78% hit · 1.2M read · 240k write · 90k uncached`, plus the top miss causes. */
-export function cacheSummaryRows(stats: CacheStats, lastN = 5): Row[] {
+/** Hit rate, cost saved, requests, then each miss cause by tokens rewritten. */
+export function breakdownRows(s: CacheSummary): Row[] {
+  if (s.requests === 0)
+    return [{ label: "requests", value: "none with token data yet" }]
   const rows: Row[] = [
     {
-      label: "hit rate",
-      value: `${Math.round(stats.hitRate * 100)}%`,
-      level: stats.hitRate < 0.6 ? "warn" : "ok",
+      label: "reused",
+      value: `${pct(s.hitRate)} of input from cache`,
+      level: s.hitRate < 0.8 ? "warn" : "ok",
     },
-    {
-      label: "tokens",
-      value: `${si(stats.reads)} read${SEP}${si(stats.writes)} write${SEP}${si(stats.uncached)} uncached`,
-    },
+    { label: "input cost", value: `${pct(s.saved)} lower than uncached` },
+    { label: "requests", value: String(s.requests) },
   ]
-  const byCause = new Map<MissCause, { count: number; tokens: number }>()
-  for (const m of stats.misses) {
-    const e = byCause.get(m.cause) ?? { count: 0, tokens: 0 }
-    e.count += 1
-    e.tokens += m.tokens
-    byCause.set(m.cause, e)
-  }
-  const causes = [...byCause.entries()]
-    .sort((a, b) => b[1].tokens - a[1].tokens)
-    .slice(0, lastN)
-  for (const [cause, e] of causes) {
+  const causes = Object.entries(s.byCause).sort(
+    (x, y) => y[1].tokens - x[1].tokens,
+  ) as [MissCause, { n: number; tokens: number }][]
+  for (const [cause, e] of causes)
     rows.push({
       label: CAUSE_LABEL[cause],
-      value: `${e.count}\u00d7${SEP}~${si(e.tokens)} rewritten`,
+      value: `${e.n}\u00d7${SEP}~${si(e.tokens)} rewritten`,
       level:
         cause === "account-switch" || cause === "ttl-expired" ? "warn" : "ok",
     })
-  }
-  if (stats.misses.length === 0) {
-    rows.push({ label: "misses", value: "none recorded", level: "ok" })
-  }
+  if (causes.length === 0)
+    rows.push({ label: "misses", value: "none", level: "ok" })
   return rows
 }
 
-/** Per-account and per-session cache rows, each its own labelled block. */
-export function cacheViewRows(
-  requests: readonly RequestLike[],
-  shapes: readonly ShapeLike[] = [],
-  names: Map<string, string> = new Map(),
+/**
+ * The /cc-cache sections: all accounts, each account in `order` (ids as
+ * configured; any other account seen after), and this session when given.
+ */
+export function cacheBreakdownBlocks(
+  b: CacheBreakdown,
+  opts: {
+    order: readonly string[]
+    names?: Map<string, string>
+    session?: string
+  },
 ): { title: string; rows: Row[] }[] {
-  const out: { title: string; rows: Row[] }[] = []
-  const rows = toCacheRows(requests, shapes)
-
-  out.push({ title: "All accounts", rows: cacheSummaryRows(cacheStats(rows)) })
-
-  // Per account.
-  const byAccount = new Map<string, CacheRow[]>()
-  for (const r of rows) {
-    const arr = byAccount.get(r.account) ?? []
-    arr.push(r)
-    byAccount.set(r.account, arr)
+  const rank = (id: string) => {
+    const i = opts.order.indexOf(id)
+    return i === -1 ? opts.order.length : i
   }
-  for (const [account, rs] of [...byAccount.entries()].sort()) {
+  const out = [{ title: "All accounts", rows: breakdownRows(b.global) }]
+  for (const a of [...b.accounts].sort(
+    (x, y) => rank(x.account) - rank(y.account),
+  ))
     out.push({
-      title: `Account ${names.get(account) ?? account}`,
-      rows: cacheSummaryRows(cacheStats(rs)),
+      title: `Account ${opts.names?.get(a.account) ?? a.account}`,
+      rows: breakdownRows(a),
+    })
+  if (opts.session) {
+    const s = b.sessions.find((x) => x.session === opts.session)
+    out.push({
+      title: "This session",
+      rows: s
+        ? breakdownRows(s)
+        : [{ label: "requests", value: "none in the last 24h" }],
     })
   }
-
-  // Per session, keyed off the original request list.
-  const bySession = new Map<string, RequestLike[]>()
-  for (const req of requests) {
-    if (!req.session) continue
-    const arr = bySession.get(req.session) ?? []
-    arr.push(req)
-    bySession.set(req.session, arr)
-  }
-  for (const [session, reqs] of bySession.entries()) {
-    out.push({
-      title: `Session ${session.slice(-8)}`,
-      rows: cacheSummaryRows(cacheStats(toCacheRows(reqs, shapes))),
-    })
-  }
-
   return out
+}
+
+/** The account reusing the least cache, when below 80% over at least `minRequests`. */
+export function worstCacheAccount(
+  b: CacheBreakdown,
+  minRequests = 5,
+): { account: string; hitRate: number } | undefined {
+  const worst = b.accounts
+    .filter((a) => a.requests >= minRequests)
+    .sort((x, y) => x.hitRate - y.hitRate)[0]
+  return worst && worst.hitRate < 0.8
+    ? { account: worst.account, hitRate: worst.hitRate }
+    : undefined
 }
 
 /** The settings the impact view lets you change, in the order shown. */
@@ -611,6 +628,8 @@ export type OptimizeSidebarInput = {
   }
   /** This session's request rows priced by cacheImpact, when the usage log has them. */
   cache?: Pick<CacheImpact, "requests" | "saved" | "byCause">
+  /** The account reusing the least cache over 24h, when below 80% (worstCacheAccount). */
+  worstAccount?: { name: string; hitRate: number }
   composition?: {
     fixed: number
     instructions: number
@@ -663,6 +682,14 @@ export function optimizeSidebarRows(i: OptimizeSidebarInput): Row[] {
       })
     }
   }
+
+  const w = i.worstAccount
+  if (w && w.hitRate < 0.8)
+    rows.push({
+      label: "worst cache",
+      value: `${w.name} reuses only ${pct(w.hitRate)} (24h)`,
+      level: "warn",
+    })
 
   const ctx = s.lastContext
   rows.push({

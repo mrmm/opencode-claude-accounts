@@ -186,7 +186,9 @@ export function cacheImpact(rows: readonly CacheRow[]): CacheImpact {
   const bySession = new Map<string, CacheRow[]>()
   for (const r of withTokens) {
     const k = r.session ?? ""
-    bySession.set(k, [...(bySession.get(k) ?? []), r])
+    const arr = bySession.get(k)
+    if (arr) arr.push(r)
+    else bySession.set(k, [r])
   }
   stats.misses = [...bySession.values()]
     .flatMap((rs) => cacheStats(rs).misses)
@@ -223,4 +225,142 @@ export function cacheImpact(rows: readonly CacheRow[]): CacheImpact {
     ttl1h: { requests: ttlReqs, writes: ttlWrites },
     contextEdited: edited,
   }
+}
+
+/** Plain-language names for miss causes, shared by every surface. */
+export const MISS_CAUSE_LABEL: Record<MissCause, string> = {
+  "first-request": "first request",
+  "account-switch": "account switch",
+  "model-change": "model change",
+  "ttl-expired": "TTL expired",
+  "prefix-change": "prefix change",
+  compaction: "compaction",
+}
+
+/** One bucket of a breakdown: the headline figures, without the per-miss list. */
+export type CacheSummary = {
+  requests: number
+  /** Share of cacheable input served from cache. */
+  hitRate: number
+  /** Share of input cost caching saved, 1 - cost/noCache. */
+  saved: number
+  misses: number
+  byCause: Partial<Record<MissCause, { n: number; tokens: number }>>
+}
+
+export type CacheBreakdown = {
+  global: CacheSummary
+  /** Keyed by account id (see `keyOf`), most requests first. */
+  accounts: (CacheSummary & { account: string })[]
+  /** Most misses first. */
+  sessions: (CacheSummary & { session: string })[]
+}
+
+type Acc = {
+  requests: number
+  reads: number
+  writes: number
+  uncached: number
+  cost: number
+  noCache: number
+  byCause: CacheSummary["byCause"]
+}
+
+const emptyAcc = (): Acc => ({
+  requests: 0,
+  reads: 0,
+  writes: 0,
+  uncached: 0,
+  cost: 0,
+  noCache: 0,
+  byCause: {},
+})
+
+const summarise = (a: Acc): CacheSummary => {
+  const cacheable = a.uncached + a.reads + a.writes
+  return {
+    requests: a.requests,
+    hitRate: cacheable > 0 ? a.reads / cacheable : 0,
+    saved: a.noCache > 0 ? 1 - a.cost / a.noCache : 0,
+    misses: Object.values(a.byCause).reduce((n, c) => n + (c?.n ?? 0), 0),
+    byCause: a.byCause,
+  }
+}
+
+/**
+ * The same figures as cacheImpact, split three ways: overall, per account and
+ * per session. One pass; each miss is classified against the previous request
+ * of its own session (so an account switch is seen) and charged to the account
+ * and session of the request that missed. Accounts are bucketed by `keyOf`,
+ * which defaults to `accountKey` so a source and its id land together.
+ */
+export function cacheBreakdown(
+  rows: readonly CacheRow[],
+  keyOf: (account: string) => string = accountKey,
+): CacheBreakdown {
+  const global = emptyAcc()
+  const byAccount = new Map<string, Acc>()
+  const bySession = new Map<string, Acc>()
+  const prevOf = new Map<string, CacheRow>()
+  const keys = new Map<string, string>()
+  const key = (a: string) => {
+    let k = keys.get(a)
+    if (k === undefined) keys.set(a, (k = keyOf(a)))
+    return k
+  }
+  const bucket = (m: Map<string, Acc>, k: string) => {
+    let a = m.get(k)
+    if (!a) m.set(k, (a = emptyAcc()))
+    return a
+  }
+  const sorted = [...rows].sort((a, b) => a.at - b.at)
+  for (const r of sorted) {
+    const write = r.cacheWrite + r.cacheWrite1h
+    if (r.input + r.cacheRead + write === 0) continue
+    const account = key(r.account)
+    const session = r.session ?? ""
+    const prev = prevOf.get(session)
+    prevOf.set(session, r)
+    const cause = isMiss(r) ? classify(r, prev) : undefined
+    for (const acc of [
+      global,
+      bucket(byAccount, account),
+      bucket(bySession, session),
+    ]) {
+      acc.requests++
+      acc.reads += r.cacheRead
+      acc.writes += write
+      acc.uncached += r.input
+      acc.cost +=
+        r.input +
+        readPrice(r.model) * r.cacheRead +
+        1.25 * r.cacheWrite +
+        2 * r.cacheWrite1h
+      acc.noCache += r.input + r.cacheRead + write
+      if (cause) {
+        const c = (acc.byCause[cause] ??= { n: 0, tokens: 0 })
+        c.n++
+        c.tokens += write
+      }
+    }
+  }
+  return {
+    global: summarise(global),
+    accounts: [...byAccount]
+      .map(([account, a]) => Object.assign(summarise(a), { account }))
+      .sort((a, b) => b.requests - a.requests),
+    sessions: [...bySession]
+      .filter(([session]) => session !== "")
+      .map(([session, a]) => Object.assign(summarise(a), { session }))
+      .sort((a, b) => b.misses - a.misses || b.requests - a.requests),
+  }
+}
+
+/** The cause that cost the most rewritten tokens, or undefined when nothing missed. */
+export function topCause(
+  s: Pick<CacheSummary, "byCause">,
+): MissCause | undefined {
+  return (Object.entries(s.byCause) as [MissCause, { tokens: number }][]).sort(
+    (a, b) => b[1].tokens - a[1].tokens,
+  )[0]?.[0]
 }

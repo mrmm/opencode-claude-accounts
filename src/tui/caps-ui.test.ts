@@ -1,12 +1,14 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { cacheStats } from "../balance/index.ts"
+import { cacheBreakdown } from "../balance/index.ts"
 import {
   accountCapRow,
   adviceRows,
-  cacheSummaryRows,
-  cacheViewRows,
+  breakdownRows,
+  cacheBreakdownBlocks,
+  requestsFromUsage,
+  worstCacheAccount,
   ceilingBar,
   ceilingPct,
   ceilingView,
@@ -125,51 +127,72 @@ describe("toCacheRows", () => {
   })
 })
 
-describe("cacheSummaryRows", () => {
-  it("summarises hit rate and the top miss causes", () => {
-    const rows = toCacheRows([
-      req({
-        account: "a",
-        created_at: 1,
-        session: "s",
-        cacheWrite: 1000,
-        input: 0,
-      }),
-      req({
-        account: "a",
-        created_at: 2,
-        session: "s",
-        cacheRead: 1000,
-        input: 0,
-      }),
-      req({
-        account: "b",
-        created_at: 3,
-        session: "s",
-        cacheWrite: 500,
-        input: 0,
-      }),
-    ])
-    const out = cacheSummaryRows(cacheStats(rows))
-    assert.equal(out[0]!.label, "hit rate")
-    assert.ok(
-      out.some(
-        (r) => r.label === "account switch" || r.label === "first request",
-      ),
-    )
-  })
-})
+describe("cache breakdown views", () => {
+  const b = cacheBreakdown(
+    toCacheRows(
+      requestsFromUsage([
+        { kind: "rotation" },
+        ...[
+          req({
+            account: "acme-1",
+            created_at: 1,
+            session: "s1",
+            cacheWrite: 1000,
+          }),
+          req({
+            account: "acme-1",
+            created_at: 2,
+            session: "s1",
+            cacheRead: 1000,
+          }),
+          req({
+            account: "acme-2",
+            created_at: 3,
+            session: "s2",
+            cacheWrite: 500,
+          }),
+        ].map((r) => ({ kind: "request", ...r })),
+      ]),
+    ),
+    (a) => a,
+  )
 
-describe("cacheViewRows", () => {
-  it("emits an all-accounts block plus per-account and per-session blocks", () => {
-    const reqs = [
-      req({ account: "a", created_at: 1, session: "s1", cacheRead: 100 }),
-      req({ account: "b", created_at: 2, session: "s2", cacheWrite: 100 }),
-    ]
-    const blocks = cacheViewRows(reqs, [], new Map([["a", "Team A"]]))
-    assert.equal(blocks[0]!.title, "All accounts")
-    assert.ok(blocks.some((b) => b.title === "Account Team A"))
-    assert.ok(blocks.some((b) => b.title.startsWith("Session ")))
+  it("shows all accounts, then accounts in configured order, then this session", () => {
+    const blocks = cacheBreakdownBlocks(b, {
+      order: ["acme-2", "acme-1"],
+      names: new Map([["acme-1", "Team 1"]]),
+      session: "s1",
+    })
+    assert.deepEqual(
+      blocks.map((x) => x.title),
+      ["All accounts", "Account acme-2", "Account Team 1", "This session"],
+    )
+    assert.equal(blocks[0]!.rows[0]!.label, "reused")
+    assert.ok(blocks[3]!.rows.some((r) => r.label === "first request"))
+  })
+
+  it("names the worst account only below 80% with enough requests", () => {
+    assert.deepEqual(worstCacheAccount(b, 1), { account: "acme-2", hitRate: 0 })
+    assert.equal(worstCacheAccount(b, 5), undefined)
+  })
+
+  it("adds one sidebar line for the worst account", () => {
+    const rows = optimizeSidebarRows({
+      session: {
+        turns: 1,
+        cost: 0,
+        lastContext: 0,
+        input: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      worstAccount: { name: "Team 2", hitRate: 0.42 },
+      hints: [],
+      contextLimit: 0,
+    })
+    const w = rows.filter((r) => r.label === "worst cache")
+    assert.equal(w.length, 1)
+    assert.equal(w[0]!.value, "Team 2 reuses only 42% (24h)")
   })
 })
 
@@ -375,5 +398,20 @@ describe("optimizeSidebarRows", () => {
       contextLimit: 0,
     })
     assert.deepEqual(rows, [{ label: "session", value: "no turns yet" }])
+  })
+})
+
+describe("breakdownRows", () => {
+  it("says so when there is nothing to show", () => {
+    assert.deepEqual(
+      breakdownRows({
+        requests: 0,
+        hitRate: 0,
+        saved: 0,
+        misses: 0,
+        byCause: {},
+      }),
+      [{ label: "requests", value: "none with token data yet" }],
+    )
   })
 })

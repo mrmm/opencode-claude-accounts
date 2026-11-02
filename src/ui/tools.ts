@@ -27,7 +27,8 @@ import { z } from "zod"
 
 import { assess, orderByConfig, resolveRef } from "../balance/balancer.ts"
 import { ceilingFor } from "../balance/caps.ts"
-import { cacheImpact } from "../balance/cache-stats.ts"
+import { cacheBreakdown, cacheImpact } from "../balance/cache-stats.ts"
+import { requestsFromUsage, toCacheRows } from "../tui/caps-ui.ts"
 import {
   allowReserve,
   boundSource,
@@ -50,7 +51,12 @@ import {
   quotaEntry,
   readQuotaCache,
 } from "../balance/quota.ts"
-import { parseWindowMs, reserveRefusal } from "./tools-format.ts"
+import {
+  cacheAccountLines,
+  cacheSessionLines,
+  parseWindowMs,
+  reserveRefusal,
+} from "./tools-format.ts"
 import {
   credentialState,
   maybeRotate,
@@ -113,24 +119,8 @@ export const claudeAuthTools = {
       const nameOf = (source: string, label?: string) =>
         cfg.accountIds[accountKey(source)]?.name ?? label ?? source
 
-      const day = readUsage(Date.now() - 24 * 60 * 60_000).flatMap((e) =>
-        e.kind === "request"
-          ? [
-              {
-                at: e.created_at,
-                account: e.account,
-                model: e.model,
-                input: e.input ?? 0,
-                output: e.output ?? 0,
-                cacheRead: e.cacheRead ?? 0,
-                cacheWrite: e.cacheWrite ?? 0,
-                cacheWrite1h: e.cacheWrite1h ?? 0,
-                ...(e.session ? { session: e.session } : {}),
-                ...(e.ttl ? { ttl: e.ttl } : {}),
-                ...(e.contextEdited ? { contextEdited: true } : {}),
-              },
-            ]
-          : [],
+      const day = toCacheRows(
+        requestsFromUsage(readUsage(Date.now() - 24 * 60 * 60_000)),
       )
       const ci = cacheImpact(day)
       const misses = Object.entries(ci.byCause)
@@ -193,6 +183,26 @@ export const claudeAuthTools = {
             `  ${g.title.padEnd(16)} ${g.summary.padEnd(44)} ${g.health.padEnd(8)} ${g.sources.map((s) => accountKey(s)).join(", ") || "(no live account)"}`,
           )
         }
+      }
+
+      if (ci.requests > 0) {
+        const b = cacheBreakdown(day)
+        const order = orderByConfig(members(), cfg.accounts, cfg.groups).map(
+          (m) => accountKey(m.source),
+        )
+        const sessions = cacheSessionLines(b)
+        lines.push(
+          "",
+          "cache by account, 24h (share of input read from cache):",
+          ...cacheAccountLines(
+            b,
+            order,
+            (id) => cfg.accountIds[id]?.name ?? "",
+          ),
+          "",
+          "sessions with the most cache misses, 24h:",
+          ...(sessions.length ? sessions : ["  none"]),
+        )
       }
 
       const presets = Object.entries(cfg.presets)

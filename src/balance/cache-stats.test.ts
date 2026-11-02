@@ -1,7 +1,13 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { cacheImpact, cacheStats, type CacheRow } from "./cache-stats.ts"
+import {
+  cacheBreakdown,
+  cacheImpact,
+  cacheStats,
+  topCause,
+  type CacheRow,
+} from "./cache-stats.ts"
 
 const T0 = 1785000000000
 
@@ -184,5 +190,58 @@ describe("cacheImpact", () => {
     const i = cacheImpact([])
     assert.equal(i.saved, 0)
     assert.equal(i.requests, 0)
+  })
+})
+
+describe("cacheBreakdown", () => {
+  const rows = [
+    row({ account: "src-1", session: "s1", cacheWrite: 1000 }),
+    row({
+      account: "src-2",
+      session: "s2",
+      at: T0 + 500,
+      cacheRead: 900,
+      input: 100,
+    }),
+    row({ account: "src-1", session: "s1", at: T0 + 1000, cacheRead: 1000 }),
+    // s1 moves to src-2: an account switch, charged to src-2 and s1.
+    row({ account: "src-2", session: "s1", at: T0 + 2000, cacheWrite: 1200 }),
+    row({ account: "acme-1", session: "s1", at: T0 + 3000, cacheRead: 1200 }),
+    row({ account: "src-1", at: T0 + 4000 }),
+  ]
+  const ids: Record<string, string> = { "src-1": "acme-1", "src-2": "acme-2" }
+  const b = cacheBreakdown(rows, (a) => ids[a] ?? a)
+
+  it("matches cacheImpact globally", () => {
+    const ci = cacheImpact(rows)
+    assert.equal(b.global.requests, ci.requests)
+    assert.ok(Math.abs(b.global.hitRate - ci.hitRate) < 1e-9)
+    assert.ok(Math.abs(b.global.saved - ci.saved) < 1e-9)
+    assert.deepEqual(b.global.byCause, ci.byCause)
+  })
+
+  it("buckets accounts by id, so a source and its id land together", () => {
+    assert.deepEqual(
+      b.accounts.map((a) => [a.account, a.requests, a.misses]),
+      [
+        ["acme-1", 3, 1],
+        ["acme-2", 2, 1],
+      ],
+    )
+    const two = b.accounts.find((a) => a.account === "acme-2")!
+    assert.deepEqual(two.byCause, { "account-switch": { n: 1, tokens: 1200 } })
+    assert.ok(Math.abs(two.hitRate - 900 / 2200) < 1e-9)
+  })
+
+  it("lists sessions by misses, skipping rows with no session", () => {
+    assert.deepEqual(
+      b.sessions.map((s) => [s.session, s.requests, s.misses]),
+      [
+        ["s1", 4, 2],
+        ["s2", 1, 0],
+      ],
+    )
+    assert.equal(topCause(b.sessions[0]!), "account-switch")
+    assert.equal(topCause(b.sessions[1]!), undefined)
   })
 })

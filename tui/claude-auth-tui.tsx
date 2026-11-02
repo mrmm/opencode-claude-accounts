@@ -87,7 +87,9 @@ import {
 import {
   accountCapRow,
   adviceRows,
-  cacheViewRows,
+  cacheBreakdownBlocks,
+  requestsFromUsage,
+  worstCacheAccount,
   ceilingView,
   optimizationRows,
   optimizeSidebarRows,
@@ -101,6 +103,7 @@ import {
 import {
   applyMigration,
   membersForMigration,
+  cacheBreakdown,
   cacheImpact,
   cacheStats,
   suggestIds,
@@ -697,33 +700,43 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   // order is the 80/20 of where the quota actually goes.
   // This session's request rows from the last 24h. The sidebar re-renders
   // constantly and the usage log is megabytes, so one read serves 5 seconds.
-  const sessionReqCache = new Map<string, { at: number; rows: RequestLike[] }>()
-  const sessionRequests = (id: string): RequestLike[] => {
-    const hit = sessionReqCache.get(id)
-    if (hit && Date.now() - hit.at < 5_000) return hit.rows
-    const rows: RequestLike[] = readUsage(
-      Date.now() - 24 * 60 * 60_000,
-    ).flatMap((e) =>
-      e.kind === "request" && e.session === id
-        ? [
-            {
-              account: e.account,
-              model: e.model,
-              created_at: e.created_at,
-              session: e.session,
-              input: e.input,
-              output: e.output,
-              cacheRead: e.cacheRead,
-              cacheWrite: e.cacheWrite,
-              cacheWrite1h: e.cacheWrite1h,
-              ttl: e.ttl,
-              contextEdited: e.contextEdited,
-            },
-          ]
-        : [],
+  let dayCache: { at: number; rows: RequestLike[] } | undefined
+  const dayRequests = (): RequestLike[] => {
+    if (dayCache && Date.now() - dayCache.at < 5_000) return dayCache.rows
+    dayCache = {
+      at: Date.now(),
+      rows: requestsFromUsage(readUsage(Date.now() - 24 * 60 * 60_000)),
+    }
+    return dayCache.rows
+  }
+  const sessionRequests = (id: string): RequestLike[] =>
+    dayRequests().filter((r) => r.session === id)
+  // Account ids in configured order, and a display name per id: the cache
+  // breakdown is keyed by id, the sidebar and names by Keychain source.
+  const idOrder = () => visible().map((a) => accountKey(a.source))
+  const idNames = () => {
+    const names = displayNames()
+    return new Map(
+      visible().map((a) => [
+        accountKey(a.source),
+        names.get(a.source) ?? a.label,
+      ]),
     )
-    sessionReqCache.set(id, { at: Date.now(), rows })
-    return rows
+  }
+  let worstCache:
+    | { at: number; w?: { name: string; hitRate: number } }
+    | undefined
+  const worstAccount = () => {
+    if (worstCache && Date.now() - worstCache.at < 5_000) return worstCache.w
+    const w = worstCacheAccount(cacheBreakdown(toCacheRows(dayRequests())))
+    worstCache = {
+      at: Date.now(),
+      w: w && {
+        name: idNames().get(w.account) ?? w.account,
+        hitRate: w.hitRate,
+      },
+    }
+    return worstCache.w
   }
 
   const rankedFixes = (id: string, c: ReturnType<typeof compoOf>): Row[] => {
@@ -1360,6 +1373,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           return optimizeSidebarRows({
             session: sessionTotals(api.state.session.messages(id)),
             ...(reqs.length ? { cache: cacheImpact(toCacheRows(reqs)) } : {}),
+            ...(worstAccount() ? { worstAccount: worstAccount()! } : {}),
             ...(typeof c === "string" ? {} : { composition: c }),
             hints: report(id)[0]!.rows,
             contextLimit: getConfig().contextLimit,
@@ -1650,26 +1664,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           // The request log carries the token counts the quota cache cannot:
           // reads, writes and uncached input per request. cacheViewRows totals
           // them per account and per session and labels each miss by cause.
-          const requests: RequestLike[] = readUsage(
-            Date.now() - 24 * 60 * 60_000,
-          ).flatMap((e) =>
-            e.kind === "request"
-              ? [
-                  {
-                    account: e.account,
-                    model: e.model,
-                    created_at: e.created_at,
-                    session: e.session,
-                    input: e.input,
-                    output: e.output,
-                    cacheRead: e.cacheRead,
-                    cacheWrite: e.cacheWrite,
-                    cacheWrite1h: e.cacheWrite1h,
-                    ttl: e.ttl,
-                    contextEdited: e.contextEdited,
-                  },
-                ]
-              : [],
+          const requests = requestsFromUsage(
+            readUsage(Date.now() - 24 * 60 * 60_000),
           )
           const editSetting = (key: string) => {
             const meta = EDITABLE.find((e) => e.key === key)
@@ -1701,7 +1697,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               value: r.setting ? `set:${r.setting}` : `impact:${j}`,
               category: "Impact (24h) \u00b7 select a setting to change it",
             }))
-            const blocks = cacheViewRows(requests, [], displayNames())
+            const blocks = cacheBreakdownBlocks(
+              cacheBreakdown(toCacheRows(requests)),
+              {
+                order: idOrder(),
+                names: idNames(),
+                ...(lastSessionId ? { session: lastSessionId } : {}),
+              },
+            )
             const options = [
               ...impact,
               ...blocks.flatMap((b) =>
