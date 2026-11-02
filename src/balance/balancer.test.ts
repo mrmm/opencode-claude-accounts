@@ -1086,14 +1086,38 @@ describe("recoveryTimes", () => {
 
 describe("spentRetry", () => {
   const clock = (ms: number) => `T+${Math.round((ms - NOW_MS) / 60000)}m`
-  it("names the next account and its real wait, but re-checks within a minute", () => {
+  // Regression: a fixed 60s retry-after ran out OpenCode's 10 retries after
+  // ~10 minutes, so a request failed long before any account was back.
+  it("paces retries so OpenCode's ten attempts reach the reset", () => {
+    const r = spentRetry(
+      { name: "Alt 2", at: NOW_MS + 7020_000 },
+      NOW_MS,
+      clock,
+    )
+    assert.equal(r.retryAfterS, 780)
+    assert.ok(r.retryAfterS * 9 >= 7020)
+    assert.match(r.message, /Re-checking every 13m/)
+  })
+  it("never re-checks more often than a minute or less than every 15 minutes", () => {
+    assert.equal(
+      spentRetry({ name: "a", at: NOW_MS + 300_000 }, NOW_MS, clock)
+        .retryAfterS,
+      60,
+    )
+    assert.equal(
+      spentRetry({ name: "a", at: NOW_MS + 86_400_000 }, NOW_MS, clock)
+        .retryAfterS,
+      900,
+    )
+  })
+  it("names the next account and its real wait", () => {
     const r = spentRetry(
       { name: "Alt 2", at: NOW_MS + 7020_000 },
       NOW_MS,
       clock,
       896,
     )
-    assert.equal(r.retryAfterS, 60)
+    assert.equal(r.retryAfterS, 780)
     assert.match(r.message, /Next back: Alt 2 at T\+117m \(in 1h57m\)/)
   })
   it("retries at the reset when it is sooner than the re-check", () => {

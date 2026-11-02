@@ -897,12 +897,20 @@ export function recoveryTimes(
 
 /** How often a spent pool is re-checked while OpenCode waits to retry. */
 export const SPENT_RECHECK_S = 60
+/** OpenCode caps a retry-after at 15 minutes. */
+export const SPENT_RECHECK_MAX_S = 900
+/**
+ * OpenCode (2.2.x) retries a 429 at most 10 times. Spreading the wait over 9
+ * of them lands a retry at the reset, so the request resumes by itself instead
+ * of failing after ten one-minute checks.
+ */
+const SPENT_RETRIES = 9
 
 /**
  * The retry the operator sees when every account refused: the real time the
- * next account is back, and a short retry-after so a reset, a newly added
- * account or a changed selection is picked up within a minute instead of
- * after the server's own (often much longer) retry-after.
+ * next account is back, and a retry-after paced so OpenCode's bounded retries
+ * reach that time -- never shorter than a minute, so a reset, an added account
+ * or a changed selection is still picked up on a later check.
  */
 export function spentRetry(
   next: { name: string; at: number } | undefined,
@@ -911,12 +919,19 @@ export function spentRetry(
   serverRetryAfterS?: number,
 ): { retryAfterS: number; message: string } {
   const wait = next ? Math.ceil((next.at - nowMs) / 1000) : undefined
-  const candidates = [SPENT_RECHECK_S, wait, serverRetryAfterS].filter(
+  const every =
+    wait === undefined
+      ? SPENT_RECHECK_S
+      : Math.min(
+          SPENT_RECHECK_MAX_S,
+          Math.max(SPENT_RECHECK_S, Math.ceil(wait / SPENT_RETRIES)),
+        )
+  const candidates = [every, wait, serverRetryAfterS].filter(
     (v): v is number => v !== undefined && v > 0,
   )
   const retryAfterS = Math.max(1, Math.min(...candidates))
   const message = next
-    ? `Every account is spent. Next back: ${next.name} at ${clock(next.at)} (in ${formatDuration(wait!)}). Re-checking every ${SPENT_RECHECK_S}s, so freeing or adding an account is picked up on the next check.`
+    ? `Every account is spent. Next back: ${next.name} at ${clock(next.at)} (in ${formatDuration(wait!)}). Re-checking every ${formatDuration(every)}, so freeing or adding an account is picked up on the next check.`
     : `Every account is spent and no reset time is known. Re-checking every ${SPENT_RECHECK_S}s.`
   return { retryAfterS, message }
 }

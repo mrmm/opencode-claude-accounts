@@ -1466,8 +1466,10 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       )
 
       assert.equal(response.status, 429)
-      // A spent pool: retry within a minute, say when an account is back.
-      assert.equal(response.headers.get("retry-after"), "60")
+      // A spent pool: retries paced between a minute and OpenCode's 15-minute
+      // cap, never the server's raw 11218s; the message says when one is back.
+      const after = Number(response.headers.get("retry-after"))
+      assert.ok(after >= 60 && after <= 900, String(after))
       const text = await response.text()
       assert.notEqual(text, errorBody)
       assert.match(text, /Every account is spent/)
