@@ -146,6 +146,23 @@ export const EDITABLE: Editable[] = [
     hint: "spend overflow when every account's included allowance is gone",
   },
   {
+    key: "capMode",
+    label: "Cap mode",
+    section: "Balancing",
+    kind: "enum",
+    options: ["soft", "hard"],
+    hint: "soft lets a session reach reserved quota; hard never does",
+  },
+  {
+    key: "cacheTtl",
+    label: "Cache TTL",
+    section: "Balancing",
+    kind: "enum",
+    options: ["5m", "1h", "auto"],
+    hint: "how long prompt cache is kept warm; auto picks per request",
+  },
+
+  {
     key: "quotaProbe",
     label: "Probe quota in background",
     section: "Quota",
@@ -228,6 +245,16 @@ export const EDITABLE: Editable[] = [
     section: "Diagnostics",
     kind: "boolean",
     hint: "recover from prefill refusals",
+  },
+  {
+    // Only the on/off form is editable here; the fine-grained object form
+    // (trigger/keep/…) stays hand-edited in the file, where its knobs have room
+    // to be documented. Writing `true` is what opts a session into it.
+    key: "contextEditing",
+    label: "Context editing",
+    section: "Diagnostics",
+    kind: "boolean",
+    hint: "let the server drop old tool output to shrink the prompt",
   },
   {
     key: "captureRequests",
@@ -430,6 +457,9 @@ export function display(v: unknown): string {
     }
     return String(v)
   }
+  // An options object (contextEditing's fine-grained form) reads as on: it is
+  // enabled, and its knobs are shown in the file, not in a one-line summary.
+  if (v && typeof v === "object") return "on"
   return v === undefined || v === null ? "(unset)" : String(v)
 }
 
