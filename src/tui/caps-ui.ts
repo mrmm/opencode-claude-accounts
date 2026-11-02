@@ -11,7 +11,12 @@
  * already the largest fork-owned surface. Keeping them apart is what lets the
  * ceiling bar and the cache view be tested without the picker's machinery.
  */
-import type { CacheRow, CacheStats, MissCause } from "../balance/index.ts"
+import type {
+  CacheImpact,
+  CacheRow,
+  CacheStats,
+  MissCause,
+} from "../balance/index.ts"
 import { cacheStats } from "../balance/index.ts"
 import { SEP } from "./chip.ts"
 import { si, type Row } from "./tokens.ts"
@@ -148,6 +153,8 @@ export type RequestLike = {
   cacheRead?: number
   cacheWrite?: number
   cacheWrite1h?: number
+  ttl?: "5m" | "1h"
+  contextEdited?: boolean
 }
 
 /** A shape-log entry, joined by session+time to give a request its prefix hashes. */
@@ -203,6 +210,9 @@ export function toCacheRows(
         cacheWrite1h: r.cacheWrite1h ?? 0,
         systemSha: sh?.systemSha,
         toolsSha: sh?.toolsSha,
+        ...(r.session ? { session: r.session } : {}),
+        ...(r.ttl ? { ttl: r.ttl } : {}),
+        ...(r.contextEdited ? { contextEdited: true } : {}),
       }
     })
 }
@@ -294,6 +304,82 @@ export function cacheViewRows(
   }
 
   return out
+}
+
+/** The settings the impact view lets you change, in the order shown. */
+export const OPTIMIZATION_KEYS = [
+  "cacheTtl",
+  "contextEditing",
+  "bindBy",
+  "strategy",
+  "capMode",
+] as const
+
+export type OptimizationRow = Row & { setting?: string }
+
+const pct = (n: number) => `${Math.round(n * 100)}%`
+
+/**
+ * Each optimisation's setting next to what it measurably did.
+ *
+ * Headline rows first (hit rate, share of input cost saved, misses by cause),
+ * then one row per editable setting carrying `setting` so the dialog can open
+ * its editor. Value strings say what the data shows, not what the knob means.
+ */
+export function optimizationRows(
+  impact: CacheImpact,
+  settings: Record<string, unknown>,
+): OptimizationRow[] {
+  const rows: OptimizationRow[] = [
+    {
+      label: "caching",
+      value:
+        impact.requests === 0
+          ? "no requests with token data yet"
+          : `${pct(impact.hitRate)} hit${SEP}saves ${pct(impact.saved)} of input cost${SEP}${impact.requests} req`,
+      level: impact.requests > 0 && impact.hitRate < 0.6 ? "warn" : "ok",
+    },
+  ]
+  const causes = Object.entries(impact.byCause).sort(
+    (a, b) => b[1].tokens - a[1].tokens,
+  )
+  for (const [cause, e] of causes) {
+    const share = impact.cost > 0 ? (1.25 * e.tokens) / impact.cost : 0
+    rows.push({
+      label: `miss: ${CAUSE_LABEL[cause as MissCause]}`,
+      value: `${e.n}\u00d7${SEP}~${si(e.tokens)} rewritten${SEP}~${pct(share)} of cost`,
+      level:
+        cause === "account-switch" || cause === "ttl-expired" ? "warn" : "ok",
+    })
+  }
+  const ttlMisses = impact.byCause["ttl-expired"]?.n ?? 0
+  const switchMisses = impact.byCause["account-switch"]?.n ?? 0
+  const measured: Record<string, string> = {
+    cacheTtl:
+      `1h on ${impact.ttl1h.requests}/${impact.requests} req${SEP}${si(impact.ttl1h.writes)} 1h writes` +
+      (ttlMisses > 0 && settings.cacheTtl === "5m"
+        ? `${SEP}${ttlMisses} TTL misses: try auto`
+        : ""),
+    contextEditing: `applied on ${impact.contextEdited}/${impact.requests} req`,
+    bindBy:
+      `${switchMisses} account-switch misses` +
+      (switchMisses > 0 && settings.bindBy !== "session"
+        ? `${SEP}try session`
+        : ""),
+    strategy: `${switchMisses} account-switch misses`,
+    capMode: "decides whether reserved quota can serve",
+  }
+  for (const key of OPTIMIZATION_KEYS) {
+    const v = settings[key]
+    const shown =
+      typeof v === "object" && v !== null ? "on (custom)" : String(v ?? "-")
+    rows.push({
+      label: `${key} = ${shown}`,
+      value: measured[key] ?? "",
+      setting: key,
+    })
+  }
+  return rows
 }
 
 // ---------------------------------------------------------------------------

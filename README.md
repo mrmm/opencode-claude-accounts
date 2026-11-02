@@ -507,17 +507,17 @@ Every palette entry is titled `Claude › <Area> › <Verb>`, so the eight comma
 sort together under one vendor and group by what they touch — Accounts, Presets,
 Usage, Cache, Optimize, Diagnostics, Settings.
 
-| command        | title                                        | key         | what it is for                                            |
-| -------------- | -------------------------------------------- | ----------- | --------------------------------------------------------- |
-| `/cc-account`  | Claude › Accounts › Switch account or preset | `<leader>a` | choose a preset, Auto, or pin one account                 |
-| `/cc-accounts` | Claude › Accounts › Manage accounts          | `<leader>A` | enable/disable, rename, assign IDs, set ceilings, presets |
-| `/cc-presets`  | Claude › Presets › Edit presets              |             | the preset editor on the Manage accounts menu             |
-| `/cc-stats`    | Claude › Usage › Usage by session            | `<leader>s` | usage per session, last 24h                               |
-| `/tokens`      | Claude › Usage › Token usage                 |             | per-session token breakdown and the fix report            |
-| `/cc-cache`    | Claude › Cache › Hit rate and misses         |             | cache hit rate, reads/writes, and labelled misses         |
-| `/optimize`    | Claude › Optimize › Ranked fixes             |             | ask the agent for a fix plan                              |
-| `/cc-debug`    | Claude › Diagnostics › Explain routing       |             | what the balancer is actually doing, right now            |
-| `/cc-config`   | Claude › Settings › Edit settings            | `<leader>c` | the settings that apply without a restart                 |
+| command        | title                                        | key         | what it is for                                                                                             |
+| -------------- | -------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------- |
+| `/cc-account`  | Claude › Accounts › Switch account or preset | `<leader>a` | choose a preset, Auto, or pin one account                                                                  |
+| `/cc-accounts` | Claude › Accounts › Manage accounts          | `<leader>A` | enable/disable, rename, assign IDs, set ceilings, presets                                                  |
+| `/cc-presets`  | Claude › Presets › Edit presets              |             | the preset editor on the Manage accounts menu                                                              |
+| `/cc-stats`    | Claude › Usage › Usage by session            | `<leader>s` | usage per session, last 24h                                                                                |
+| `/tokens`      | Claude › Usage › Token usage                 |             | per-session token breakdown and the fix report                                                             |
+| `/cc-cache`    | Claude › Cache › Review impact and settings  |             | hit rate, cost saved, misses by cause; change cacheTtl, contextEditing, bindBy, strategy, capMode in place |
+| `/optimize`    | Claude › Optimize › Ranked fixes             |             | ask the agent for a fix plan                                                                               |
+| `/cc-debug`    | Claude › Diagnostics › Explain routing       |             | what the balancer is actually doing, right now                                                             |
+| `/cc-config`   | Claude › Settings › Edit settings            | `<leader>c` | the settings that apply without a restart                                                                  |
 
 ### /cc-account
 
@@ -562,6 +562,14 @@ hit rate, cache reads / writes / uncached input, and the top miss causes
 (account switch, TTL expired, prefix change, …) with the tokens each rewrote.
 The figures come from the usage log's per-request token counts, which the quota
 cache cannot see.
+
+The first block, **Impact**, prices the same 24h: hit rate, the share of input
+cost caching saved versus no cache (read 0.05×/0.1×, 5m write 1.25×, 1h write
+2×), misses by cause with their share of cost, and one row per optimisation
+setting (`cacheTtl`, `contextEditing`, `bindBy`, `strategy`, `capMode`) with
+what it did — e.g. how many requests went out with 1h markers or with context
+editing. Selecting a setting row changes it in place; it is live within the
+config reload interval.
 
 ### /cc-config
 

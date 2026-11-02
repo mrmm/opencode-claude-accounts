@@ -85,6 +85,7 @@ import {
   adviceRows,
   cacheViewRows,
   ceilingView,
+  optimizationRows,
   migrationPreviewRows,
   paletteTitle,
   rankedAdvice,
@@ -95,6 +96,7 @@ import {
 import {
   applyMigration,
   membersForMigration,
+  cacheImpact,
   cacheStats,
   suggestIds,
 } from "../dist/balance/index.js"
@@ -288,6 +290,46 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       (ref, list) =>
         resolveRef(ref, list as { source: string; label?: string }[]),
     )
+
+  // Surgical write: this file is JSONC and its comments are the only
+  // documentation at the point of use, so a parse-and-serialise round
+  // trip would delete every one. Temp file then rename, so a crash
+  // cannot leave half a config where a whole one was.
+  const writeSetting = (key: string, literal: string) => {
+    const configFile = candidatePaths()[0]!
+    try {
+      const before = readFileSync(configFile, "utf8")
+      const after = setJsoncValue(before, key, literal)
+      if (!after) {
+        api.ui.toast({
+          variant: "error",
+          title: "Not changed",
+          message: `Could not edit ${key} safely. The file was left alone.`,
+        })
+        return
+      }
+      const tmp = `${configFile}.tmp-${process.pid}`
+      writeFileSync(tmp, after, "utf8")
+      renameSync(tmp, configFile)
+      // getConfig() holds its answer for configReloadInterval and will
+      // not re-stat before then, so re-reading here would hand back the
+      // config as it was a moment ago -- the write lands and the dialog
+      // redraws unchanged. Dropping the cache makes the next read the
+      // file.
+      resetConfigCache()
+      api.ui.toast({
+        variant: "success",
+        title: key,
+        message: `Now ${literal}. Live within the reload interval.`,
+      })
+    } catch (err) {
+      api.ui.toast({
+        variant: "error",
+        title: "Write failed",
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 
   // Utilisation as fractions 0..1 for the ceiling bars. chip's `utilisation`
   // returns whole percents, so divide; undefined stays undefined (nothing read).
@@ -1502,7 +1544,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
       {
         name: "claude-auth.cache",
-        title: paletteTitle("Cache", "Hit rate and misses"),
+        title: paletteTitle("Cache", "Review impact and settings"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "cc-cache",
@@ -1525,38 +1567,77 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     cacheRead: e.cacheRead,
                     cacheWrite: e.cacheWrite,
                     cacheWrite1h: e.cacheWrite1h,
+                    ttl: e.ttl,
+                    contextEdited: e.contextEdited,
                   },
                 ]
               : [],
           )
+          const editSetting = (key: string) => {
+            const meta = EDITABLE.find((e) => e.key === key)
+            if (!meta) return
+            const current = (getConfig() as unknown as Record<string, unknown>)[
+              key
+            ]
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={`${meta.label} (${key})`}
+                options={optionsFor(meta, current, getConfig().presets)}
+                onSelect={(choice) => {
+                  const checked = validateValue(meta, String(choice.value))
+                  if (checked.ok) writeSetting(key, checked.literal)
+                  showView()
+                }}
+              />
+            ))
+          }
           // The shape log carries no prefix hashes today, so the join is a no-op
           // and classification falls back to account/model/TTL signals.
-          const blocks = cacheViewRows(requests, [], displayNames())
-          const options = blocks.flatMap((b) =>
-            b.rows.map((r, j) => ({
-              title: r.label.trim(),
+          const showView = () => {
+            const impact = optimizationRows(
+              cacheImpact(toCacheRows(requests)),
+              getConfig() as unknown as Record<string, unknown>,
+            ).map((r, j) => ({
+              title: r.label,
               description: r.value,
-              value: `${b.title}:${j}`,
-              category: b.title,
-            })),
-          )
-          api.ui.dialog.replace(() => (
-            <api.ui.DialogSelect
-              title={paletteTitle("Cache", "Hit rate and misses")}
-              options={
-                options.length
-                  ? options
-                  : [
-                      {
-                        title: "No requests in the last 24h",
-                        value: "",
-                        description:
-                          "cache figures appear once the plugin has served requests",
-                      },
-                    ]
-              }
-            />
-          ))
+              value: r.setting ? `set:${r.setting}` : `impact:${j}`,
+              category: "Impact (24h) \u00b7 select a setting to change it",
+            }))
+            const blocks = cacheViewRows(requests, [], displayNames())
+            const options = [
+              ...impact,
+              ...blocks.flatMap((b) =>
+                b.rows.map((r, j) => ({
+                  title: r.label.trim(),
+                  description: r.value,
+                  value: `${b.title}:${j}`,
+                  category: b.title,
+                })),
+              ),
+            ]
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={paletteTitle("Cache", "Review impact and settings")}
+                onSelect={(row) => {
+                  const v = String(row.value)
+                  if (v.startsWith("set:")) editSetting(v.slice(4))
+                }}
+                options={
+                  options.length
+                    ? options
+                    : [
+                        {
+                          title: "No requests in the last 24h",
+                          value: "",
+                          description:
+                            "cache figures appear once the plugin has served requests",
+                        },
+                      ]
+                }
+              />
+            ))
+          }
+          showView()
         },
       },
       {
@@ -2867,8 +2948,6 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         namespace: "palette",
         slashName: "cc-config",
         run() {
-          const configFile = candidatePaths()[0]!
-
           const openList = () => {
             const cfg = getConfig() as unknown as Record<string, unknown>
             api.ui.dialog.replace(() => (
@@ -2880,44 +2959,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             ))
           }
 
-          // Surgical write: this file is JSONC and its comments are the only
-          // documentation at the point of use, so a parse-and-serialise round
-          // trip would delete every one. Temp file then rename, so a crash
-          // cannot leave half a config where a whole one was.
-          const write = (key: string, literal: string) => {
-            try {
-              const before = readFileSync(configFile, "utf8")
-              const after = setJsoncValue(before, key, literal)
-              if (!after) {
-                api.ui.toast({
-                  variant: "error",
-                  title: "Not changed",
-                  message: `Could not edit ${key} safely. The file was left alone.`,
-                })
-                return
-              }
-              const tmp = `${configFile}.tmp-${process.pid}`
-              writeFileSync(tmp, after, "utf8")
-              renameSync(tmp, configFile)
-              // getConfig() holds its answer for configReloadInterval and will
-              // not re-stat before then, so re-reading here would hand back the
-              // config as it was a moment ago -- the write lands and the dialog
-              // redraws unchanged. Dropping the cache makes the next read the
-              // file.
-              resetConfigCache()
-              api.ui.toast({
-                variant: "success",
-                title: key,
-                message: `Now ${literal}. Live within the reload interval.`,
-              })
-            } catch (err) {
-              api.ui.toast({
-                variant: "error",
-                title: "Write failed",
-                message: err instanceof Error ? err.message : String(err),
-              })
-            }
-          }
+          const write = writeSetting
 
           const editKey = (key: string) => {
             const meta = EDITABLE.find((e) => e.key === key)

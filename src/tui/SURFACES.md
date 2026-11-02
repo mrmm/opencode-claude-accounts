@@ -84,6 +84,9 @@ Three families of pure builders sit beside chip.ts, each tested there:
   it per account and per session and labels each miss by cause. `/cc-cache`
   renders it. Prefix hashes are joined from the shape log when present; today it
   carries none, so classification falls back to account/model/TTL signals.
+  `cacheImpact` adds the cost side and per-session miss causes;
+  `optimizationRows` puts each optimisation setting next to its measured effect,
+  and selecting one opens the shared settings writer.
 - **Advice** -- `rankedAdvice` prices this session's measured misses with the
   documented cache model (read 0.05×/0.1×, 5m write 1.25×, 1h write 2×) and ranks
   fixes by input-token-equivalents saved per day. It complements `hints` in

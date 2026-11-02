@@ -12,6 +12,7 @@ import {
   ceilingView,
   migrationPreviewRows,
   paletteTitle,
+  optimizationRows,
   rankedAdvice,
   toastResult,
   toCacheRows,
@@ -259,5 +260,40 @@ describe("migrationPreviewRows", () => {
   })
   it("says so when nothing needs an id", () => {
     assert.equal(migrationPreviewRows([])[0]!.level, "ok")
+  })
+})
+
+describe("optimizationRows", () => {
+  const impact = {
+    hitRate: 0.9,
+    reads: 900,
+    writes: 100,
+    uncached: 0,
+    misses: [],
+    requests: 10,
+    cost: 170,
+    noCache: 1000,
+    saved: 0.83,
+    byCause: { "ttl-expired": { n: 2, tokens: 80 } },
+    ttl1h: { requests: 0, writes: 0 },
+    contextEdited: 3,
+  }
+
+  it("puts measured impact next to each setting", () => {
+    const rows = optimizationRows(impact, {
+      cacheTtl: "5m",
+      contextEditing: { trigger: 1 },
+      bindBy: "session",
+      strategy: "sticky",
+      capMode: "soft",
+    })
+    assert.match(rows[0]!.value, /90% hit.*saves 83%/)
+    assert.equal(rows[1]!.label, "miss: TTL expired")
+    const ttl = rows.find((r) => r.setting === "cacheTtl")!
+    assert.match(ttl.value, /2 TTL misses: try auto/)
+    const ce = rows.find((r) => r.setting === "contextEditing")!
+    assert.equal(ce.label, "contextEditing = on (custom)")
+    assert.match(ce.value, /3\/10/)
+    assert.equal(rows.filter((r) => r.setting).length, 5)
   })
 })
