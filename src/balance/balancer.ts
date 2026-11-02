@@ -27,6 +27,7 @@ import { getConfig } from "../config.ts"
 import { sourceForId } from "./accounts-id.ts"
 import { ceilingFor } from "./caps.ts"
 import { readIdentityCacheFresh } from "./identity.ts"
+import { accountKey } from "./account-key.ts"
 import {
   type AccountQuota,
   type QuotaCache,
@@ -597,12 +598,30 @@ const weighted: StrategyFn = ({ candidates, pool }) => {
  * `least-loaded` spreads *spend*. With no usage history it degrades to
  * `least-loaded` rather than picking arbitrarily.
  */
+/**
+ * Usage is written under the account id; rows from before migration are under
+ * the Keychain source. Both count, or a migrated account looks unused.
+ */
+export function usageOf(
+  usage: Readonly<Record<string, { requests: number; lastUsedAt: number }>>,
+  source: string,
+  keyOf: (source: string) => string = accountKey,
+): { requests: number; lastUsedAt: number } {
+  const id = keyOf(source)
+  const a = usage[id]
+  const b = id === source ? undefined : usage[source]
+  return {
+    requests: (a?.requests ?? 0) + (b?.requests ?? 0),
+    lastUsedAt: Math.max(a?.lastUsedAt ?? 0, b?.lastUsedAt ?? 0),
+  }
+}
+
 const leastUsed: StrategyFn = (input) => {
   const { candidates, usage } = input
   if (Object.keys(usage).length === 0) return leastLoaded(input)
   const scored = [...candidates].sort((a, b) => {
-    const ua = usage[a.source] ?? { requests: 0, lastUsedAt: 0 }
-    const ub = usage[b.source] ?? { requests: 0, lastUsedAt: 0 }
+    const ua = usageOf(usage, a.source)
+    const ub = usageOf(usage, b.source)
     return ua.requests - ub.requests || ua.lastUsedAt - ub.lastUsedAt
   })
   return scored[0]!.source

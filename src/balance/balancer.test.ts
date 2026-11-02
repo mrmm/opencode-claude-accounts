@@ -17,6 +17,7 @@ import {
   resolveRef,
   recoveryTimes,
   spentRetry,
+  usageOf,
   selectAccount,
   type Member,
 } from "./balancer.ts"
@@ -1105,5 +1106,25 @@ describe("spentRetry", () => {
     const r = spentRetry(undefined, NOW_MS, clock)
     assert.equal(r.retryAfterS, 60)
     assert.match(r.message, /no reset time is known/)
+  })
+})
+
+// Regression: least-used read usage by Keychain source while new rows are
+// keyed by account id, so a busy migrated account looked unused.
+describe("usageOf", () => {
+  it("sums the id and the pre-migration source key", () => {
+    const usage = {
+      "acme-1": { requests: 5, lastUsedAt: 20 },
+      "src-1": { requests: 2, lastUsedAt: 10 },
+    }
+    const keyOf = (s: string) => (s === "src-1" ? "acme-1" : s)
+    assert.deepEqual(usageOf(usage, "src-1", keyOf), {
+      requests: 7,
+      lastUsedAt: 20,
+    })
+    assert.deepEqual(usageOf(usage, "src-9", keyOf), {
+      requests: 0,
+      lastUsedAt: 0,
+    })
   })
 })
