@@ -16,6 +16,7 @@ import {
   resetConfigCache,
   sanitize,
   stripJsonc,
+  parseContextEditing,
 } from "./config.ts"
 
 /**
@@ -417,6 +418,7 @@ describe("config surface coverage", () => {
     pinBlocksRotation: "0",
     tools: "0",
     contextLimit: "400000",
+    contextEditing: '{"trigger":120000,"keep":4}',
     weights: '{"Acme 1":3}',
     accountNames: '{"Acme 1":"Team 1"}',
     retryPrefillError: "1",
@@ -493,5 +495,53 @@ describe("config surface coverage", () => {
       CLAUDE_AUTH_SWITCH_AT: "banana",
     } as NodeJS.ProcessEnv)
     assert.equal(ratio.switchAt, undefined)
+  })
+})
+
+describe("parseContextEditing", () => {
+  it("reads the boolean forms", () => {
+    assert.equal(parseContextEditing(false), false)
+    assert.equal(parseContextEditing(true), true)
+    assert.equal(parseContextEditing("1"), true)
+    assert.equal(parseContextEditing("0"), false)
+  })
+
+  it("keeps the valid knobs from an object", () => {
+    assert.deepEqual(
+      parseContextEditing({ trigger: 120000, keep: 4, clearAtLeast: 20000 }),
+      { trigger: 120000, keep: 4, clearAtLeast: 20000 },
+    )
+  })
+
+  it("drops a bad knob rather than the whole object", () => {
+    assert.deepEqual(parseContextEditing({ trigger: -1, keep: 4 }), { keep: 4 })
+  })
+
+  it("keeps non-empty excludeTools", () => {
+    assert.deepEqual(
+      parseContextEditing({ excludeTools: ["bash", "", "bash"] }),
+      {
+        excludeTools: ["bash"],
+      },
+    )
+  })
+
+  it("is undefined for a non-object, non-boolean", () => {
+    assert.equal(parseContextEditing(42), undefined)
+  })
+
+  it("round-trips the object through the environment", () => {
+    const got = envLayer({
+      CLAUDE_AUTH_CONTEXT_EDITING: '{"trigger":120000,"keep":4}',
+    } as NodeJS.ProcessEnv)
+    assert.deepEqual(got.contextEditing, { trigger: 120000, keep: 4 })
+  })
+
+  it("toggles via 1/0 in the environment", () => {
+    assert.equal(
+      envLayer({ CLAUDE_AUTH_CONTEXT_EDITING: "1" } as NodeJS.ProcessEnv)
+        .contextEditing,
+      true,
+    )
   })
 })
