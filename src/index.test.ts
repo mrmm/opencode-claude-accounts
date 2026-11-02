@@ -394,6 +394,19 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
     helpers = await import(pathToFileURL(join(tempDir, "index.ts")).href)
   })
 
+  // Regression: a forwarded content-length described the body before the
+  // context-editing and cache-TTL rewrites changed its size.
+  it("buildRequestHeaders drops length and encoding of the original body", () => {
+    const h = helpers.buildRequestHeaders(
+      "https://api.anthropic.com/v1/messages",
+      { headers: { "content-length": "10", "content-encoding": "gzip" } },
+      "token",
+      "claude-sonnet-4-6",
+    )
+    assert.equal(h.get("content-length"), null)
+    assert.equal(h.get("content-encoding"), null)
+  })
+
   it("buildRequestHeaders sets auth headers and strips x-api-key", () => {
     const headers = helpers.buildRequestHeaders(
       "https://api.anthropic.com/v1/messages",
@@ -604,6 +617,10 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
     }
     assert.equal(body.error.type, "rate_limit_error")
     assert.equal(body.error.message, "Next back: Alt 2 at 20:50")
+    assert.equal(
+      (body.error as { upstream_message?: string }).upstream_message,
+      "would exceed",
+    )
   })
 
   it("fetchWithRetry retries on 429 and succeeds", async () => {
@@ -1396,6 +1413,139 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       } else {
         delete process.env.HOME
       }
+    }
+  })
+
+  // Regression: context_management was added to every string body, so a
+  // count_tokens call got it, 400'd, and switched editing off process-wide.
+  it("auth fetch adds context editing to Messages calls only", async () => {
+    const originalHome = process.env.HOME
+    const originalFetch = globalThis.fetch
+    const originalEnv = process.env.CLAUDE_AUTH_CONTEXT_EDITING
+    process.env.HOME = await mkdtemp(
+      join(tmpdir(), "opencode-claude-auth-home-"),
+    )
+    process.env.CLAUDE_AUTH_CONTEXT_EDITING = "1"
+    const sent: Record<string, string> = {}
+    try {
+      const { helpersModule } = await loadHelpersWithCountingKeychain(
+        Date.now() + 10 * 60_000,
+      )
+      globalThis.fetch = (async (
+        url: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        sent[new URL(String(url)).pathname] = String(init?.body)
+        return new Response("{}", { status: 200 })
+      }) as typeof fetch
+      const plugin = await helpersModule.default({} as never)
+      const authConfig = await (
+        plugin as { auth: { loader: TestAuthLoader } }
+      ).auth.loader(
+        async () => ({
+          type: "oauth",
+          refresh: "refresh",
+          access: "access",
+          expires: Date.now() + 60_000,
+        }),
+        { models: {} },
+      )
+      const body = JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [{ name: "read", input_schema: { type: "object" } }],
+      })
+      for (const path of ["/v1/messages", "/v1/messages/count_tokens"])
+        await authConfig.fetch(`https://api.anthropic.com${path}`, {
+          method: "POST",
+          body,
+        })
+      assert.match(sent["/v1/messages"]!, /context_management/)
+      assert.doesNotMatch(
+        sent["/v1/messages/count_tokens"]!,
+        /context_management/,
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalEnv === undefined)
+        delete process.env.CLAUDE_AUTH_CONTEXT_EDITING
+      else process.env.CLAUDE_AUTH_CONTEXT_EDITING = originalEnv
+      if (typeof originalHome === "string") process.env.HOME = originalHome
+      else delete process.env.HOME
+    }
+  })
+
+  // Regression: after a prefill trim, the context-editing retry resent the
+  // untrimmed body -- the conversation the server had already refused.
+  it("auth fetch keeps the prefill trim when it retries without context editing", async () => {
+    const originalHome = process.env.HOME
+    const originalFetch = globalThis.fetch
+    const saved = {
+      ce: process.env.CLAUDE_AUTH_CONTEXT_EDITING,
+      pf: process.env.CLAUDE_AUTH_RETRY_PREFILL_ERROR,
+    }
+    process.env.HOME = await mkdtemp(
+      join(tmpdir(), "opencode-claude-auth-home-"),
+    )
+    process.env.CLAUDE_AUTH_CONTEXT_EDITING = "1"
+    process.env.CLAUDE_AUTH_RETRY_PREFILL_ERROR = "1"
+    const bodies: string[] = []
+    const err = (message: string) =>
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message },
+        }),
+        { status: 400 },
+      )
+    try {
+      const { helpersModule } = await loadHelpersWithCountingKeychain(
+        Date.now() + 10 * 60_000,
+      )
+      globalThis.fetch = (async (_u: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(String(init?.body))
+        if (bodies.length === 1)
+          return err("This model does not support assistant message prefill.")
+        if (bodies.length === 2) return err("context_management: not supported")
+        return new Response("{}", { status: 200 })
+      }) as typeof fetch
+      const plugin = await helpersModule.default({} as never)
+      const authConfig = await (
+        plugin as { auth: { loader: TestAuthLoader } }
+      ).auth.loader(
+        async () => ({
+          type: "oauth",
+          refresh: "refresh",
+          access: "access",
+          expires: Date.now() + 60_000,
+        }),
+        { models: {} },
+      )
+      await authConfig.fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: JSON.stringify({
+          model: "claude-opus-4-8",
+          messages: [
+            { role: "user", content: "hi" },
+            { role: "assistant", content: "PREFILL" },
+          ],
+          tools: [{ name: "read", input_schema: { type: "object" } }],
+        }),
+      })
+      assert.equal(bodies.length, 3)
+      assert.match(bodies[0]!, /PREFILL/)
+      assert.doesNotMatch(bodies[2]!, /PREFILL/)
+      assert.doesNotMatch(bodies[2]!, /context_management/)
+    } finally {
+      globalThis.fetch = originalFetch
+      for (const [k, v] of [
+        ["CLAUDE_AUTH_CONTEXT_EDITING", saved.ce],
+        ["CLAUDE_AUTH_RETRY_PREFILL_ERROR", saved.pf],
+      ] as const)
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      if (typeof originalHome === "string") process.env.HOME = originalHome
+      else delete process.env.HOME
     }
   })
 

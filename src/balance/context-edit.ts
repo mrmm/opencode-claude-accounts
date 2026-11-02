@@ -113,9 +113,18 @@ export function applyContextEditing(
  * happens to arrive while editing is on.
  */
 export function contextEditDisabledBy400(responseBody: string): boolean {
+  // Judge the error message, not the whole body: a 400 that merely echoes the
+  // field elsewhere must not switch editing off for the whole process.
+  let text = responseBody
+  try {
+    const parsed = JSON.parse(responseBody) as { error?: { message?: unknown } }
+    if (parsed && typeof parsed === "object")
+      text =
+        typeof parsed.error?.message === "string" ? parsed.error.message : ""
+  } catch {}
   return (
-    responseBody.includes("context_management") ||
-    responseBody.includes("context-management-2025-06-27")
+    text.includes("context_management") ||
+    text.includes("context-management-2025-06-27")
   )
 }
 

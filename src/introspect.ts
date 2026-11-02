@@ -236,13 +236,17 @@ export function recordShape(
 ): void {
   try {
     const dir = dirname(path)
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    // Captures can hold whole conversations: owner-only.
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
     try {
       if (statSync(path).size > MAX_BYTES) renameSync(path, `${path}.1`)
     } catch {
       // no file yet, or another process rotated it first
     }
-    appendFileSync(path, `${JSON.stringify(shape)}\n`, "utf-8")
+    appendFileSync(path, `${JSON.stringify(shape)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    })
   } catch {
     // Non-fatal by design.
   }

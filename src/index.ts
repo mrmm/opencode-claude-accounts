@@ -224,7 +224,15 @@ export async function withSpentRetry(
   let body = text
   try {
     const parsed = JSON.parse(text) as { error?: { message?: string } }
-    if (parsed?.error && typeof parsed.error === "object") {
+    if (
+      parsed?.error &&
+      typeof parsed.error === "object" &&
+      !Array.isArray(parsed.error)
+    ) {
+      // Keep the server's own reason; the logs read the rewritten body.
+      if (typeof parsed.error.message === "string")
+        (parsed.error as Record<string, unknown>).upstream_message =
+          parsed.error.message
       parsed.error.message = plan.message
       body = JSON.stringify(parsed)
     }
@@ -376,6 +384,10 @@ export function buildRequestHeaders(
     if (!headers.has(key)) headers.set(key, value)
   }
   headers.delete("x-api-key")
+  // The body is rewritten after this (context editing, cache TTL), so a
+  // forwarded length or encoding would describe a different body.
+  headers.delete("content-length")
+  headers.delete("content-encoding")
 
   return headers
 }
@@ -984,7 +996,11 @@ const plugin: PluginWithOptions = async (
               excluded,
             )
             let transformed = transformBody(requestInit.body)
-            const edited = maybeEditContext(transformed)
+            // Only a Messages call takes context_management; count_tokens and
+            // the rest would 400 on it and switch editing off for everything.
+            const edited = requestPath.endsWith("/messages")
+              ? maybeEditContext(transformed)
+              : { body: transformed, changed: false }
             let body = edited.body
             let contextEdited = edited.changed
             let sentTtl: "5m" | "1h" = "5m"
@@ -1115,6 +1131,12 @@ const plugin: PluginWithOptions = async (
                 const trimmed =
                   typeof body === "string" ? stripTrailingAssistant(body) : null
                 if (trimmed) {
+                  // A later retry (context editing off) must resend the
+                  // trimmed conversation, not the one already refused.
+                  body = trimmed.body
+                  if (typeof transformed === "string")
+                    transformed =
+                      stripTrailingAssistant(transformed)?.body ?? transformed
                   const creds = getCachedCredentials()
                   const before = Date.now()
                   response = await fetchWithRetry(requestUrl, {

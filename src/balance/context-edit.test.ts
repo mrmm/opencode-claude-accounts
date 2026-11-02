@@ -126,6 +126,17 @@ describe("contextEditDisabledBy400", () => {
   it("ignores an unrelated 400", () => {
     assert.equal(contextEditDisabledBy400("messages: too long"), false)
   })
+
+  // Regression: any 400 whose body contained the field name anywhere switched
+  // editing off for the whole process.
+  it("ignores the field name outside the error message", () => {
+    assert.equal(
+      contextEditDisabledBy400(
+        '{"error":{"type":"invalid_request_error","message":"messages.3: too long"},"context_management":{}}',
+      ),
+      false,
+    )
+  })
 })
 
 describe("clearedInputTokens", () => {
