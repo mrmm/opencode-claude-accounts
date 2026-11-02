@@ -22,7 +22,10 @@ import type {
   Pool,
   SwitchWindow,
 } from "../config.ts"
+import { getConfig } from "../config.ts"
+import { sourceForId } from "./accounts-id.ts"
 import { ceilingFor } from "./caps.ts"
+import { readIdentityCache } from "./identity.ts"
 import {
   type AccountQuota,
   type QuotaCache,
@@ -362,12 +365,31 @@ function reservedWindowPercent(
  * guessing: silently picking one of two plausible accounts is worse than saying
  * the reference was no good.
  */
+/** The Keychain source a registered account id points at, from config + identity cache. */
+export function liveIdToSource(id: string): string | undefined {
+  try {
+    const registry = getConfig().accountIds
+    return registry[id]
+      ? sourceForId(id, readIdentityCache(), registry)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function resolveRef(
   ref: string,
   members: readonly Member[],
+  idToSource: (id: string) => string | undefined = liveIdToSource,
 ): string | undefined {
   const byId = members.find((m) => m.id === ref)
   if (byId) return byId.source
+
+  // Most callers build members from the Keychain without ids; a registered id
+  // must still resolve, or every migrated preset reference goes nowhere.
+  const viaRegistry = idToSource(ref)
+  if (viaRegistry && members.some((m) => m.source === viaRegistry))
+    return viaRegistry
 
   const exact = members.find((m) => m.source === ref)
   if (exact) return exact.source

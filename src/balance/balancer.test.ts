@@ -954,3 +954,32 @@ describe("declining paid overflow", () => {
     assert.notEqual(d!.pool, "exhausted")
   })
 })
+
+// Regression: presets migrated to ids showed every account as "[?] matches no
+// account", because callers build members from the Keychain without ids.
+describe("resolveRef with registered ids", () => {
+  const bare: Member[] = [
+    { source: "src-1", label: "Claude Team - Acme 1" },
+    { source: "src-2", label: "Claude Team - Acme 2" },
+  ]
+  const ids = (id: string) =>
+    ({ "acme-1": "src-1", "acme-2": "src-2", gone: "src-9" })[id]
+
+  it("resolves an id through the registry when members carry none", () => {
+    assert.equal(resolveRef("acme-2", bare, ids), "src-2")
+    assert.equal(
+      resolveRef("acme-2", bare, () => undefined),
+      undefined,
+      "without the registry lookup it is unresolved",
+    )
+  })
+
+  it("ignores an id whose account is not a member", () => {
+    assert.equal(resolveRef("gone", bare, ids), undefined)
+  })
+
+  it("still prefers an id carried on the member", () => {
+    const withId = [{ ...bare[0]!, id: "acme-2" }, bare[1]!]
+    assert.equal(resolveRef("acme-2", withId, ids), "src-1")
+  })
+})
