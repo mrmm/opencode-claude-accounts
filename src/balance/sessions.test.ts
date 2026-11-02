@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { writeFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { beforeEach, describe, it } from "node:test"
 
@@ -25,6 +25,11 @@ import {
   reserveAllowed,
   resetReserveAllows,
 } from "./sessions.ts"
+
+// These tests write the reserve and credit-denial files under HOME; point it
+// at a temp dir so a test run never edits the operator's real state. Each test
+// file runs in its own process, and the child spawned below inherits it.
+process.env.HOME = mkdtempSync(join(tmpdir(), "sessions-home-"))
 
 const NOW = 1785162626000
 const SEC = Math.floor(NOW / 1000)
