@@ -1418,6 +1418,57 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
 
   // Regression: context_management was added to every string body, so a
   // count_tokens call got it, 400'd, and switched editing off process-wide.
+  it("auth fetch records the path a request took on its usage row", async () => {
+    const originalHome = process.env.HOME
+    const originalFetch = globalThis.fetch
+    const home = await mkdtemp(join(tmpdir(), "opencode-claude-auth-home-"))
+    process.env.HOME = home
+    try {
+      const { helpersModule } = await loadHelpersWithCountingKeychain(
+        Date.now() + 10 * 60_000,
+      )
+      globalThis.fetch = (async () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch
+      const plugin = await helpersModule.default({} as never)
+      const authConfig = await (
+        plugin as { auth: { loader: TestAuthLoader } }
+      ).auth.loader(
+        async () => ({
+          type: "oauth",
+          refresh: "refresh",
+          access: "access",
+          expires: Date.now() + 60_000,
+        }),
+        { models: {} },
+      )
+      const res = await authConfig.fetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-opus-4-8", messages: [] }),
+        },
+      )
+      await res.text()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const rows = readFileSync(
+        join(home, ".local", "share", "opencode", "claude-auth-usage.jsonl"),
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { kind: string; steps?: string[] })
+        .filter((r) => r.kind === "request")
+      assert.deepEqual(rows.at(-1)?.steps, ["active", "status:200"])
+    } finally {
+      globalThis.fetch = originalFetch
+      if (typeof originalHome === "string") process.env.HOME = originalHome
+      else delete process.env.HOME
+    }
+  })
+
   it("auth fetch adds context editing to Messages calls only", async () => {
     const originalHome = process.env.HOME
     const originalFetch = globalThis.fetch

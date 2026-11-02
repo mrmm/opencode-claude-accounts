@@ -68,6 +68,12 @@ export type RequestEvent = {
   ttl?: "5m" | "1h"
   /** A context-editing block was added to this request. */
   contextEdited?: boolean
+  /**
+   * The path the request took, in order: how its account was chosen, which
+   * rewrites applied, and every retry or recovery branch. `code` or
+   * `code:detail`; read by the TUI's request trace (`src/tui/requests.ts`).
+   */
+  steps?: string[]
 }
 
 /** One move between accounts. */

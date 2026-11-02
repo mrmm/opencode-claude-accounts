@@ -891,6 +891,8 @@ const plugin: PluginWithOptions = async (
             }
 
             const latest = sessionCreds ?? getCachedCredentials()
+            // The path this request takes, recorded on its usage row.
+            const steps: string[] = [sessionCreds ? "bound" : "active"]
 
             // The account this request actually goes out on, captured here
             // rather than re-derived once the response is back.
@@ -1004,6 +1006,8 @@ const plugin: PluginWithOptions = async (
             // Only what the body actually carried: an unmarked body sent no 1h.
             const sentTtl: "5m" | "1h" =
               prepared.ttlSet && ttl === "1h" ? "1h" : "5m"
+            if (sentTtl === "1h") steps.push("ttl-1h")
+            if (contextEdited) steps.push("ctx-edit")
 
             // Record the shape of what actually goes out — system blocks, tool
             // schemas, message sizes. Off unless asked for: the body carries the
@@ -1046,6 +1050,7 @@ const plugin: PluginWithOptions = async (
             // another client, then retry once only when the access token changed.
             let preserveResponseUnchanged = false
             if (response.status === 401) {
+              steps.push("auth-401")
               let refreshed: ClaudeCredentials | null = null
               try {
                 refreshed = reloadCredentialsFromSource()
@@ -1112,6 +1117,7 @@ const plugin: PluginWithOptions = async (
                   // A later retry (context editing off) must resend the
                   // trimmed conversation, not the one already refused.
                   body = trimmed.body
+                  steps.push(`prefill-trim:${trimmed.dropped}`)
                   const untrimmed = withoutEditing
                   withoutEditing = () => {
                     const s = untrimmed()
@@ -1175,6 +1181,7 @@ const plugin: PluginWithOptions = async (
               const errorBody = await response.clone().text()
               if (contextEditDisabledBy400(errorBody)) {
                 contextEditingDisabled = true
+                steps.push("ctx-off")
                 contextEdited = false
                 log("context_edit_disabled", { level: "warn", modelId })
                 const creds = getCachedCredentials()
@@ -1216,6 +1223,7 @@ const plugin: PluginWithOptions = async (
               }
 
               addExcludedBeta(modelId, betaToExclude)
+              steps.push(`beta-off:${betaToExclude}`)
               log("fetch_beta_excluded", {
                 modelId,
                 excludedBeta: betaToExclude,
@@ -1254,6 +1262,9 @@ const plugin: PluginWithOptions = async (
                 rotatedCreds.accessToken !== latest.accessToken
               ) {
                 servingSource = rotated?.source ?? servingSource
+                steps.push(
+                  `rotate:${accountKey(refusedSource ?? "?")}>${accountKey(servingSource ?? "?")}`,
+                )
                 log("fetch_retry_after_rotate", {
                   modelId,
                   from: refusedSource,
@@ -1288,6 +1299,7 @@ const plugin: PluginWithOptions = async (
                 serverS === undefined ||
                 serverS * 1000 > getMaxRetryDelayMs()
               ) {
+                steps.push("spent")
                 response = await withSpentRetry(
                   response,
                   spentRetryNow(serverS),
@@ -1375,6 +1387,7 @@ const plugin: PluginWithOptions = async (
                 ...(u7 !== undefined ? { utilization_7d: u7 } : {}),
                 ttl: sentTtl,
                 ...(contextEdited ? { contextEdited: true } : {}),
+                steps: [...steps, `status:${response.status}`],
                 ...(usage
                   ? {
                       input: usage.input,
