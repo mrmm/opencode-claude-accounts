@@ -23,6 +23,8 @@ export type PreparedBody = {
   contextEdited: boolean
   /** Whether any cache_control marker carries the requested ttl. */
   ttlSet: boolean
+  /** The parsed object `body` was serialised from, for read-only callers. */
+  sent?: object
 }
 
 export function prepareBody(
@@ -54,6 +56,7 @@ export function prepareBody(
       withoutEditing: () => plain,
       contextEdited: false,
       ttlSet,
+      sent: parsed,
     }
   }
   return {
@@ -61,5 +64,6 @@ export function prepareBody(
     withoutEditing: () => JSON.stringify(parsed),
     contextEdited: true,
     ttlSet,
+    sent: edited.body as object,
   }
 }

@@ -153,3 +153,38 @@ describe("readShapeFile", () => {
     assert.deepEqual(readShapeFile(p), [])
   })
 })
+
+// Regression: capture re-parsed the whole outgoing body, a second full parse
+// of the conversation on every captured request.
+describe("describeRequest on a parsed body", () => {
+  it("describes the object without parsing or changing it", () => {
+    const obj = JSON.parse(body()) as object
+    const before = JSON.stringify(obj)
+    const realParse = JSON.parse
+    let parses = 0
+    JSON.parse = ((...a: Parameters<typeof JSON.parse>) => {
+      parses++
+      return realParse(...a)
+    }) as typeof JSON.parse
+    let shape
+    try {
+      shape = describeRequest(obj, "shape", "ses_1", Buffer.byteLength(body()))
+    } finally {
+      JSON.parse = realParse
+    }
+    assert.equal(parses, 0)
+    const strip = (s: object | undefined) => {
+      const {
+        timestamp: _t,
+        created_at: _c,
+        ...rest
+      } = s as Record<string, unknown>
+      return rest
+    }
+    assert.deepEqual(
+      strip(shape),
+      strip(describeRequest(body(), "shape", "ses_1")),
+    )
+    assert.equal(JSON.stringify(obj), before)
+  })
+})

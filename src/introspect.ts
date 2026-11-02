@@ -180,19 +180,28 @@ function toolShapes(tools: unknown): ToolShape[] {
 /**
  * Describe one request. Returns undefined when capture is off or the body is
  * not the JSON we expect, so the caller can stay a single guarded call.
+ *
+ * Takes the already-parsed body when the caller has it, so capture adds no
+ * second parse of a large conversation. Only reads it, never changes it.
  */
 export function describeRequest(
-  bodyStr: string | undefined,
+  body: string | object | undefined,
   level: CaptureLevel,
   sessionId: string | null,
+  /** Size of the serialised body, when `body` is the parsed object. */
+  sentBytes?: number,
 ): RequestShape | undefined {
-  if (level === "off" || !bodyStr) return undefined
+  if (level === "off" || !body) return undefined
   let parsed: Record<string, unknown>
-  try {
-    parsed = JSON.parse(bodyStr) as Record<string, unknown>
-  } catch {
+  if (typeof body === "string") {
+    try {
+      parsed = JSON.parse(body) as Record<string, unknown>
+    } catch {
+      return undefined
+    }
+  } else parsed = body as Record<string, unknown>
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
     return undefined
-  }
 
   const system = systemBlocks(parsed.system, level)
   const tools = toolShapes(parsed.tools)
@@ -216,7 +225,10 @@ export function describeRequest(
     created_at: now,
     model: typeof parsed.model === "string" ? parsed.model : "unknown",
     sessionId,
-    bytes: Buffer.byteLength(bodyStr),
+    bytes:
+      typeof body === "string"
+        ? Buffer.byteLength(body)
+        : (sentBytes ?? Buffer.byteLength(JSON.stringify(parsed))),
     system,
     systemBytes: system.reduce((n, b) => n + b.bytes, 0),
     tools,

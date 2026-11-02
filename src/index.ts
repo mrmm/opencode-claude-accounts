@@ -1012,9 +1012,10 @@ const plugin: PluginWithOptions = async (
             const captureLevel = getConfig().captureRequests
             if (captureLevel !== "off") {
               const shape = describeRequest(
-                typeof body === "string" ? body : bodyStr,
+                prepared.sent ?? bodyStr,
                 captureLevel,
                 ocSessionId,
+                typeof body === "string" ? Buffer.byteLength(body) : undefined,
               )
               if (shape) recordShape(shape)
             }
