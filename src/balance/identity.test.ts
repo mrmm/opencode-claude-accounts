@@ -1,6 +1,12 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync } from "node:fs"
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -8,6 +14,7 @@ import {
   fetchIdentities,
   parseProfile,
   readIdentityCache,
+  readIdentityCacheFresh,
   writeIdentity,
 } from "./identity.ts"
 
@@ -120,5 +127,33 @@ describe("fetchIdentities", () => {
     const p = tmpFile()
     await fetchIdentities([], { path: p })
     assert.throws(() => readFileSync(p, "utf8"))
+  })
+})
+
+describe("readIdentityCacheFresh", () => {
+  it("serves the cached read until the file changes", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "idf-")), "ids.json")
+    writeFileSync(
+      path,
+      JSON.stringify({ a: { accountUuid: "1", orgUuid: "o", fetchedAt: 1 } }),
+    )
+    assert.equal(readIdentityCacheFresh(path).a?.accountUuid, "1")
+    writeFileSync(
+      path,
+      JSON.stringify({ a: { accountUuid: "2", orgUuid: "o", fetchedAt: 2 } }),
+    )
+    utimesSync(path, new Date(), new Date(Date.now() + 5_000))
+    assert.equal(readIdentityCacheFresh(path).a?.accountUuid, "2")
+  })
+
+  it("leaves no temp file behind after a write", () => {
+    const dir = mkdtempSync(join(tmpdir(), "idw-"))
+    writeIdentity(
+      "s",
+      { accountUuid: "1", orgUuid: "o" },
+      1,
+      join(dir, "ids.json"),
+    )
+    assert.deepEqual(readdirSync(dir), ["ids.json"])
   })
 })

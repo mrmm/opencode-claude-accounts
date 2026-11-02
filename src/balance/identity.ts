@@ -17,7 +17,14 @@
  * on the request path.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -134,6 +141,26 @@ export function readIdentityCache(
   }
 }
 
+/**
+ * readIdentityCache for the request path: re-read only when the file changed.
+ * accountKey and id resolution run per request; the file changes once per probe.
+ */
+let memo: { path: string; mtimeMs: number; cache: IdentityCache } | undefined
+export function readIdentityCacheFresh(
+  path: string = identityCachePath(),
+): IdentityCache {
+  try {
+    const mtimeMs = statSync(path).mtimeMs
+    if (memo && memo.path === path && memo.mtimeMs === mtimeMs)
+      return memo.cache
+    const cache = readIdentityCache(path)
+    memo = { path, mtimeMs, cache }
+    return cache
+  } catch {
+    return {}
+  }
+}
+
 /** Never throws: this runs detached and must not surface as a failed request. */
 export function writeIdentity(
   source: string,
@@ -146,7 +173,11 @@ export function writeIdentity(
     cache[source] = { ...identity, fetchedAt: now }
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
+    // tmp + rename: the server and the TUI both write this file, and a torn
+    // write would lose every account's identity.
+    const tmp = `${path}.tmp-${process.pid}`
+    writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
+    renameSync(tmp, path)
     return true
   } catch {
     return false

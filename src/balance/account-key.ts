@@ -17,7 +17,7 @@
 
 import { getConfig } from "../config.ts"
 import { accountIdFor, cacheReadKeys } from "./accounts-id.ts"
-import { type IdentityCache, readIdentityCache } from "./identity.ts"
+import { type IdentityCache, readIdentityCacheFresh } from "./identity.ts"
 
 /** The id a WRITE for this source should key on, given explicit stores. */
 export function resolveAccountKey(
@@ -48,7 +48,7 @@ export function accountKey(source: string): string {
   try {
     return resolveAccountKey(
       source,
-      readIdentityCache(),
+      readIdentityCacheFresh(),
       getConfig().accountIds,
     )
   } catch {
@@ -59,7 +59,7 @@ export function accountKey(source: string): string {
 /** The live read keys: id first (new writes), then source (old writes). */
 export function accountReadKeys(source: string): string[] {
   try {
-    return readKeysFor(source, readIdentityCache(), getConfig().accountIds)
+    return readKeysFor(source, readIdentityCacheFresh(), getConfig().accountIds)
   } catch {
     return [source]
   }

@@ -25,7 +25,7 @@ import type {
 import { getConfig } from "../config.ts"
 import { sourceForId } from "./accounts-id.ts"
 import { ceilingFor } from "./caps.ts"
-import { readIdentityCache } from "./identity.ts"
+import { readIdentityCacheFresh } from "./identity.ts"
 import {
   type AccountQuota,
   type QuotaCache,
@@ -370,7 +370,7 @@ export function liveIdToSource(id: string): string | undefined {
   try {
     const registry = getConfig().accountIds
     return registry[id]
-      ? sourceForId(id, readIdentityCache(), registry)
+      ? sourceForId(id, readIdentityCacheFresh(), registry)
       : undefined
   } catch {
     return undefined
