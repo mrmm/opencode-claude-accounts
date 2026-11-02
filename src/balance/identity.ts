@@ -65,6 +65,8 @@ export function buildProfileRequest(
         authorization: `Bearer ${accessToken}`,
         "anthropic-beta": "oauth-2025-04-20",
       },
+      // A hung connection must not stall the identity sweep.
+      signal: AbortSignal.timeout(5_000),
     },
   ]
 }
@@ -99,10 +101,12 @@ export function parseProfile(body: unknown): AccountIdentity | undefined {
 export function identityFromConfigDir(
   configDir: string,
 ): AccountIdentity | undefined {
-  const candidates = [
-    join(configDir, ".claude.json"),
-    join(homedir(), ".claude.json"),
-  ]
+  // ~/.claude.json belongs to the default config dir only; using it for any
+  // other dir would give two accounts one identity, and migration would make
+  // that collision permanent.
+  const candidates = [join(configDir, ".claude.json")]
+  if (configDir === join(homedir(), ".claude"))
+    candidates.push(join(homedir(), ".claude.json"))
   for (const path of candidates) {
     try {
       if (!existsSync(path)) continue
@@ -176,7 +180,11 @@ export function writeIdentity(
     // tmp + rename: the server and the TUI both write this file, and a torn
     // write would lose every account's identity.
     const tmp = `${path}.tmp-${process.pid}`
-    writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
+    // Emails and org names: owner-only.
+    writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    })
     renameSync(tmp, path)
     return true
   } catch {

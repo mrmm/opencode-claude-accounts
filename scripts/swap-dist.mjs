@@ -8,5 +8,11 @@ import { existsSync, renameSync, rmSync } from "node:fs"
 
 const old = `.dist-old-${process.pid}`
 if (existsSync("dist")) renameSync("dist", old)
-renameSync(".dist-next", "dist")
+try {
+  renameSync(".dist-next", "dist")
+} catch (e) {
+  // Put the old tree back rather than leave running processes with no plugin.
+  if (existsSync(old)) renameSync(old, "dist")
+  throw e
+}
 rmSync(old, { recursive: true, force: true })

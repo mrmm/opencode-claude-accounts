@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs"
@@ -11,7 +12,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
+  buildProfileRequest,
   fetchIdentities,
+  identityFromConfigDir,
   parseProfile,
   readIdentityCache,
   readIdentityCacheFresh,
@@ -155,5 +158,38 @@ describe("readIdentityCacheFresh", () => {
       join(dir, "ids.json"),
     )
     assert.deepEqual(readdirSync(dir), ["ids.json"])
+  })
+})
+
+describe("identity hardening", () => {
+  it("does not borrow ~/.claude.json for a non-default config dir", () => {
+    const home = mkdtempSync(join(tmpdir(), "idh-"))
+    writeFileSync(
+      join(home, ".claude.json"),
+      JSON.stringify({
+        oauthAccount: { accountUuid: "u", organizationUuid: "o" },
+      }),
+    )
+    const prior = process.env.HOME
+    process.env.HOME = home
+    try {
+      assert.equal(identityFromConfigDir(join(home, "other")), undefined)
+      assert.equal(
+        identityFromConfigDir(join(home, ".claude"))?.accountUuid,
+        "u",
+      )
+    } finally {
+      process.env.HOME = prior
+    }
+  })
+
+  it("writes the identity cache owner-only", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "idm-")), "ids.json")
+    writeIdentity("s", { accountUuid: "1", orgUuid: "o" }, 1, path)
+    assert.equal(statSync(path).mode & 0o777, 0o600)
+  })
+
+  it("bounds the profile request with a timeout", () => {
+    assert.ok(buildProfileRequest("t")[1].signal instanceof AbortSignal)
   })
 })
