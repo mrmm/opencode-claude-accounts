@@ -553,14 +553,19 @@ describe("parseContextEditing", () => {
 })
 
 describe("parseGroups", () => {
-  it("keeps groups with accounts, trims the label, drops the rest", () => {
+  // An empty group is kept: the TUI creates a group before it has accounts.
+  it("keeps groups (empty ones too), trims the label, drops the malformed", () => {
     assert.deepEqual(
       parseGroups({
         Main: { accounts: ["acme-1", "acme-2"], label: " Main team " },
         Empty: { accounts: [] },
         Bad: "x",
+        NoList: { label: "x" },
       }),
-      { Main: { accounts: ["acme-1", "acme-2"], label: "Main team" } },
+      {
+        Main: { accounts: ["acme-1", "acme-2"], label: "Main team" },
+        Empty: { accounts: [] },
+      },
     )
   })
 

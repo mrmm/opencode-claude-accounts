@@ -80,3 +80,21 @@ describe("groupRows", () => {
     assert.ok(!out[0]!.summary.includes("reqs"))
   })
 })
+
+describe("groupRows with an empty group", () => {
+  it("skips a group with no visible accounts", () => {
+    const out = groupRows({
+      groups: {
+        fresh: { accounts: [], label: "Fresh" },
+        main: { accounts: ["acme-1"] },
+      },
+      accounts: ACCOUNTS,
+      quota: {},
+      resolve,
+    })
+    assert.deepEqual(
+      out.map((s) => s.title),
+      ["main", "Other"],
+    )
+  })
+})

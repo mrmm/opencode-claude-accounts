@@ -302,11 +302,11 @@ shorthand, and a way to see related accounts together.
 
 ```jsonc
 "groups": {
-  "Main": { "accounts": ["acme-1", "acme-2", "acme-3"] },
-  "Alt": { "label": "Alternates", "accounts": ["acme-1-alt", "acme-2-alt"] }
+  "main": { "label": "Main", "accounts": ["acme-1", "acme-2", "acme-3"] },
+  "alt": { "label": "Alternates", "accounts": ["acme-1-alt", "acme-2-alt"] }
 },
 "presets": {
-  "main-only": { "strategy": "least-loaded", "accounts": ["Main"] }
+  "main-only": { "strategy": "least-loaded", "accounts": ["main"] }
 }
 ```
 
@@ -320,6 +320,13 @@ shorthand, and a way to see related accounts together.
   (1.0 = one account's full window, an account with no reading counts as none),
   coloured by the worst member. Accounts in no group are listed under **Other**.
 - **`claude_auth_status`** prints the same aggregates per group.
+- **Ids and names.** The key (`main`) is the group's id and is what presets
+  reference; `label` is the name shown. Renaming a group from the TUI changes
+  only the label, so no preset breaks.
+- **Editing.** Manage accounts → **Groups**: create a group, tick its members
+  (written as account ids), rename it, or delete it — the delete confirmation
+  names any preset that routes to it. The preset editor shows a group's members
+  as ticked; unticking one replaces the group with the members that stay.
 
 ### Usage telemetry
 

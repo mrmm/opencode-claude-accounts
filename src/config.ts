@@ -461,8 +461,12 @@ export function parseGroups(
     const key = name.trim()
     if (!key || !raw || typeof raw !== "object") continue
     const r = raw as Record<string, unknown>
-    const accounts = parseAccounts(r.accounts)
-    if (!accounts || accounts.length === 0) continue
+    // An empty group is kept: it is how a group exists between being created
+    // in the TUI and getting its first account.
+    const accounts = Array.isArray(r.accounts)
+      ? (parseAccounts(r.accounts) ?? [])
+      : undefined
+    if (!accounts) continue
     const group: AccountGroup = { accounts }
     if (typeof r.label === "string" && r.label.trim())
       group.label = r.label.trim()

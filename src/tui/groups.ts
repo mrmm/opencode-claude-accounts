@@ -98,7 +98,10 @@ export function groupRows(input: {
       .map((a) => a.source)
       .filter((s) => members.has(s))
     for (const s of sources) grouped.add(s)
-    out.push(section(`group:${name}`, g.label ?? name, sources))
+    // An empty group (just created, or all its accounts disabled) has nothing
+    // to summarise; "0.0/0 left" would read as a spent group.
+    if (sources.length > 0)
+      out.push(section(`group:${name}`, g.label ?? name, sources))
   }
   const rest = input.accounts
     .map((a) => a.source)
