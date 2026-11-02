@@ -951,7 +951,8 @@ const plugin: PluginWithOptions = async (
               modelId,
               excluded,
             )
-            const edited = maybeEditContext(transformBody(requestInit.body))
+            let transformed = transformBody(requestInit.body)
+            const edited = maybeEditContext(transformed)
             let body = edited.body
             const contextEdited = edited.changed
 
@@ -973,6 +974,8 @@ const plugin: PluginWithOptions = async (
                 lastAt: now,
               })
               body = applyCacheTtl(body, resolved)
+              if (typeof transformed === "string")
+                transformed = applyCacheTtl(transformed, resolved)
             }
 
             // Record the shape of what actually goes out — system blocks, tool
