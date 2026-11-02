@@ -1,0 +1,235 @@
+/**
+ * Account identity: resolving each Keychain account to the stable pair that
+ * uniquely names it -- `{ accountUuid, orgUuid }` -- plus the email and org name
+ * that make it legible.
+ *
+ * Why this exists: a Keychain source name is an implementation detail (it is
+ * renamed, re-suffixed, re-logged-in), and neither uuid alone is unique -- the
+ * same login appears in several orgs. The (account, org) pair is the only key
+ * that survives those changes, and it comes from the profile endpoint, not from
+ * anything on disk. `.claude.json` is a fallback only: a spike showed it
+ * resolves the primary account to the wrong org and is empty for a third of
+ * config dirs.
+ *
+ * I/O is deliberately split out: `parseProfile` and the cache merge are pure and
+ * tested without a network, while `fetchIdentity` is the thin shell. Identity is
+ * fetched when a token is known fresh (load / probe / refresh) and cached, never
+ * on the request path.
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { dirname, join } from "node:path"
+
+/** The uniquely-identifying pair plus the fields that make it readable. */
+export type AccountIdentity = {
+  accountUuid: string
+  orgUuid: string
+  email?: string
+  orgName?: string
+}
+
+/** One cache row: an identity plus when it was fetched, keyed by Keychain source. */
+export type CachedIdentity = AccountIdentity & { fetchedAt: number }
+
+export type IdentityCache = Record<string, CachedIdentity>
+
+export const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
+
+/** Next to the quota cache, so both live under one directory. */
+export function identityCachePath(): string {
+  return join(
+    homedir(),
+    ".local",
+    "share",
+    "opencode",
+    "claude-auth-identities.json",
+  )
+}
+
+/** Build the profile request. Same oauth beta header the rest of the plugin uses. */
+export function buildProfileRequest(
+  accessToken: string,
+): [string, RequestInit] {
+  return [
+    PROFILE_URL,
+    {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+      },
+    },
+  ]
+}
+
+/**
+ * Pull an identity out of a profile body. Returns undefined for anything missing
+ * the two uuids, since without the pair there is nothing to key on.
+ */
+export function parseProfile(body: unknown): AccountIdentity | undefined {
+  if (!body || typeof body !== "object") return undefined
+  const b = body as {
+    account?: { uuid?: unknown; email_address?: unknown }
+    organization?: { uuid?: unknown; name?: unknown }
+  }
+  const accountUuid = b.account?.uuid
+  const orgUuid = b.organization?.uuid
+  if (typeof accountUuid !== "string" || typeof orgUuid !== "string")
+    return undefined
+  const out: AccountIdentity = { accountUuid, orgUuid }
+  if (typeof b.account?.email_address === "string")
+    out.email = b.account.email_address
+  if (typeof b.organization?.name === "string")
+    out.orgName = b.organization.name
+  return out
+}
+
+/**
+ * The `.claude.json` fallback: `oauthAccount` carries the pair and email for a
+ * config dir. Known to be wrong for the primary account and empty for some
+ * dirs, so it is only ever consulted when the profile endpoint gave nothing.
+ */
+export function identityFromConfigDir(
+  configDir: string,
+): AccountIdentity | undefined {
+  const candidates = [
+    join(configDir, ".claude.json"),
+    join(homedir(), ".claude.json"),
+  ]
+  for (const path of candidates) {
+    try {
+      if (!existsSync(path)) continue
+      const data = JSON.parse(readFileSync(path, "utf8")) as {
+        oauthAccount?: {
+          accountUuid?: unknown
+          organizationUuid?: unknown
+          emailAddress?: unknown
+        }
+      }
+      const acc = data.oauthAccount
+      if (typeof acc?.accountUuid !== "string") continue
+      if (typeof acc?.organizationUuid !== "string") continue
+      const out: AccountIdentity = {
+        accountUuid: acc.accountUuid,
+        orgUuid: acc.organizationUuid,
+      }
+      if (typeof acc.emailAddress === "string") out.email = acc.emailAddress
+      return out
+    } catch {
+      // A malformed .claude.json is no identity, not a crash.
+    }
+  }
+  return undefined
+}
+
+export function readIdentityCache(
+  path: string = identityCachePath(),
+): IdentityCache {
+  try {
+    if (!existsSync(path)) return {}
+    const parsed = JSON.parse(readFileSync(path, "utf8"))
+    return parsed && typeof parsed === "object" ? (parsed as IdentityCache) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Never throws: this runs detached and must not surface as a failed request. */
+export function writeIdentity(
+  source: string,
+  identity: AccountIdentity,
+  now: number = Math.floor(Date.now() / 1000),
+  path: string = identityCachePath(),
+): boolean {
+  try {
+    const cache = readIdentityCache(path)
+    cache[source] = { ...identity, fetchedAt: now }
+    const dir = dirname(path)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
+    return true
+  } catch {
+    return false
+  }
+}
+
+export type IdentityAccount = {
+  source: string
+  accessToken: string
+  configDir?: string
+}
+
+export type IdentityResult = { fetched: number; cached: number; failed: number }
+
+/**
+ * Resolve identities for accounts with a fresh token, writing what it learns.
+ *
+ * Resolves rather than rejects: it runs detached from start-up and must never
+ * reach the user as an error. An account already in the cache is skipped. A 401
+ * (expired token) keeps whatever identity is already cached rather than erasing
+ * it -- the pair does not change when a token lapses.
+ */
+export async function fetchIdentities(
+  accounts: IdentityAccount[],
+  options: {
+    fetchImpl?: typeof fetch
+    path?: string
+    now?: () => number
+  } = {},
+): Promise<IdentityResult> {
+  const {
+    fetchImpl = fetch,
+    path = identityCachePath(),
+    now = () => Math.floor(Date.now() / 1000),
+  } = options
+
+  const result: IdentityResult = { fetched: 0, cached: 0, failed: 0 }
+  const cache = readIdentityCache(path)
+
+  for (const account of accounts ?? []) {
+    if (!account?.source || !account?.accessToken) {
+      result.failed++
+      continue
+    }
+    if (cache[account.source]) {
+      result.cached++
+      continue
+    }
+    try {
+      const [url, init] = buildProfileRequest(account.accessToken)
+      const res = await fetchImpl(url, init)
+      if (res.status === 401) {
+        // Expired token: keep any cached identity, fall back to disk otherwise.
+        const fallback = account.configDir
+          ? identityFromConfigDir(account.configDir)
+          : undefined
+        if (fallback) {
+          writeIdentity(account.source, fallback, now(), path)
+          result.fetched++
+        } else {
+          result.failed++
+        }
+        continue
+      }
+      const identity = parseProfile(await res.json().catch(() => null))
+      if (identity) {
+        writeIdentity(account.source, identity, now(), path)
+        result.fetched++
+      } else {
+        const fallback = account.configDir
+          ? identityFromConfigDir(account.configDir)
+          : undefined
+        if (fallback) {
+          writeIdentity(account.source, fallback, now(), path)
+          result.fetched++
+        } else {
+          result.failed++
+        }
+      }
+    } catch {
+      result.failed++
+    }
+  }
+
+  return result
+}
