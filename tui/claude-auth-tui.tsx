@@ -25,7 +25,7 @@ import type {
   TuiPluginApi,
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui"
-import { createSignal, For, onCleanup } from "solid-js"
+import { createSignal, For, onCleanup, Show } from "solid-js"
 import { setupV2 } from "./v2-adapter.tsx"
 import {
   closeSync,
@@ -99,6 +99,8 @@ import {
   suggestIds,
 } from "../dist/balance/index.js"
 import { readIdentityCache } from "../dist/balance/identity.js"
+import { namesBySource } from "../dist/balance/accounts-id.js"
+import { readFolds, toggleFold, writeFolds } from "../dist/tui/fold.js"
 import {
   configRows,
   display,
@@ -276,8 +278,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
    * is, and resolved by the balancer's own matcher rather than a second one.
    */
   const displayNames = () =>
-    shortNames(accounts, getConfig().accountNames, (ref, list) =>
-      resolveRef(ref, list as { source: string; label?: string }[]),
+    shortNames(
+      accounts,
+      namesBySource(
+        getConfig().accountIds,
+        readIdentityCache(),
+        getConfig().accountNames,
+      ),
+      (ref, list) =>
+        resolveRef(ref, list as { source: string; label?: string }[]),
     )
 
   // Utilisation as fractions 0..1 for the ceiling bars. chip's `utilisation`
@@ -929,8 +938,19 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       )}
     </For>
   )
-  const Heading = (props: { title: string; note?: string }) => (
-    <text fg={api.theme.current.text}>
+  const [folds, setFolds] = createSignal(readFolds())
+  const isFolded = (key: string) => folds()[key] === true
+  const toggleSection = (key: string) => {
+    const next = toggleFold(folds(), key)
+    setFolds(next)
+    writeFolds(next)
+  }
+  const Heading = (props: { title: string; note?: string; fold?: string }) => (
+    <text
+      fg={api.theme.current.text}
+      onMouseUp={() => props.fold && toggleSection(props.fold)}
+    >
+      {props.fold ? (isFolded(props.fold) ? "\u25b8 " : "\u25be ") : ""}
       <b>{props.title}</b>
       <span style={{ fg: api.theme.current.textMuted }}>
         {props.note ? ` ${props.note}` : ""}
@@ -1107,8 +1127,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             ...snap(),
           })
         return (
-          <box onMouseUp={openAccountPicker}>
-            <text fg={api.theme.current.text}>
+          <box>
+            <text
+              fg={api.theme.current.text}
+              onMouseUp={() => toggleSection("accounts")}
+            >
+              {isFolded("accounts") ? "\u25b8 " : "\u25be "}
               <b>Claude Auth</b>
               <span style={{ fg: api.theme.current.textMuted }}>
                 {` v${BUILD}`}
@@ -1118,31 +1142,38 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 ({view().heading})
               </span>
             </text>
-            <For each={view().rows}>
-              {(row) => (
-                <box flexDirection="row" gap={1}>
-                  <text flexShrink={0} style={{ fg: healthColour(row.health) }}>
-                    {row.active ? "\u25cf" : "\u00b7"}
-                  </text>
-                  <text
-                    style={{
-                      // Brightness says which account is serving; hue says how
-                      // it is doing. Two facts, two channels -- the previous
-                      // rendering put both on hue and could show neither.
-                      fg: row.active
-                        ? api.theme.current.text
-                        : api.theme.current.textMuted,
-                    }}
-                  >
-                    {row.name}
-                    <span style={{ fg: healthColour(row.health) }}>
-                      {"  "}
-                      {row.detail}
-                    </span>
-                  </text>
-                </box>
-              )}
-            </For>
+            <Show when={!isFolded("accounts")}>
+              <box onMouseUp={openAccountPicker}>
+                <For each={view().rows}>
+                  {(row) => (
+                    <box flexDirection="row" gap={1}>
+                      <text
+                        flexShrink={0}
+                        style={{ fg: healthColour(row.health) }}
+                      >
+                        {row.active ? "\u25cf" : "\u00b7"}
+                      </text>
+                      <text
+                        style={{
+                          // Brightness says which account is serving; hue says how
+                          // it is doing. Two facts, two channels -- the previous
+                          // rendering put both on hue and could show neither.
+                          fg: row.active
+                            ? api.theme.current.text
+                            : api.theme.current.textMuted,
+                        }}
+                      >
+                        {row.name}
+                        <span style={{ fg: healthColour(row.health) }}>
+                          {"  "}
+                          {row.detail}
+                        </span>
+                      </text>
+                    </box>
+                  )}
+                </For>
+              </box>
+            </Show>
           </box>
         )
       },
@@ -1161,9 +1192,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           <box>
             <Heading
               title="Forecast"
+              fold="forecast"
               note={now() ? `(now ${now()})` : undefined}
             />
-            <Rows rows={windows()} />
+            <Show when={!isFolded("forecast")}>
+              <Rows rows={windows()} />
+            </Show>
           </box>
         )
       },
@@ -1192,27 +1226,31 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         }
         return (
           <box>
-            <Heading title="Optimize" note="(top 3)" />
-            <Rows rows={top()} />
-            <Rows rows={usage()} />
-            <Rows rows={sections()[1]!.rows} />
-            <box flexDirection="row" gap={1}>
-              <Button label="↻ refresh" onClick={refreshAll} />
-              <Button
-                label="details"
-                onClick={() => openDetails(props.session_id)}
-              />
-            </box>
-            <box flexDirection="row" gap={1}>
-              <Button
-                label="→ prompt"
-                onClick={() => toPrompt(reportText(props.session_id), "Report")}
-              />
-              <Button
-                label="fix plan"
-                onClick={() => sendOptimize(props.session_id)}
-              />
-            </box>
+            <Heading title="Optimize" note="(top 3)" fold="optimize" />
+            <Show when={!isFolded("optimize")}>
+              <Rows rows={top()} />
+              <Rows rows={usage()} />
+              <Rows rows={sections()[1]!.rows} />
+              <box flexDirection="row" gap={1}>
+                <Button label="↻ refresh" onClick={refreshAll} />
+                <Button
+                  label="details"
+                  onClick={() => openDetails(props.session_id)}
+                />
+              </box>
+              <box flexDirection="row" gap={1}>
+                <Button
+                  label="→ prompt"
+                  onClick={() =>
+                    toPrompt(reportText(props.session_id), "Report")
+                  }
+                />
+                <Button
+                  label="fix plan"
+                  onClick={() => sendOptimize(props.session_id)}
+                />
+              </box>
+            </Show>
           </box>
         )
       },
@@ -1961,6 +1999,30 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     value={seed}
                     onConfirm={(value: string) => {
                       const name = value.trim()
+                      const id = accountKey(source)
+                      const entry = cfg.accountIds[id]
+                      if (entry) {
+                        const { name: _old, ...rest } = entry
+                        writeKey(
+                          "accountIds",
+                          indentJson(
+                            {
+                              ...cfg.accountIds,
+                              [id]: name === "" ? rest : { ...rest, name },
+                            },
+                            2,
+                          ),
+                          toastResult(
+                            `Account ${id}`,
+                            name === "" ? "name cleared" : "renamed",
+                            name === ""
+                              ? "derived name shown"
+                              : `now "${name}"`,
+                          ),
+                        )
+                        openAccounts()
+                        return
+                      }
                       const next = { ...cfg.accountNames }
                       // An empty name removes the override rather than storing
                       // one, so there is a way back to the derived name.
