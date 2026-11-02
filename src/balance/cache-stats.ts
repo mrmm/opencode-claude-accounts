@@ -32,6 +32,10 @@ export type CacheRow = {
   systemSha?: string
   /** Hash of the tool set, from the request-shape log, if present. */
   toolsSha?: string
+  /** The request carried a context-editing block. */
+  contextEdited?: boolean
+  /** OpenCode session, so misses are classified against the same session's previous request. */
+  session?: string
 }
 
 export type MissCause =
@@ -150,4 +154,73 @@ export function cacheStats(rows: readonly CacheRow[]): CacheStats {
   const cacheable = uncached + reads + writes
   const hitRate = cacheable > 0 ? reads / cacheable : 0
   return { hitRate, reads, writes, uncached, misses }
+}
+
+/** What each optimisation did, measured over requests that carry token data. */
+export type CacheImpact = CacheStats & {
+  requests: number
+  /** Input cost in fresh-input-token equivalents, as billed. */
+  cost: number
+  /** The same input at full price, with no cache at all. */
+  noCache: number
+  /** 1 - cost/noCache: the share of input cost caching saved. */
+  saved: number
+  byCause: Partial<Record<MissCause, { n: number; tokens: number }>>
+  /** Requests sent with 1h cache markers, and the 1h write tokens they paid. */
+  ttl1h: { requests: number; writes: number }
+  /** Requests that carried a context-editing block. */
+  contextEdited: number
+}
+
+// Anthropic multipliers on the input price: read 0.05x on Opus 5.x, 0.1x on
+// the rest; 5m write 1.25x, 1h write 2x.
+const readPrice = (model: string) => (model.includes("opus") ? 0.05 : 0.1)
+
+/** cacheStats plus the money side: cost vs no cache, misses by cause, TTL and context-edit usage. */
+export function cacheImpact(rows: readonly CacheRow[]): CacheImpact {
+  const withTokens = rows.filter(
+    (r) => r.input + r.cacheRead + r.cacheWrite + r.cacheWrite1h > 0,
+  )
+  const stats = cacheStats(withTokens)
+  // Interleaved sessions would read as account switches; classify each alone.
+  const bySession = new Map<string, CacheRow[]>()
+  for (const r of withTokens) {
+    const k = r.session ?? ""
+    bySession.set(k, [...(bySession.get(k) ?? []), r])
+  }
+  stats.misses = [...bySession.values()]
+    .flatMap((rs) => cacheStats(rs).misses)
+    .sort((a, b) => a.at - b.at)
+  let cost = 0
+  let noCache = 0
+  let ttlReqs = 0
+  let ttlWrites = 0
+  let edited = 0
+  for (const r of withTokens) {
+    cost +=
+      r.input +
+      readPrice(r.model) * r.cacheRead +
+      1.25 * r.cacheWrite +
+      2 * r.cacheWrite1h
+    noCache += r.input + r.cacheRead + r.cacheWrite + r.cacheWrite1h
+    if (r.ttl === "1h") ttlReqs++
+    ttlWrites += r.cacheWrite1h
+    if (r.contextEdited) edited++
+  }
+  const byCause: CacheImpact["byCause"] = {}
+  for (const m of stats.misses) {
+    const c = (byCause[m.cause] ??= { n: 0, tokens: 0 })
+    c.n++
+    c.tokens += m.tokens
+  }
+  return {
+    ...stats,
+    requests: withTokens.length,
+    cost,
+    noCache,
+    saved: noCache > 0 ? 1 - cost / noCache : 0,
+    byCause,
+    ttl1h: { requests: ttlReqs, writes: ttlWrites },
+    contextEdited: edited,
+  }
 }

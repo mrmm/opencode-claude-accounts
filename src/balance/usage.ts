@@ -61,6 +61,10 @@ export type RequestEvent = {
   cacheRead?: number
   cacheWrite?: number
   cacheWrite1h?: number
+  /** Cache TTL the request's markers were sent with ("5m" = left as OpenCode set it). */
+  ttl?: "5m" | "1h"
+  /** A context-editing block was added to this request. */
+  contextEdited?: boolean
 }
 
 /** One move between accounts. */

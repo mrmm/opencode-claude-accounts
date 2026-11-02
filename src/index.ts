@@ -954,7 +954,8 @@ const plugin: PluginWithOptions = async (
             let transformed = transformBody(requestInit.body)
             const edited = maybeEditContext(transformed)
             let body = edited.body
-            const contextEdited = edited.changed
+            let contextEdited = edited.changed
+            let sentTtl: "5m" | "1h" = "5m"
 
             // Relabel the request's cache_control markers to a longer TTL when
             // the session has paused long enough that the cheaper 5m write
@@ -974,6 +975,7 @@ const plugin: PluginWithOptions = async (
                 lastAt: now,
               })
               body = applyCacheTtl(body, resolved)
+              if (resolved === "1h") sentTtl = "1h"
               if (typeof transformed === "string")
                 transformed = applyCacheTtl(transformed, resolved)
             }
@@ -1137,6 +1139,7 @@ const plugin: PluginWithOptions = async (
               const errorBody = await response.clone().text()
               if (contextEditDisabledBy400(errorBody)) {
                 contextEditingDisabled = true
+                contextEdited = false
                 log("context_edit_disabled", { level: "warn", modelId })
                 const creds = getCachedCredentials()
                 response = await fetchWithRetry(requestUrl, {
@@ -1313,6 +1316,8 @@ const plugin: PluginWithOptions = async (
                 duration_ms: Date.now() - startedAt,
                 ...(u5 !== undefined ? { utilization_5h: u5 } : {}),
                 ...(u7 !== undefined ? { utilization_7d: u7 } : {}),
+                ttl: sentTtl,
+                ...(contextEdited ? { contextEdited: true } : {}),
                 ...(usage
                   ? {
                       input: usage.input,

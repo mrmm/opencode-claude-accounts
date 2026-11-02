@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { cacheStats, type CacheRow } from "./cache-stats.ts"
+import { cacheImpact, cacheStats, type CacheRow } from "./cache-stats.ts"
 
 const T0 = 1785000000000
 
@@ -145,5 +145,44 @@ describe("cacheStats miss causes", () => {
       m.map((x) => x.cause),
       ["first-request"],
     )
+  })
+})
+
+describe("cacheImpact", () => {
+  it("prices reads, 5m and 1h writes and groups misses by cause", () => {
+    const i = cacheImpact([
+      row({ input: 0, output: 0, cacheWrite: 1000 }),
+      row({ at: T0 + 1000, cacheRead: 1000, ttl: "1h", cacheWrite1h: 100 }),
+      row({
+        at: T0 + 2000,
+        model: "claude-sonnet-5",
+        cacheRead: 1000,
+        contextEdited: true,
+      }),
+      row({ at: T0 + 3000 }),
+    ])
+    assert.equal(i.requests, 3, "rows without tokens are skipped")
+    // 1.25*1000 + (0.05*1000 + 2*100) + 0.1*1000
+    assert.equal(i.cost, 1250 + 250 + 100)
+    assert.equal(i.noCache, 3100)
+    assert.ok(Math.abs(i.saved - (1 - 1600 / 3100)) < 1e-9)
+    assert.deepEqual(i.byCause, { "first-request": { n: 1, tokens: 1000 } })
+    assert.deepEqual(i.ttl1h, { requests: 1, writes: 100 })
+    assert.equal(i.contextEdited, 1)
+  })
+
+  it("classifies misses within each session", () => {
+    const i = cacheImpact([
+      row({ session: "s1", account: "a", cacheWrite: 10 }),
+      row({ session: "s2", account: "b", at: T0 + 1, cacheWrite: 10 }),
+      row({ session: "s1", account: "a", at: T0 + 2, cacheRead: 100 }),
+    ])
+    assert.deepEqual(i.byCause, { "first-request": { n: 2, tokens: 20 } })
+  })
+
+  it("is all zero with no data", () => {
+    const i = cacheImpact([])
+    assert.equal(i.saved, 0)
+    assert.equal(i.requests, 0)
   })
 })
