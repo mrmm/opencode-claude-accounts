@@ -6,11 +6,15 @@
  * fork's footprint inside shared files down to a single line, which is what
  * makes pulling upstream cheap.
  */
+export * from "./account-key.ts"
 export * from "./accounts-id.ts"
 export * from "./balancer.ts"
+export * from "./cache-stats.ts"
 export * from "./identity.ts"
 export * from "./migrate.ts"
 export * from "./quota.ts"
 export * from "./rotate.ts"
+export * from "./samples.ts"
 export * from "./sessions.ts"
+export * from "./sse-usage.ts"
 export * from "./usage.ts"

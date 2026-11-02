@@ -26,6 +26,12 @@ import {
   refreshQuotas,
   fetchIdentities,
   writeQuotaForAccount,
+  accountKey,
+  teeUsage,
+  parseNonStreamUsage,
+  SampleAggregator,
+  appendSample,
+  type UsageTokens,
 } from "./balance/index.ts"
 import crypto from "node:crypto"
 import { config } from "./model-config.ts"
@@ -158,6 +164,21 @@ function buildRequestUrl(input: RequestInfo | URL): string | URL {
 
 // Stable per-process session ID, matching Claude Code's X-Claude-Code-Session-Id
 const sessionId = crypto.randomUUID()
+
+// Long-memory usage samples: one row per account per 5-minute bucket, flushed
+// to claude-auth-samples.jsonl when a bucket closes. Held here so every request
+// in the process feeds the same aggregator. Flushed on a timer and at exit so a
+// short-lived process still records its final, open bucket.
+const sampleAggregator = new SampleAggregator(appendSample)
+const SAMPLE_FLUSH_MS = 60_000
+{
+  const timer = setInterval(() => sampleAggregator.flush(), SAMPLE_FLUSH_MS)
+  // Don't keep the process alive for telemetry.
+  if (typeof timer.unref === "function") timer.unref()
+  const flushOnce = () => sampleAggregator.flush()
+  process.once("exit", flushOnce)
+  process.once("beforeExit", flushOnce)
+}
 
 type FetchFn = typeof fetch
 
@@ -1172,21 +1193,56 @@ const plugin: PluginWithOptions = async (
             // the latest reading per account, so it answers "how full is this
             // account" but never "how much has it served, and how often was it
             // refused". Recorded for every response, refusals included.
+            //
+            // The token counts live in the response body, not the headers, and a
+            // streamed response delivers the output count only at the end — so
+            // this closure is called with whatever usage is known: immediately
+            // for a non-streamed response, or once the tee below has drained for
+            // a chat stream. The same call feeds the long-memory sample buckets.
             const servedBy = servingSource
-            if (servedBy) {
+            const u5 = observedQuota?.fiveHour?.utilization
+            const u7 = observedQuota?.sevenDay?.utilization
+            let recorded = false
+            const recordRow = (usage: UsageTokens | null): void => {
+              if (!servedBy || recorded) return
+              recorded = true
+              const account = accountKey(servedBy)
               recordRequest({
-                account: servedBy,
+                account,
                 model: modelId,
                 ...(ocSessionId ? { session: ocSessionId } : {}),
                 status: response.status,
                 duration_ms: Date.now() - startedAt,
-                ...(observedQuota?.fiveHour
-                  ? { utilization_5h: observedQuota.fiveHour.utilization }
-                  : {}),
-                ...(observedQuota?.sevenDay
-                  ? { utilization_7d: observedQuota.sevenDay.utilization }
+                ...(u5 !== undefined ? { utilization_5h: u5 } : {}),
+                ...(u7 !== undefined ? { utilization_7d: u7 } : {}),
+                ...(usage
+                  ? {
+                      input: usage.input,
+                      output: usage.output,
+                      cacheRead: usage.cacheRead,
+                      cacheWrite: usage.cacheWrite,
+                      cacheWrite1h: usage.cacheWrite1h,
+                    }
                   : {}),
               })
+              try {
+                sampleAggregator.observe({
+                  at: Date.now(),
+                  account,
+                  ...(u5 !== undefined ? { u5 } : {}),
+                  ...(u7 !== undefined ? { u7 } : {}),
+                  ...(usage
+                    ? {
+                        input: usage.input,
+                        output: usage.output,
+                        cacheRead: usage.cacheRead,
+                        cacheWrite: usage.cacheWrite + usage.cacheWrite1h,
+                      }
+                    : {}),
+                })
+              } catch {
+                // Telemetry must never break a response.
+              }
             }
 
             // Act on the reading just recorded. Every response is a free
@@ -1207,9 +1263,30 @@ const plugin: PluginWithOptions = async (
             if (!isChatStream) {
               log("fetch_untransformed", { path: requestPath })
             }
-            return preserveResponseUnchanged || !isChatStream
-              ? response
-              : transformResponseStream(response)
+
+            // A chat response — streamed SSE or a streamed error — carries the
+            // token usage we want. Tee it: the client gets every byte unchanged
+            // while a copy is parsed for usage, and recordRow fires once the
+            // stream ends. Applied to whichever body we return (the transformed
+            // stream, or the raw one when a retry asked us to preserve it).
+            if (isChatStream) {
+              const out =
+                preserveResponseUnchanged || !response.ok
+                  ? response
+                  : transformResponseStream(response)
+              return teeUsage(out, recordRow)
+            }
+
+            // A non-chat endpoint answers with a single JSON object. Read usage
+            // off a clone so the body the caller receives is untouched, then
+            // record. The clone is drained in the background; recordRow is
+            // idempotent, so a slow or failed read still leaves exactly one row.
+            response
+              .clone()
+              .text()
+              .then((text) => recordRow(parseNonStreamUsage(text)))
+              .catch(() => recordRow(null))
+            return response
           },
         }
       },

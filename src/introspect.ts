@@ -136,6 +136,32 @@ function systemBlocks(system: unknown, level: CaptureLevel): SystemBlock[] {
   })
 }
 
+/**
+ * Cacheable bytes carried by `cache_control` markers on message content blocks.
+ *
+ * The prompt's cacheable prefix is not only the system blocks: OpenCode marks
+ * the last stable content block of the conversation too, and the real cached
+ * size is the bytes up to and including every marker. Summing just the marked
+ * block's own bytes understates it, but it is the honest, attributable figure
+ * — the markers are what Anthropic bills a write against — and counting them
+ * at all is the fix for a metric that saw only system markers. Sizes only, so
+ * this adds nothing to what capture records about message content.
+ */
+function messageCachedBytes(messages: unknown): number {
+  if (!Array.isArray(messages)) return 0
+  let total = 0
+  for (const m of messages) {
+    const content = (m as { content?: unknown })?.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      const b = (block ?? {}) as { cache_control?: unknown; text?: unknown }
+      if (b.cache_control === undefined) continue
+      total += bytes(block)
+    }
+  }
+  return total
+}
+
 function toolShapes(tools: unknown): ToolShape[] {
   if (!Array.isArray(tools)) return []
   return tools.map((raw) => {
@@ -197,9 +223,9 @@ export function describeRequest(
     toolBytes: tools.reduce((n, t) => n + t.bytes, 0),
     messages,
     messageBytes: messages.reduce((n, m) => n + m.bytes, 0),
-    cachedBytes: system
-      .filter((b) => b.cached)
-      .reduce((n, b) => n + b.bytes, 0),
+    cachedBytes:
+      system.filter((b) => b.cached).reduce((n, b) => n + b.bytes, 0) +
+      messageCachedBytes(parsed.messages),
   }
 }
 
