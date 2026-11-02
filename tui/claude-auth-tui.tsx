@@ -52,6 +52,11 @@ import {
 } from "../dist/balance/index.js"
 import { spentBanner } from "../dist/tui/spent.js"
 import {
+  recentRequests,
+  requestListRow,
+  requestTrace,
+} from "../dist/tui/requests.js"
+import {
   createGroup,
   deleteGroup,
   groupLabel,
@@ -1447,6 +1452,86 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         namespace: "palette",
         slashName: "cc-account",
         run: () => openAccountPicker(),
+      },
+      {
+        name: "claude-auth.requests",
+        title: paletteTitle("Diagnostics", "Recent requests"),
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "cc-requests",
+        run() {
+          // The usage log is keyed by account id; names come from the sources.
+          const nameOf = (id: string) => {
+            const names = displayNames()
+            const a = accounts.find((x) => accountKey(x.source) === id)
+            return (
+              (a && names.get(a.source)) ??
+              getConfig().accountIds[id]?.name ??
+              id
+            )
+          }
+          const list = (onlySession: boolean) => {
+            const rows = recentRequests(
+              readUsage(Date.now() - 24 * 3_600_000),
+              {
+                ...(onlySession && lastSessionId
+                  ? { session: lastSessionId }
+                  : {}),
+                limit: 60,
+              },
+            )
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title={`Recent requests (${onlySession ? "this session" : "all sessions"}, 24h)`}
+                options={[
+                  {
+                    title: onlySession
+                      ? "Show all sessions"
+                      : "Show this session only",
+                    value: "__scope__",
+                    description: "switch which requests are listed",
+                    category: "View",
+                  },
+                  ...rows.map((e, i) => ({
+                    ...requestListRow(e, nameOf),
+                    value: `r:${i}`,
+                    category: "Requests, newest first",
+                  })),
+                ]}
+                onSelect={(row) => {
+                  const v = String(row.value)
+                  if (v === "__scope__") return list(!onlySession)
+                  const e = rows[Number(v.slice(2))]
+                  if (e) detail(e, onlySession)
+                }}
+              />
+            ))
+          }
+          const detail = (
+            e: Parameters<typeof requestTrace>[0],
+            onlySession: boolean,
+          ) =>
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title="Request trace"
+                  options={[
+                    backRow("recent requests"),
+                    ...requestTrace(e, nameOf).map((l, i) => ({
+                      title: l.text,
+                      value: `l:${i}`,
+                      category: l.section,
+                    })),
+                  ]}
+                  onSelect={(row) => {
+                    if (String(row.value) === BACK) list(onlySession)
+                  }}
+                />
+              ),
+              escapeTo(() => list(onlySession)),
+            )
+          list(lastSessionId !== null)
+        },
       },
       {
         name: "claude-auth.debug",

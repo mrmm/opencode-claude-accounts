@@ -553,6 +553,7 @@ Usage, Cache, Optimize, Diagnostics, Settings.
 | `/cc-cache`    | Claude › Cache › Review impact and settings  |             | hit rate, cost saved, misses by cause; change cacheTtl, contextEditing, bindBy, strategy, capMode in place |
 | `/optimize`    | Claude › Optimize › Ranked fixes             |             | ask the agent for a fix plan                                                                               |
 | `/cc-debug`    | Claude › Diagnostics › Explain routing       |             | what the balancer is actually doing, right now                                                             |
+| `/cc-requests` | Claude › Diagnostics › Recent requests       |             | the last 24h of requests; open one to see the path it took                                                 |
 | `/cc-config`   | Claude › Settings › Edit settings            | `<leader>c` | the settings that apply without a restart                                                                  |
 
 ### /cc-account
@@ -594,6 +595,20 @@ teammate's share, so spending it is the operator's call by default.
   override. A preset's accounts are _references_, resolved the way the balancer
   resolves them, so a hand-written `"Acme 1"` is understood and preserved;
   references that resolve to nothing are listed as `[?]` and can be removed.
+
+### /cc-requests
+
+The requests of the last 24 hours, newest first: time, account, model, status,
+tokens, cache share and duration, with a flag when something unusual happened
+(`rotated`, `all spent`, `prefill fixed`, `re-auth`, `feature dropped`). It opens
+on the current session; the first row switches to all sessions.
+
+Select a request to see its trace: how its account was chosen, which rewrites
+applied (1h cache markers, context editing), every retry or recovery branch in
+the order it happened, the status it ended with, its token and cache counts,
+and the account's quota after it. These are the steps of the request-flow
+diagram in [docs/architecture.md](docs/architecture.md). Requests logged before
+this version show no path.
 
 ### /cc-cache
 

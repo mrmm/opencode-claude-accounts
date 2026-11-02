@@ -8,6 +8,7 @@ Design decisions behind these changes are in [docs/adr](docs/adr/README.md); the
 
 * account groups: a generic `groups` setting with stable ids and editable labels, usable in presets, shown as collapsible sidebar sections with combined usage, and editable from Manage accounts ([ADR 0002](docs/adr/0002-account-groups.md))
 * when every account is spent, the 429 names the next account back and when, and retries are paced to reach that reset; the sidebar shows the same line ([ADR 0003](docs/adr/0003-spent-pool-retry-pacing.md))
+* `/cc-requests`: recent requests with the path each took through the request flow (account choice, rewrites, retries and recoveries), drill down per request
 * cache-miss statistics overall, per account and per session in `claude_auth_status`, `/cc-cache` and the sidebar
 * "Agent may use reserved quota" (`agentReserve`) in Settings
 * `OPENCODE_CLAUDE_AUTH_HOST_RETRIES` to match a different OpenCode retry count

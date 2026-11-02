@@ -60,19 +60,19 @@ only when its size or mtime changed (`balance/file-memo.ts`).
 Each engine decides in pure functions and acts in a thin shell, so the policy
 is testable without a Keychain, a network or a clock.
 
-| Engine               | Decides                                                                  | Main files                                                                                                  | State                                       |
-| -------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| Credentials          | which Keychain logins exist, their tokens, refresh before expiry         | `credentials.ts`, `keychain.ts`, `refresh-lock.ts`                                                          | Keychain                                    |
-| Identity             | the stable account/org pair behind each login                            | `balance/identity.ts`, `balance/accounts-id.ts`, `balance/account-key.ts`, `balance/migrate.ts`             | identities, config `accountIds`             |
-| Selection (balancer) | which account serves the next request                                    | `balance/balancer.ts` (pure), `balance/rotate.ts` (applies), `balance/caps.ts`                              | selection file, config presets/groups/pools |
-| Sessions             | which account a given session is bound to; per-session opt-ins           | `balance/sessions.ts`                                                                                       | reserve/denial files                        |
-| Quota                | each account's utilisation, from response headers                        | `balance/quota.ts`                                                                                          | quota cache                                 |
-| Usage telemetry      | requests and tokens per account and session                              | `balance/usage.ts`, `balance/sse-usage.ts`, `balance/samples.ts`, `balance/cache-stats.ts`                  | usage log, samples                          |
-| Request shaping      | turning OpenCode's request into one Anthropic accepts from Claude Code   | `request-body.ts`, `transforms.ts`, `signing.ts`, `betas.ts`, `model-config.ts`, `prefill.ts`               | none                                        |
-| Cache and context    | cache TTL on existing markers; server-side context editing               | `balance/cache-ttl.ts`, `balance/context-edit.ts`                                                           | none                                        |
-| Recovery             | what a refused request turns into: retry, rotate, or a paced "all spent" | `index.ts` (`fetchWithRetry`, `withSpentRetry`), `balance/rotate.ts` (`selectionRecovery`, `spentRetryNow`) | none                                        |
-| Surfaces             | what the operator sees and can change                                    | `ui/*` (server), `src/tui/*` + `tui/*.tsx` (TUI), `config-edit.ts`                                          | config file                                 |
-| Diagnostics          | logs, request captures, the debug block                                  | `logger.ts`, `introspect.ts`, `tui/debug.ts`                                                                | log file, captures                          |
+| Engine               | Decides                                                                  | Main files                                                                                                  | State                                         |
+| -------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Credentials          | which Keychain logins exist, their tokens, refresh before expiry         | `credentials.ts`, `keychain.ts`, `refresh-lock.ts`                                                          | Keychain                                      |
+| Identity             | the stable account/org pair behind each login                            | `balance/identity.ts`, `balance/accounts-id.ts`, `balance/account-key.ts`, `balance/migrate.ts`             | identities, config `accountIds`               |
+| Selection (balancer) | which account serves the next request                                    | `balance/balancer.ts` (pure), `balance/rotate.ts` (applies), `balance/caps.ts`                              | selection file, config presets/groups/pools   |
+| Sessions             | which account a given session is bound to; per-session opt-ins           | `balance/sessions.ts`                                                                                       | reserve/denial files                          |
+| Quota                | each account's utilisation, from response headers                        | `balance/quota.ts`                                                                                          | quota cache                                   |
+| Usage telemetry      | requests and tokens per account and session                              | `balance/usage.ts`, `balance/sse-usage.ts`, `balance/samples.ts`, `balance/cache-stats.ts`                  | usage log, samples                            |
+| Request shaping      | turning OpenCode's request into one Anthropic accepts from Claude Code   | `request-body.ts`, `transforms.ts`, `signing.ts`, `betas.ts`, `model-config.ts`, `prefill.ts`               | none                                          |
+| Cache and context    | cache TTL on existing markers; server-side context editing               | `balance/cache-ttl.ts`, `balance/context-edit.ts`                                                           | none                                          |
+| Recovery             | what a refused request turns into: retry, rotate, or a paced "all spent" | `index.ts` (`fetchWithRetry`, `withSpentRetry`), `balance/rotate.ts` (`selectionRecovery`, `spentRetryNow`) | none                                          |
+| Surfaces             | what the operator sees and can change                                    | `ui/*` (server), `src/tui/*` + `tui/*.tsx` (TUI), `config-edit.ts`                                          | config file                                   |
+| Diagnostics          | logs, request captures, the debug block, the request trace               | `logger.ts`, `introspect.ts`, `tui/debug.ts`, `tui/requests.ts`                                             | log file, captures, `steps` on each usage row |
 
 ## One request
 
@@ -106,6 +106,11 @@ flowchart TD
   T --> U["Usage: one row per request,<br/>samples for the forecast"]
   U --> V(["back to OpenCode"])
 ```
+
+Every branch taken is recorded, in order, as `steps` on the request's usage
+row (`bound`/`active`, `ttl-1h`, `ctx-edit`, `auth-401`, `prefill-trim`,
+`ctx-off`, `beta-off`, `rotate`, `spent`, `status`). `/cc-requests` lists recent
+requests and shows each one's path through this diagram.
 
 Each recovery branch runs at most once per request. The order matters: a
 request refused for prefill and then for context editing is retried with both
@@ -171,7 +176,8 @@ flowchart LR
   snap --> forecast["forecast.ts<br/>pace forecast"]
   snap --> spent["spent.ts<br/>all-spent line"]
   snap --> caps["caps-ui.ts<br/>caps, cache, advice"]
-  chip & groups & forecast & spent & caps --> tsx["claude-auth-tui.tsx"]
+  snap --> reqs["requests.ts<br/>request list and trace"]
+  chip & groups & forecast & spent & caps & reqs --> tsx["claude-auth-tui.tsx"]
   tsx -->|"pick account / preset"| sel[("selection file")]
   tsx -->|"settings, presets, groups"| cfgw[("claude-auth.jsonc")]
 ```
