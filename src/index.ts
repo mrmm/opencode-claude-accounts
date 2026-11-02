@@ -33,10 +33,9 @@ import {
   SampleAggregator,
   appendSample,
   samplesPath,
-  applyCacheTtl,
   resolveTtl,
+  type ResolvedTtl,
   type UsageTokens,
-  applyContextEditing,
   resolveContextEditing,
   contextEditDisabledBy400,
   clearedInputTokens,
@@ -56,11 +55,8 @@ import {
   isLongContextError,
   LONG_CONTEXT_BETAS,
 } from "./betas.ts"
-import {
-  SYSTEM_IDENTITY,
-  transformBody,
-  transformResponseStream,
-} from "./transforms.ts"
+import { SYSTEM_IDENTITY, transformResponseStream } from "./transforms.ts"
+import { prepareBody } from "./request-body.ts"
 import {
   AUTO_SOURCE,
   PRESET_PREFIX,
@@ -290,37 +286,6 @@ export async function fetchWithRetry(
 // API rejects it, so a run on a model or account that lacks the beta recovers
 // by retrying without it rather than failing every turn. Reset on restart.
 let contextEditingDisabled = false
-
-/**
- * Thin shell over `applyContextEditing`: parse the outgoing body, add the
- * `context_management` block when editing is on, and log it once. The decision
- * is the pure function; this only handles the string<->object boundary and the
- * process-level kill switch. Returns the body unchanged on anything unexpected.
- */
-function maybeEditContext(body: BodyInit | null | undefined): {
-  body: BodyInit | null | undefined
-  changed: boolean
-} {
-  if (contextEditingDisabled || typeof body !== "string") {
-    return { body, changed: false }
-  }
-  const settings = resolveContextEditing(getConfig())
-  if (!settings) return { body, changed: false }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(body)
-  } catch {
-    return { body, changed: false }
-  }
-  const result = applyContextEditing(parsed, settings)
-  if (!result.changed) return { body, changed: false }
-  log("context_edit_applied", {
-    trigger: settings.trigger,
-    keep: settings.keep,
-    clearAtLeast: settings.clearAtLeast,
-  })
-  return { body: JSON.stringify(result.body), changed: true }
-}
 
 export function buildRequestHeaders(
   input: RequestInfo | URL,
@@ -956,13 +921,15 @@ const plugin: PluginWithOptions = async (
               typeof requestInit.body === "string"
                 ? requestInit.body
                 : undefined
-            let modelId = "unknown"
+            // The one parse of the request body; every rewrite below reuses it.
+            let parsedBody: unknown
             if (bodyStr) {
               try {
-                modelId =
-                  (JSON.parse(bodyStr) as { model?: string }).model ?? "unknown"
+                parsedBody = JSON.parse(bodyStr)
               } catch {}
             }
+            const modelId =
+              (parsedBody as { model?: string } | undefined)?.model ?? "unknown"
 
             log("fetch_credentials", {
               modelId,
@@ -995,24 +962,15 @@ const plugin: PluginWithOptions = async (
               modelId,
               excluded,
             )
-            let transformed = transformBody(requestInit.body)
-            // Only a Messages call takes context_management; count_tokens and
-            // the rest would 400 on it and switch editing off for everything.
-            const edited = requestPath.endsWith("/messages")
-              ? maybeEditContext(transformed)
-              : { body: transformed, changed: false }
-            let body = edited.body
-            let contextEdited = edited.changed
-            let sentTtl: "5m" | "1h" = "5m"
-
             // Relabel the request's cache_control markers to a longer TTL when
             // the session has paused long enough that the cheaper 5m write
             // would have gone cold before the next turn. Only touches markers
             // OpenCode already placed; "5m" and a body with none are no-ops.
-            if (typeof body === "string" && ocSessionId) {
+            let ttl: ResolvedTtl | undefined
+            if (bodyStr && ocSessionId) {
               const now = Date.now()
               const t = sessionTiming.get(ocSessionId)
-              const resolved = resolveTtl(getConfig().cacheTtl, {
+              ttl = resolveTtl(getConfig().cacheTtl, {
                 nowMs: now,
                 ...(t
                   ? { prevRequestAt: t.lastAt, sessionStartedAt: t.startedAt }
@@ -1022,11 +980,30 @@ const plugin: PluginWithOptions = async (
                 startedAt: t?.startedAt ?? now,
                 lastAt: now,
               })
-              body = applyCacheTtl(body, resolved)
-              if (resolved === "1h") sentTtl = "1h"
-              if (typeof transformed === "string")
-                transformed = applyCacheTtl(transformed, resolved)
             }
+            const prepared = prepareBody(requestInit.body, parsedBody, {
+              ...(ttl ? { ttl } : {}),
+              // Only a Messages call takes context_management; count_tokens
+              // and the rest would 400 on it and switch editing off for all.
+              contextEditing:
+                contextEditingDisabled || !requestPath.endsWith("/messages")
+                  ? null
+                  : resolveContextEditing(getConfig()),
+            })
+            let body = prepared.body
+            let contextEdited = prepared.contextEdited
+            let withoutEditing = prepared.withoutEditing
+            if (contextEdited) {
+              const s = resolveContextEditing(getConfig())
+              log("context_edit_applied", {
+                trigger: s?.trigger,
+                keep: s?.keep,
+                clearAtLeast: s?.clearAtLeast,
+              })
+            }
+            // Only what the body actually carried: an unmarked body sent no 1h.
+            const sentTtl: "5m" | "1h" =
+              prepared.ttlSet && ttl === "1h" ? "1h" : "5m"
 
             // Record the shape of what actually goes out — system blocks, tool
             // schemas, message sizes. Off unless asked for: the body carries the
@@ -1134,9 +1111,13 @@ const plugin: PluginWithOptions = async (
                   // A later retry (context editing off) must resend the
                   // trimmed conversation, not the one already refused.
                   body = trimmed.body
-                  if (typeof transformed === "string")
-                    transformed =
-                      stripTrailingAssistant(transformed)?.body ?? transformed
+                  const untrimmed = withoutEditing
+                  withoutEditing = () => {
+                    const s = untrimmed()
+                    return typeof s === "string"
+                      ? (stripTrailingAssistant(s)?.body ?? s)
+                      : s
+                  }
                   const creds = getCachedCredentials()
                   const before = Date.now()
                   response = await fetchWithRetry(requestUrl, {
@@ -1198,7 +1179,7 @@ const plugin: PluginWithOptions = async (
                 const creds = getCachedCredentials()
                 response = await fetchWithRetry(requestUrl, {
                   ...requestInit,
-                  body: transformed,
+                  body: withoutEditing(),
                   headers: buildRequestHeaders(
                     input,
                     requestInit,

@@ -67,7 +67,15 @@ export function applyCacheTtl(body: string, ttl: ResolvedTtl): string {
   } catch {
     return body
   }
-  if (!parsed || typeof parsed !== "object") return body
+  return setCacheTtl(parsed, ttl) ? JSON.stringify(parsed) : body
+}
+
+/**
+ * `applyCacheTtl` on an already-parsed body, in place. True when at least one
+ * marker was set -- the only case in which the ttl was actually sent.
+ */
+export function setCacheTtl(parsed: unknown, ttl: ResolvedTtl): boolean {
+  if (ttl === "leave" || !parsed || typeof parsed !== "object") return false
 
   let touched = false
   const setMarker = (node: unknown): void => {
@@ -96,5 +104,5 @@ export function applyCacheTtl(body: string, ttl: ResolvedTtl): string {
     for (const m of p.messages) walkContent(m?.content)
   }
 
-  return touched ? JSON.stringify(parsed) : body
+  return touched
 }

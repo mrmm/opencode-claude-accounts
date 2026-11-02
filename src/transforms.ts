@@ -185,6 +185,26 @@ export function repairToolPairs(messages: Message[]): Message[] {
     )
 }
 
+export type TransformTarget = {
+  model?: string
+  system?: SystemEntry[]
+  thinking?: Record<string, unknown>
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  output_config?: Record<string, unknown>
+  tools?: Array<
+    { name?: string; input_schema?: Record<string, unknown> } & Record<
+      string,
+      unknown
+    >
+  >
+  messages?: Array<{
+    role?: string
+    content?:
+      | string
+      | Array<{ type?: string; text?: string } & Record<string, unknown>>
+  }>
+}
+
 export function transformBody(
   body: BodyInit | null | undefined,
 ): BodyInit | null | undefined {
@@ -193,193 +213,176 @@ export function transformBody(
   }
 
   try {
-    const parsed = JSON.parse(body) as {
-      model?: string
-      system?: SystemEntry[]
-      thinking?: Record<string, unknown>
-      // eslint-disable-next-line @typescript-eslint/naming-convention
-      output_config?: Record<string, unknown>
-      tools?: Array<
-        { name?: string; input_schema?: Record<string, unknown> } & Record<
-          string,
-          unknown
-        >
-      >
-      messages?: Array<{
-        role?: string
-        content?:
-          | string
-          | Array<{ type?: string; text?: string } & Record<string, unknown>>
-      }>
-    }
-
-    // --- Billing header: inject as system[0] (no cache_control) ---
-    const version = process.env.ANTHROPIC_CLI_VERSION ?? config.ccVersion
-    const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? "sdk-cli"
-    const billingHeader = buildBillingHeaderValue(
-      (parsed.messages ?? []) as Array<{
-        role?: string
-        content?: string | Array<{ type?: string; text?: string }>
-      }>,
-      version,
-      entrypoint,
-    )
-
-    if (!Array.isArray(parsed.system)) {
-      parsed.system = []
-    }
-
-    // Remove any existing billing header entries
-    parsed.system = parsed.system.filter(
-      (e) =>
-        !(
-          e.type === "text" &&
-          typeof e.text === "string" &&
-          e.text.startsWith("x-anthropic-billing-header")
-        ),
-    )
-
-    // Insert billing header as system[0], without cache_control
-    parsed.system.unshift({ type: "text", text: billingHeader })
-
-    // --- Split identity prefix into its own system entry ---
-    // OpenCode's system.transform hook prepends the identity string, but
-    // OpenCode then concatenates all system entries into a single text block.
-    // Anthropic's API requires the identity string as a separate entry for
-    // OAuth validation (see issue #98).
-    const splitSystem: SystemEntry[] = []
-    for (const entry of parsed.system) {
-      if (
-        entry.type === "text" &&
-        typeof entry.text === "string" &&
-        entry.text.startsWith(SYSTEM_IDENTITY) &&
-        entry.text.length > SYSTEM_IDENTITY.length
-      ) {
-        const rest = entry.text
-          .slice(SYSTEM_IDENTITY.length)
-          .replace(/^\n+/, "")
-        // Preserve all properties except text (e.g. cache_control)
-        const { text: _text, ...entryProps } = entry
-        // Only keep cache_control on the remainder block to avoid exceeding
-        // the API limit of 4 cache_control blocks per request.
-        const { cache_control: _cc, ...identityProps } = entryProps
-        splitSystem.push({ ...identityProps, text: SYSTEM_IDENTITY })
-        if (rest.length > 0) {
-          splitSystem.push({ ...entryProps, text: rest })
-        }
-      } else {
-        splitSystem.push(entry)
-      }
-    }
-    parsed.system = splitSystem
-
-    // --- Relocate non-core system entries to user messages ---
-    // Anthropic's API now validates the system prompt for OAuth-authenticated
-    // requests that use Claude Code billing.  Third-party system prompts
-    // (like OpenCode's) trigger a 400 "out of extra usage" rejection when
-    // they appear inside the system[] array alongside the identity prefix.
-    //
-    // Work-around: keep only the billing header and identity prefix in
-    // system[], and prepend all other system content to the first user
-    // message where it is functionally equivalent but avoids the check.
-    const BILLING_PREFIX = "x-anthropic-billing-header"
-    const keptSystem: SystemEntry[] = []
-    const movedTexts: string[] = []
-    for (const entry of parsed.system) {
-      const txt = typeof entry === "string" ? entry : (entry.text ?? "")
-      if (txt.startsWith(BILLING_PREFIX) || txt.startsWith(SYSTEM_IDENTITY)) {
-        keptSystem.push(entry)
-      } else if (txt.length > 0) {
-        movedTexts.push(txt)
-      }
-    }
-    if (movedTexts.length > 0 && Array.isArray(parsed.messages)) {
-      const firstUser = parsed.messages.find((m) => m.role === "user")
-      if (firstUser) {
-        parsed.system = keptSystem
-        const prefix = movedTexts.join("\n\n")
-        if (typeof firstUser.content === "string") {
-          firstUser.content = prefix + "\n\n" + firstUser.content
-        } else if (Array.isArray(firstUser.content)) {
-          firstUser.content.unshift({ type: "text", text: prefix })
-        }
-      }
-    }
-
-    // Strip effort for models that don't support it (e.g. haiku).
-    // OpenCode sends { output_config: { effort: "high" } } but haiku
-    // rejects the effort parameter with a 400 error.
-    const modelId = parsed.model ?? ""
-    const override = getModelOverride(modelId)
-    if (override?.disableEffort) {
-      if (parsed.output_config) {
-        delete parsed.output_config.effort
-        if (Object.keys(parsed.output_config).length === 0) {
-          delete parsed.output_config
-        }
-      }
-      if (parsed.thinking && "effort" in parsed.thinking) {
-        delete parsed.thinking.effort
-        if (Object.keys(parsed.thinking).length === 0) {
-          delete parsed.thinking
-        }
-      }
-    }
-
-    // Anthropic's OAuth billing validation rejects lowercase tool names
-    // when multiple tools are present. Claude Code uses PascalCase after
-    // the mcp_ prefix (e.g. mcp_Bash, mcp_Read). Apply the same convention.
-    if (Array.isArray(parsed.tools)) {
-      parsed.tools = parsed.tools.map((tool) => {
-        const renamed = {
-          ...tool,
-          name: tool.name ? prefixName(tool.name) : tool.name,
-        }
-
-        // Flatten input_schema that uses top-level oneOf/anyOf/allOf,
-        // which the Anthropic Messages API rejects (error path
-        // tools.N.custom.input_schema). MCP servers like example-notion
-        // produce schemas with these constructs.
-        const inputSchema = renamed["input_schema"] as
-          | Record<string, unknown>
-          | undefined
-        if (inputSchema && typeof inputSchema === "object") {
-          const flat = flattenInputSchema(inputSchema)
-          if (flat !== inputSchema) {
-            renamed["input_schema"] = flat
-          }
-        }
-
-        return renamed
-      })
-    }
-
-    if (Array.isArray(parsed.messages)) {
-      parsed.messages = parsed.messages.map((message) => {
-        if (!Array.isArray(message.content)) {
-          return message
-        }
-
-        return {
-          ...message,
-          content: message.content.map((block) => {
-            if (block.type !== "tool_use" || typeof block.name !== "string") {
-              return block
-            }
-
-            return { ...block, name: prefixName(block.name) }
-          }),
-        }
-      })
-    }
-
-    if (Array.isArray(parsed.messages)) {
-      parsed.messages = repairToolPairs(parsed.messages)
-    }
-
+    const parsed = JSON.parse(body) as TransformTarget
+    transformParsed(parsed)
     return JSON.stringify(parsed)
   } catch {
     return body
+  }
+}
+
+/** The same rewrite as `transformBody`, in place on an already-parsed body. */
+export function transformParsed(parsed: TransformTarget): void {
+  // --- Billing header: inject as system[0] (no cache_control) ---
+  const version = process.env.ANTHROPIC_CLI_VERSION ?? config.ccVersion
+  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? "sdk-cli"
+  const billingHeader = buildBillingHeaderValue(
+    (parsed.messages ?? []) as Array<{
+      role?: string
+      content?: string | Array<{ type?: string; text?: string }>
+    }>,
+    version,
+    entrypoint,
+  )
+
+  if (!Array.isArray(parsed.system)) {
+    parsed.system = []
+  }
+
+  // Remove any existing billing header entries
+  parsed.system = parsed.system.filter(
+    (e) =>
+      !(
+        e.type === "text" &&
+        typeof e.text === "string" &&
+        e.text.startsWith("x-anthropic-billing-header")
+      ),
+  )
+
+  // Insert billing header as system[0], without cache_control
+  parsed.system.unshift({ type: "text", text: billingHeader })
+
+  // --- Split identity prefix into its own system entry ---
+  // OpenCode's system.transform hook prepends the identity string, but
+  // OpenCode then concatenates all system entries into a single text block.
+  // Anthropic's API requires the identity string as a separate entry for
+  // OAuth validation (see issue #98).
+  const splitSystem: SystemEntry[] = []
+  for (const entry of parsed.system) {
+    if (
+      entry.type === "text" &&
+      typeof entry.text === "string" &&
+      entry.text.startsWith(SYSTEM_IDENTITY) &&
+      entry.text.length > SYSTEM_IDENTITY.length
+    ) {
+      const rest = entry.text.slice(SYSTEM_IDENTITY.length).replace(/^\n+/, "")
+      // Preserve all properties except text (e.g. cache_control)
+      const { text: _text, ...entryProps } = entry
+      // Only keep cache_control on the remainder block to avoid exceeding
+      // the API limit of 4 cache_control blocks per request.
+      const { cache_control: _cc, ...identityProps } = entryProps
+      splitSystem.push({ ...identityProps, text: SYSTEM_IDENTITY })
+      if (rest.length > 0) {
+        splitSystem.push({ ...entryProps, text: rest })
+      }
+    } else {
+      splitSystem.push(entry)
+    }
+  }
+  parsed.system = splitSystem
+
+  // --- Relocate non-core system entries to user messages ---
+  // Anthropic's API now validates the system prompt for OAuth-authenticated
+  // requests that use Claude Code billing.  Third-party system prompts
+  // (like OpenCode's) trigger a 400 "out of extra usage" rejection when
+  // they appear inside the system[] array alongside the identity prefix.
+  //
+  // Work-around: keep only the billing header and identity prefix in
+  // system[], and prepend all other system content to the first user
+  // message where it is functionally equivalent but avoids the check.
+  const BILLING_PREFIX = "x-anthropic-billing-header"
+  const keptSystem: SystemEntry[] = []
+  const movedTexts: string[] = []
+  for (const entry of parsed.system) {
+    const txt = typeof entry === "string" ? entry : (entry.text ?? "")
+    if (txt.startsWith(BILLING_PREFIX) || txt.startsWith(SYSTEM_IDENTITY)) {
+      keptSystem.push(entry)
+    } else if (txt.length > 0) {
+      movedTexts.push(txt)
+    }
+  }
+  if (movedTexts.length > 0 && Array.isArray(parsed.messages)) {
+    const firstUser = parsed.messages.find((m) => m.role === "user")
+    if (firstUser) {
+      parsed.system = keptSystem
+      const prefix = movedTexts.join("\n\n")
+      if (typeof firstUser.content === "string") {
+        firstUser.content = prefix + "\n\n" + firstUser.content
+      } else if (Array.isArray(firstUser.content)) {
+        firstUser.content.unshift({ type: "text", text: prefix })
+      }
+    }
+  }
+
+  // Strip effort for models that don't support it (e.g. haiku).
+  // OpenCode sends { output_config: { effort: "high" } } but haiku
+  // rejects the effort parameter with a 400 error.
+  const modelId = parsed.model ?? ""
+  const override = getModelOverride(modelId)
+  if (override?.disableEffort) {
+    if (parsed.output_config) {
+      delete parsed.output_config.effort
+      if (Object.keys(parsed.output_config).length === 0) {
+        delete parsed.output_config
+      }
+    }
+    if (parsed.thinking && "effort" in parsed.thinking) {
+      delete parsed.thinking.effort
+      if (Object.keys(parsed.thinking).length === 0) {
+        delete parsed.thinking
+      }
+    }
+  }
+
+  // Anthropic's OAuth billing validation rejects lowercase tool names
+  // when multiple tools are present. Claude Code uses PascalCase after
+  // the mcp_ prefix (e.g. mcp_Bash, mcp_Read). Apply the same convention.
+  if (Array.isArray(parsed.tools)) {
+    parsed.tools = parsed.tools.map((tool) => {
+      const renamed = {
+        ...tool,
+        name: tool.name ? prefixName(tool.name) : tool.name,
+      }
+
+      // Flatten input_schema that uses top-level oneOf/anyOf/allOf,
+      // which the Anthropic Messages API rejects (error path
+      // tools.N.custom.input_schema). MCP servers like example-notion
+      // produce schemas with these constructs.
+      const inputSchema = renamed["input_schema"] as
+        | Record<string, unknown>
+        | undefined
+      if (inputSchema && typeof inputSchema === "object") {
+        const flat = flattenInputSchema(inputSchema)
+        if (flat !== inputSchema) {
+          renamed["input_schema"] = flat
+        }
+      }
+
+      return renamed
+    })
+  }
+
+  if (Array.isArray(parsed.messages)) {
+    parsed.messages = parsed.messages.map((message) => {
+      if (!Array.isArray(message.content)) {
+        return message
+      }
+
+      return {
+        ...message,
+        content: message.content.map((block) => {
+          if (block.type !== "tool_use" || typeof block.name !== "string") {
+            return block
+          }
+
+          return { ...block, name: prefixName(block.name) }
+        }),
+      }
+    })
+  }
+
+  if (Array.isArray(parsed.messages)) {
+    parsed.messages = repairToolPairs(parsed.messages)
   }
 }
 
