@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { accountKey, accountReadKeys } from "./account-key.ts"
+import { withFileLock } from "./file-lock.ts"
 import { primeJsonFresh, readJsonFresh } from "./file-memo.ts"
 
 /** One rate-limit window. */
@@ -257,39 +258,41 @@ export function writeQuotaForAccount(
   path: string = quotaCachePath(),
 ): boolean {
   try {
-    // A copy: the read is memoised and shared with every other reader.
-    const cache = { ...readQuotaCache(path) }
-    // Key by the stable account id, not the Keychain source, so a renamed or
-    // re-logged-in account keeps its history. Falls back to the source for an
-    // un-migrated install, where id == source.
-    const key = accountKey(source)
-    // Merge, never replace. Two writers reach this cache and they know
-    // different things: a response carries headers (windows, status,
-    // representative) and a probe carries what no header mentions (credits,
-    // the binding limit). Replacing meant every response erased the probe --
-    // so the BUSIEST account lost its credit state fastest, which is exactly
-    // the account whose credit state decides anything. The prior reading may
-    // still be under the old source key, so merge from either.
-    const prior = cache[key] ?? cache[source]
-    cache[key] = {
-      ...(prior?.extra !== undefined ? { extra: prior.extra } : {}),
-      ...(prior?.activeLimits !== undefined
-        ? { activeLimits: prior.activeLimits }
-        : {}),
-      ...quota,
-    }
-    // The source-keyed entry is now superseded; leaving it lets any reader
-    // that still tries the source see a stale window.
-    if (key !== source) delete cache[source]
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    // tmp + rename: the server and the TUI both write this file, and a torn
-    // write would lose every account's reading.
-    const tmp = `${path}.tmp-${process.pid}`
-    writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
-    renameSync(tmp, path)
-    primeJsonFresh(path, cache)
-    return true
+    return withFileLock(path, () => {
+      // A copy: the read is memoised and shared with every other reader.
+      const cache = { ...readQuotaCache(path) }
+      // Key by the stable account id, not the Keychain source, so a renamed or
+      // re-logged-in account keeps its history. Falls back to the source for an
+      // un-migrated install, where id == source.
+      const key = accountKey(source)
+      // Merge, never replace. Two writers reach this cache and they know
+      // different things: a response carries headers (windows, status,
+      // representative) and a probe carries what no header mentions (credits,
+      // the binding limit). Replacing meant every response erased the probe --
+      // so the BUSIEST account lost its credit state fastest, which is exactly
+      // the account whose credit state decides anything. The prior reading may
+      // still be under the old source key, so merge from either.
+      const prior = cache[key] ?? cache[source]
+      cache[key] = {
+        ...(prior?.extra !== undefined ? { extra: prior.extra } : {}),
+        ...(prior?.activeLimits !== undefined
+          ? { activeLimits: prior.activeLimits }
+          : {}),
+        ...quota,
+      }
+      // The source-keyed entry is now superseded; leaving it lets any reader
+      // that still tries the source see a stale window.
+      if (key !== source) delete cache[source]
+      // tmp + rename: the server and the TUI both write this file, and a torn
+      // write would lose every account's reading.
+      const tmp = `${path}.tmp-${process.pid}`
+      writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
+      renameSync(tmp, path)
+      primeJsonFresh(path, cache)
+      return true
+    })
   } catch {
     return false
   }

@@ -21,6 +21,7 @@
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 
+import { withFileLock } from "./file-lock.ts"
 import { type AccountId, stripJsonc } from "../config.ts"
 import { setJsoncValue } from "../config-edit.ts"
 import { accountIdFor, suggestIds } from "./accounts-id.ts"
@@ -218,6 +219,22 @@ export function applyMigration(
   now: Date = new Date(),
 ): MigrationResult {
   if (!existsSync(path)) return { migrated: false, mapping: {} }
+  // Two OpenCode processes starting together both see "needs migration";
+  // the lock makes the second re-read the first one's result and find nothing
+  // to do, instead of overwriting it.
+  return withFileLock(
+    path,
+    () => migrateLocked(path, members, pairFor, now),
+    2_000,
+  )
+}
+
+function migrateLocked(
+  path: string,
+  members: readonly Member[],
+  pairFor: (source: string) => { account: string; org: string } | undefined,
+  now: Date,
+): MigrationResult {
   const text = readFileSync(path, "utf8")
   let raw: unknown
   try {

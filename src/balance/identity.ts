@@ -28,6 +28,8 @@ import {
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
+import { withFileLock } from "./file-lock.ts"
+
 /** The uniquely-identifying pair plus the fields that make it readable. */
 export type AccountIdentity = {
   accountUuid: string
@@ -173,20 +175,22 @@ export function writeIdentity(
   path: string = identityCachePath(),
 ): boolean {
   try {
-    const cache = readIdentityCache(path)
-    cache[source] = { ...identity, fetchedAt: now }
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    // tmp + rename: the server and the TUI both write this file, and a torn
-    // write would lose every account's identity.
-    const tmp = `${path}.tmp-${process.pid}`
-    // Emails and org names: owner-only.
-    writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
+    return withFileLock(path, () => {
+      const cache = readIdentityCache(path)
+      cache[source] = { ...identity, fetchedAt: now }
+      // tmp + rename: the server and the TUI both write this file, and a torn
+      // write would lose every account's identity.
+      const tmp = `${path}.tmp-${process.pid}`
+      // Emails and org names: owner-only.
+      writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      })
+      renameSync(tmp, path)
+      return true
     })
-    renameSync(tmp, path)
-    return true
   } catch {
     return false
   }
@@ -225,50 +229,54 @@ export async function fetchIdentities(
   const result: IdentityResult = { fetched: 0, cached: 0, failed: 0 }
   const cache = readIdentityCache(path)
 
-  for (const account of accounts ?? []) {
-    if (!account?.source || !account?.accessToken) {
-      result.failed++
-      continue
-    }
-    if (cache[account.source]) {
-      result.cached++
-      continue
-    }
-    try {
-      const [url, init] = buildProfileRequest(account.accessToken)
-      const res = await fetchImpl(url, init)
-      if (res.status === 401) {
-        // Expired token: keep any cached identity, fall back to disk otherwise.
-        const fallback = account.configDir
-          ? identityFromConfigDir(account.configDir)
-          : undefined
-        if (fallback) {
-          writeIdentity(account.source, fallback, now(), path)
+  // In parallel: N accounts in series cost N round trips at start-up. Each
+  // write takes the file lock, so concurrent results do not overwrite each other.
+  await Promise.all(
+    (accounts ?? []).map(async (account) => {
+      if (!account?.source || !account?.accessToken) {
+        result.failed++
+        return
+      }
+      if (cache[account.source]) {
+        result.cached++
+        return
+      }
+      try {
+        const [url, init] = buildProfileRequest(account.accessToken)
+        const res = await fetchImpl(url, init)
+        if (res.status === 401) {
+          // Expired token: keep any cached identity, fall back to disk otherwise.
+          const fallback = account.configDir
+            ? identityFromConfigDir(account.configDir)
+            : undefined
+          if (fallback) {
+            writeIdentity(account.source, fallback, now(), path)
+            result.fetched++
+          } else {
+            result.failed++
+          }
+          return
+        }
+        const identity = parseProfile(await res.json().catch(() => null))
+        if (identity) {
+          writeIdentity(account.source, identity, now(), path)
           result.fetched++
         } else {
-          result.failed++
+          const fallback = account.configDir
+            ? identityFromConfigDir(account.configDir)
+            : undefined
+          if (fallback) {
+            writeIdentity(account.source, fallback, now(), path)
+            result.fetched++
+          } else {
+            result.failed++
+          }
         }
-        continue
+      } catch {
+        result.failed++
       }
-      const identity = parseProfile(await res.json().catch(() => null))
-      if (identity) {
-        writeIdentity(account.source, identity, now(), path)
-        result.fetched++
-      } else {
-        const fallback = account.configDir
-          ? identityFromConfigDir(account.configDir)
-          : undefined
-        if (fallback) {
-          writeIdentity(account.source, fallback, now(), path)
-          result.fetched++
-        } else {
-          result.failed++
-        }
-      }
-    } catch {
-      result.failed++
-    }
-  }
+    }),
+  )
 
   return result
 }

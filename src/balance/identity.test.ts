@@ -193,3 +193,27 @@ describe("identity hardening", () => {
     assert.ok(buildProfileRequest("t")[1].signal instanceof AbortSignal)
   })
 })
+
+// Regression: profiles were fetched one after another, so N accounts cost N
+// round trips at start-up.
+describe("fetchIdentities concurrency", () => {
+  it("issues every profile request before the first one answers", async () => {
+    const p = tmpFile()
+    let inFlight = 0
+    let peak = 0
+    const slow = (async () => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 20))
+      inFlight--
+      return new Response(JSON.stringify(PROFILE), { status: 200 })
+    }) as unknown as typeof fetch
+    const r = await fetchIdentities(
+      ["a", "b", "c"].map((s) => ({ source: s, accessToken: "t" })),
+      { fetchImpl: slow, path: p, now: () => 1 },
+    )
+    assert.equal(peak, 3)
+    assert.deepEqual(r, { fetched: 3, cached: 0, failed: 0 })
+    assert.equal(Object.keys(readIdentityCache(p)).length, 3)
+  })
+})
