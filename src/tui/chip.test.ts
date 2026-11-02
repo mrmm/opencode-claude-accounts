@@ -194,6 +194,17 @@ describe("buildPickerOptions", () => {
     )
   })
 
+  // Regression: the picker ignored configured display names and showed
+  // Keychain labels.
+  it("titles accounts with the configured display names", () => {
+    const rows = buildPickerOptions({
+      ...input,
+      names: new Map([["s1", "Team 1 - Main"]]),
+    })
+    const s1 = rows.find((r) => r.value === "s1")!
+    assert.ok(s1.title.startsWith("Team 1 - Main"), s1.title)
+  })
+
   it("shapes rows as the host DialogSelect expects", () => {
     // The host requires `title`; a row built with `label` type-checks nowhere
     // and renders as an empty line.

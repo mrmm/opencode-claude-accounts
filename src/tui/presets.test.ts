@@ -86,6 +86,15 @@ describe("togglePresetAccount", () => {
     assert.deepEqual(out.accounts, ["Acme 1", "s3"])
   })
 
+  it("adds an account by its id when it has one", () => {
+    const members = [
+      ...MEMBERS.filter((m) => m.source !== "s3"),
+      { source: "s3", label: "Acme 3", id: "acme-3" },
+    ]
+    const out = togglePresetAccount({ accounts: ["Acme 1"] }, "s3", members)!
+    assert.deepEqual(out.accounts, ["Acme 1", "acme-3"])
+  })
+
   it("removes by the spelling that resolved to it", () => {
     // The hand-written fragments of the others have to survive the edit.
     const out = togglePresetAccount(
@@ -366,6 +375,14 @@ describe("tiered presets", () => {
       poolRows(broken, NAMES, TIER_MEMBERS)[0]!.description,
       /1 unresolved/,
     )
+  })
+
+  // Regression: adding to a tier wrote the raw Keychain source, not the id.
+  it("adds to a tier by id when the member has one", () => {
+    const members = TIER_MEMBERS.map((m) => ({ ...m, id: `id-${m.source}` }))
+    const off = togglePoolAccount(TIERED, 0, "s2", members)!
+    const on = togglePoolAccount(off, 1, "s2", members)!
+    assert.ok(poolsOf(on)[1]!.accounts.includes("id-s2"))
   })
 
   it("moves an account between tiers by toggling each side", () => {

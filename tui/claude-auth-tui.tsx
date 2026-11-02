@@ -1038,6 +1038,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     const current = snap()
     const options = buildPickerOptions({
       accounts: visible(),
+      names: displayNames(),
       presets: getConfig().presets,
       quota: current.quota,
       selection: current.selection,
@@ -2283,7 +2284,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     if (v === BACK) return openTiers(name, preset, index)
                     if (v.startsWith("a:")) {
                       return save(
-                        togglePoolAccount(preset, index, v.slice(2), accounts),
+                        togglePoolAccount(
+                          preset,
+                          index,
+                          v.slice(2),
+                          accounts.map((x) => ({
+                            ...x,
+                            id: accountKey(x.source),
+                          })),
+                        ),
                         "",
                       )
                     }
@@ -2442,7 +2451,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     const next = togglePresetAccount(
                       preset,
                       v.slice(2),
-                      accounts,
+                      accounts.map((x) => ({ ...x, id: accountKey(x.source) })),
                     )
                     if (!next) {
                       api.ui.toast({

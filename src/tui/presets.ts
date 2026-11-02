@@ -102,7 +102,7 @@ export function isFlat(p: Preset): boolean {
   return !Array.isArray(p.pools)
 }
 
-export type Member = { source: string; label?: string }
+export type Member = { source: string; label?: string; id?: string }
 
 /**
  * Which accounts a preset actually contains, and which of its references go
@@ -144,6 +144,10 @@ export function presetMembership(
  * Refuses to empty the set: a preset with no accounts matches nothing, and the
  * balancer would fall through it silently rather than report it as broken.
  */
+// New references are written as the account id when the member carries one.
+const refOf = (source: string, members: readonly Member[]): string =>
+  members.find((m) => m.source === source)?.id ?? source
+
 export function togglePresetAccount(
   preset: Preset,
   source: string,
@@ -158,7 +162,7 @@ export function togglePresetAccount(
     const ref = refFor.get(source)
     return { ...preset, accounts: current.filter((r) => r !== ref) }
   }
-  return { ...preset, accounts: [...current, source] }
+  return { ...preset, accounts: [...current, refOf(source, members)] }
 }
 
 /** Whether a name can be used for a new preset. */
@@ -391,7 +395,7 @@ export function togglePoolAccount(
     return withPools(preset, next)
   }
   const next = [...pools]
-  next[index] = { ...pool, accounts: [...current, source] }
+  next[index] = { ...pool, accounts: [...current, refOf(source, members)] }
   return withPools(preset, next)
 }
 
