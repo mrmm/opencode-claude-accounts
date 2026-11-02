@@ -11,6 +11,7 @@ import {
   resetCursors,
   STRATEGIES,
   resetEjections,
+  orderByConfig,
   resolveAccountRefs,
   resolvePools,
   resolveRef,
@@ -19,6 +20,7 @@ import {
   selectAccount,
   type Member,
 } from "./balancer.ts"
+import { resolveActiveConfig } from "./rotate.ts"
 
 const NOW_MS = 1785162626000
 const NOW_SEC = Math.floor(NOW_MS / 1000)
@@ -662,6 +664,53 @@ describe("account references", () => {
     )
     assert.deepEqual(sources, ["s1"])
     assert.deepEqual(unresolved, ["Team Z"])
+  })
+
+  it("expands a group name to its accounts, in group order", () => {
+    const groups = { groupA: { accounts: ["b", "a"] } }
+    assert.deepEqual(
+      resolvePools(
+        members("a", "b", "c"),
+        cfg({ accounts: ["groupA"], groups }),
+      )[0]!.accounts,
+      ["b", "a"],
+    )
+    const pools = resolvePools(
+      members("a", "b", "c"),
+      cfg({ pools: [{ name: "p", accounts: ["c", "groupA"] }], groups }),
+    )
+    assert.deepEqual(pools[0]!.accounts, ["c", "b", "a"])
+  })
+
+  it("orders members by config, groups expanded, the rest after", () => {
+    const out = orderByConfig(members("a", "b", "c", "d"), ["G", "a"], {
+      G: { accounts: ["c", "b"] },
+    })
+    assert.deepEqual(
+      out.map((m) => m.source),
+      ["c", "b", "a", "d"],
+    )
+  })
+
+  it("routes a preset naming a group to the group's members", () => {
+    const groups = { groupA: { accounts: ["b", "c"] } }
+    const presets = { p: { accounts: ["groupA", "nosuchgroup"] } }
+    const active = resolveActiveConfig(
+      cfg({ groups, presets, preset: "p" }),
+      null,
+    )
+    assert.deepEqual(
+      resolvePools(members("a", "b", "c"), active.cfg)[0]!.accounts,
+      ["b", "c"],
+    )
+    assert.deepEqual(
+      resolveAccountRefs(
+        ["groupA", "nosuchgroup"],
+        members("a", "b", "c"),
+        groups,
+      ).unresolved,
+      ["nosuchgroup"],
+    )
   })
 
   it("lets a pool name accounts by label", () => {

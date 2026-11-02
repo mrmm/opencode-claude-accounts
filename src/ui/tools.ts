@@ -25,7 +25,7 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
 
-import { assess, resolveRef } from "../balance/balancer.ts"
+import { assess, orderByConfig, resolveRef } from "../balance/balancer.ts"
 import { ceilingFor } from "../balance/caps.ts"
 import { cacheImpact } from "../balance/cache-stats.ts"
 import {
@@ -56,7 +56,8 @@ import {
   maybeRotate,
   resolveActiveConfig,
 } from "../balance/rotate.ts"
-import { readUsage, summarize } from "../balance/usage.ts"
+import { currentUsageIndex, readUsage, summarize } from "../balance/usage.ts"
+import { groupRows } from "../tui/groups.ts"
 
 const members = () =>
   listAccounts().map((a) => ({ source: a.source, label: a.label }))
@@ -158,7 +159,7 @@ export const claudeAuthTools = {
         return ` ceiling ${parts.join(" ")}`
       }
 
-      for (const m of members()) {
+      for (const m of orderByConfig(members(), cfg.accounts, cfg.groups)) {
         const h = health.get(m.source)
         const verdict = h?.reserved
           ? `reserved — ${h.reason}`
@@ -168,6 +169,30 @@ export const claudeAuthTools = {
         lines.push(
           `  ${m.source === servingSource ? "*" : " "} ${accountKey(m.source).padEnd(16)} ${nameOf(m.source, m.label).padEnd(32)} ${(formatQuotaPrefix(quotaEntry(quota, m.source)) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
         )
+      }
+
+      const groups = groupRows({
+        groups: cfg.groups,
+        accounts: orderByConfig(members(), cfg.accounts, cfg.groups).map(
+          (m) => ({ source: m.source, label: m.label ?? m.source }),
+        ),
+        quota,
+        requests: Object.fromEntries(
+          Object.entries(currentUsageIndex()).map(([k, v]) => [k, v.requests]),
+        ),
+        resolve: (ref) => resolveRef(ref, members()),
+        thresholds: {
+          warnAt: cfg.quotaWarnAt,
+          weeklyWarnAt: cfg.quotaWeeklyWarnAt,
+        },
+      })
+      if (groups.length > 0) {
+        lines.push("", "groups (room in accounts; worst state):")
+        for (const g of groups) {
+          lines.push(
+            `  ${g.title.padEnd(16)} ${g.summary.padEnd(44)} ${g.health.padEnd(8)} ${g.sources.map((s) => accountKey(s)).join(", ") || "(no live account)"}`,
+          )
+        }
       }
 
       const presets = Object.entries(cfg.presets)

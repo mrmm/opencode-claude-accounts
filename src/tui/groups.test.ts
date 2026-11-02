@@ -1,0 +1,82 @@
+import assert from "node:assert/strict"
+import { describe, it } from "node:test"
+
+import type { QuotaCache } from "../balance/index.ts"
+import { groupRows } from "./groups.ts"
+
+const FUTURE = Math.floor(Date.now() / 1000) + 3600
+
+const reading = (five: number, week: number): QuotaCache[string] =>
+  ({
+    fiveHour: { utilization: five, resetsAt: FUTURE, status: "allowed" },
+    sevenDay: { utilization: week, resetsAt: FUTURE, status: "allowed" },
+    observedAt: 0,
+  }) as QuotaCache[string]
+
+const ACCOUNTS = ["src-1", "src-2", "src-3", "src-4"].map((source) => ({
+  source,
+  label: source,
+}))
+const ids: Record<string, string> = {
+  "acme-1": "src-1",
+  "acme-2": "src-2",
+  "acme-3": "src-3",
+}
+const resolve = (ref: string) =>
+  ids[ref] ?? ACCOUNTS.find((a) => a.source === ref)?.source
+
+describe("groupRows", () => {
+  it("is empty when no groups are configured", () => {
+    assert.deepEqual(
+      groupRows({ groups: {}, accounts: ACCOUNTS, quota: {}, resolve }),
+      [],
+    )
+  })
+
+  it("sections in config order, members in account order, the rest under Other", () => {
+    const out = groupRows({
+      groups: {
+        Main: { accounts: ["acme-2", "acme-1", "ghost"] },
+        Alt: { accounts: ["src-3"], label: "Alt team" },
+      },
+      accounts: ACCOUNTS,
+      quota: {
+        "src-1": reading(0.2, 0.9),
+        "src-2": reading(0.5, 0.7),
+        "src-3": reading(1, 0.1),
+      },
+      requests: { "src-1": 3, "src-2": 1, "src-3": 4, "src-4": 2 },
+      resolve,
+    })
+    assert.deepEqual(
+      out.map((g) => [g.key, g.title, g.sources]),
+      [
+        ["group:Main", "Main", ["src-1", "src-2"]],
+        ["group:Alt", "Alt team", ["src-3"]],
+        ["group-other", "Other", ["src-4"]],
+      ],
+    )
+    assert.equal(
+      out[0]!.summary,
+      "5h 1.3/2 left \u00b7 wk 0.4/2 left \u00b7 40% reqs",
+    )
+    assert.equal(out[0]!.health, "warn", "worst member: week at 90%")
+    assert.equal(out[1]!.health, "critical", "spent 5h window")
+    assert.equal(out[2]!.health, "unknown")
+    assert.equal(
+      out[2]!.summary,
+      "5h 0.0/1 left \u00b7 wk 0.0/1 left \u00b7 20% reqs",
+    )
+  })
+
+  it("omits Other when every account is grouped, and the share when nothing was served", () => {
+    const out = groupRows({
+      groups: { All: { accounts: ["src-1", "src-2", "src-3", "src-4"] } },
+      accounts: ACCOUNTS,
+      quota: {},
+      resolve,
+    })
+    assert.equal(out.length, 1)
+    assert.ok(!out[0]!.summary.includes("reqs"))
+  })
+})

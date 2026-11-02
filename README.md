@@ -295,6 +295,32 @@ silently narrow which accounts may serve requests.
 
 `CLAUDE_AUTH_PRESET=<name>` selects one for a single run.
 
+### Groups
+
+A group names a set of accounts. It changes nothing on its own: it is a
+shorthand, and a way to see related accounts together.
+
+```jsonc
+"groups": {
+  "Main": { "accounts": ["acme-1", "acme-2", "acme-3"] },
+  "Alt": { "label": "Alternates", "accounts": ["acme-1-alt", "acme-2-alt"] }
+},
+"presets": {
+  "main-only": { "strategy": "least-loaded", "accounts": ["Main"] }
+}
+```
+
+- **Routing.** Anywhere an account list is accepted — top-level `accounts`, a
+  pool, a preset — an entry equal to a group name stands for that group's
+  accounts, in order. Members are named like any other reference (id, source or
+  label fragment). Groups do not nest, and an unknown name is ignored as before.
+- **Sidebar.** With groups configured, the Claude Auth section shows one
+  collapsible heading per group, in config order, with an aggregate line such as
+  `5h 2.3/3 left · wk 0.4/3 left · 41% reqs`: room is counted in accounts
+  (1.0 = one account's full window, an account with no reading counts as none),
+  coloured by the worst member. Accounts in no group are listed under **Other**.
+- **`claude_auth_status`** prints the same aggregates per group.
+
 ### Usage telemetry
 
 Every response is recorded — which account served it, the model, status,
@@ -883,6 +909,7 @@ true, because ten keys had previously drifted into being file-only.
 | `pools`                | `CLAUDE_AUTH_POOLS` (JSON)               |
 | `ejectFor`             | `CLAUDE_AUTH_EJECT_FOR`                  |
 | `presets`              | `CLAUDE_AUTH_PRESETS` (JSON)             |
+| `groups`               | `CLAUDE_AUTH_GROUPS` (JSON)              |
 | `preset`               | `CLAUDE_AUTH_PRESET`                     |
 | `tools`                | `CLAUDE_AUTH_TOOLS`                      |
 | `contextLimit`         | `CLAUDE_AUTH_CONTEXT_LIMIT`              |

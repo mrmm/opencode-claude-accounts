@@ -446,6 +446,32 @@ export function parsePresets(v: unknown): Record<string, Preset> | undefined {
 }
 
 /**
+ * A named set of accounts, for display and as a shorthand anywhere an account
+ * list is accepted: a preset, pool or `accounts` entry equal to a group name
+ * stands for the group's accounts, in order.
+ */
+export type AccountGroup = { accounts: string[]; label?: string }
+
+export function parseGroups(
+  v: unknown,
+): Record<string, AccountGroup> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const out: Record<string, AccountGroup> = {}
+  for (const [name, raw] of Object.entries(v as Record<string, unknown>)) {
+    const key = name.trim()
+    if (!key || !raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const accounts = parseAccounts(r.accounts)
+    if (!accounts || accounts.length === 0) continue
+    const group: AccountGroup = { accounts }
+    if (typeof r.label === "string" && r.label.trim())
+      group.label = r.label.trim()
+    out[key] = group
+  }
+  return out
+}
+
+/**
  * Server-side context editing. `false` off (default); `true` on with defaults;
  * an object overrides individual knobs. Resolved to numbers in
  * `balance/context-edit.ts`; this stays the raw, partial shape a file can hold.
@@ -676,6 +702,12 @@ export type ClaudeAuthConfig = {
   /** Named, switchable arrangements. Offered as rows in the switcher. */
   presets: Record<string, Preset>
   /**
+   * Named account groups, in display order. A group name may stand in for its
+   * accounts in `accounts`, `pools` and presets; the sidebar shows one
+   * collapsible block per group.
+   */
+  groups: Record<string, AccountGroup>
+  /**
    * Preset applied when nothing has been chosen in the switcher. The switcher's
    * choice is remembered and wins over this.
    */
@@ -723,6 +755,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   retryPrefillError: false,
   captureRequests: "off",
   presets: {},
+  groups: {},
   preset: "",
   tools: true,
   contextLimit: 0,
@@ -881,6 +914,9 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
 
   const presets = parsePresets(r.presets)
   if (presets !== undefined) out.presets = presets
+
+  const groups = parseGroups(r.groups)
+  if (groups !== undefined) out.groups = groups
 
   if (typeof r.preset === "string") out.preset = r.preset.trim()
 
@@ -1085,6 +1121,13 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   presets: (v) => {
     try {
       return parsePresets(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
+  groups: (v) => {
+    try {
+      return parseGroups(JSON.parse(v))
     } catch {
       return undefined
     }

@@ -44,7 +44,11 @@ import {
 } from "../dist/credentials.js"
 import { readQuotaCache } from "../dist/balance/quota.js"
 import { readShapeFile } from "../dist/introspect.js"
-import { liveIdToSource, resolveRef } from "../dist/balance/index.js"
+import {
+  expandGroupRefs,
+  liveIdToSource,
+  resolveRef,
+} from "../dist/balance/index.js"
 import {
   addPool,
   indentJson,
@@ -104,6 +108,7 @@ import {
 import { readIdentityCache } from "../dist/balance/identity.js"
 import { namesBySource } from "../dist/balance/accounts-id.js"
 import { readFolds, toggleFold, writeFolds } from "../dist/tui/fold.js"
+import { groupRows } from "../dist/tui/groups.js"
 import {
   configRows,
   display,
@@ -246,7 +251,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const refToSource = (ref: string) =>
     resolveRef(ref, accounts as { source: string; label?: string }[])
   const enabled = () =>
-    enabledSources(accounts, getConfig().accounts, refToSource)
+    enabledSources(
+      accounts,
+      expandGroupRefs(getConfig().accounts, getConfig().groups),
+      refToSource,
+    )
   // In the configured order, which is the order the user ranks accounts in.
   const visible = () =>
     enabled().flatMap((s) => accounts.filter((a) => a.source === s))
@@ -1210,6 +1219,49 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             },
             ...snap(),
           })
+        const sections = () =>
+          groupRows({
+            groups: getConfig().groups,
+            accounts: visible(),
+            quota: snap().quota,
+            requests: snap().requests,
+            resolve: refToSource,
+            thresholds: {
+              warnAt: getConfig().quotaWarnAt,
+              weeklyWarnAt: getConfig().quotaWeeklyWarnAt,
+            },
+          })
+        const rowBySource = () =>
+          new Map(visible().map((a, i) => [a.source, view().rows[i]!]))
+        type SidebarRow = ReturnType<typeof view>["rows"][number]
+        const AccountRow = (props: { row: SidebarRow }) => {
+          return (
+            <box flexDirection="row" gap={1}>
+              <text
+                flexShrink={0}
+                style={{ fg: healthColour(props.row.health) }}
+              >
+                {props.row.active ? "\u25cf" : "\u00b7"}
+              </text>
+              <text
+                style={{
+                  // Brightness says which account is serving; hue says how
+                  // it is doing. Two facts, two channels -- the previous
+                  // rendering put both on hue and could show neither.
+                  fg: props.row.active
+                    ? api.theme.current.text
+                    : api.theme.current.textMuted,
+                }}
+              >
+                {props.row.name}
+                <span style={{ fg: healthColour(props.row.health) }}>
+                  {"  "}
+                  {props.row.detail}
+                </span>
+              </text>
+            </box>
+          )
+        }
         return (
           <box>
             <text
@@ -1227,36 +1279,44 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               </span>
             </text>
             <Show when={!isFolded("accounts")}>
-              <box onMouseUp={openAccountPicker}>
-                <For each={view().rows}>
-                  {(row) => (
-                    <box flexDirection="row" gap={1}>
+              <Show
+                when={sections().length > 0}
+                fallback={
+                  <box onMouseUp={openAccountPicker}>
+                    <For each={view().rows}>
+                      {(row) => <AccountRow row={row} />}
+                    </For>
+                  </box>
+                }
+              >
+                <For each={sections()}>
+                  {(g) => (
+                    <box>
                       <text
-                        flexShrink={0}
-                        style={{ fg: healthColour(row.health) }}
+                        fg={api.theme.current.text}
+                        onMouseUp={() => toggleSection(g.key)}
                       >
-                        {row.active ? "\u25cf" : "\u00b7"}
-                      </text>
-                      <text
-                        style={{
-                          // Brightness says which account is serving; hue says how
-                          // it is doing. Two facts, two channels -- the previous
-                          // rendering put both on hue and could show neither.
-                          fg: row.active
-                            ? api.theme.current.text
-                            : api.theme.current.textMuted,
-                        }}
-                      >
-                        {row.name}
-                        <span style={{ fg: healthColour(row.health) }}>
-                          {"  "}
-                          {row.detail}
+                        {isFolded(g.key) ? "\u25b8 " : "\u25be "}
+                        <b>{g.title}</b>
+                        <span style={{ fg: healthColour(g.health) }}>
+                          {`  ${g.summary}`}
                         </span>
                       </text>
+                      <Show when={!isFolded(g.key)}>
+                        <box onMouseUp={openAccountPicker}>
+                          <For each={g.sources}>
+                            {(source) => (
+                              <Show when={rowBySource().get(source)}>
+                                {(row) => <AccountRow row={row()} />}
+                              </Show>
+                            )}
+                          </For>
+                        </box>
+                      </Show>
                     </box>
                   )}
                 </For>
-              </box>
+              </Show>
             </Show>
           </box>
         )
@@ -1387,7 +1447,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               ? preset.pools.flatMap((t) => t.accounts ?? [])
               : (preset.accounts ?? [])
             for (const ref of refs) {
-              if (!resolveRef(ref, list)) unresolved.push(`${name}: ${ref}`)
+              if (!cfg.groups[ref] && !resolveRef(ref, list))
+                unresolved.push(`${name}: ${ref}`)
             }
           }
 

@@ -17,6 +17,7 @@
  */
 
 import type {
+  AccountGroup,
   BalanceStrategy,
   ClaudeAuthConfig,
   Pool,
@@ -401,14 +402,28 @@ export function resolveRef(
   return hits.length === 1 ? hits[0]!.source : undefined
 }
 
-/** Resolve a list of references, reporting the ones that went nowhere. */
+/**
+ * A reference equal to a group name stands for that group's accounts, in
+ * order; groups do not nest. Every other reference passes through.
+ */
+export function expandGroupRefs(
+  refs: readonly string[],
+  groups: Readonly<Record<string, AccountGroup>> = {},
+): string[] {
+  return refs.flatMap((r) =>
+    Object.hasOwn(groups, r) ? groups[r]!.accounts : [r],
+  )
+}
+
+/** Resolve a list of references (group names expanded), reporting the ones that went nowhere. */
 export function resolveAccountRefs(
   refs: readonly string[],
   members: readonly Member[],
+  groups: Readonly<Record<string, AccountGroup>> = {},
 ): { sources: string[]; unresolved: string[] } {
   const sources: string[] = []
   const unresolved: string[] = []
-  for (const ref of refs) {
+  for (const ref of expandGroupRefs(refs, groups)) {
     const source = resolveRef(ref, members)
     if (!source) unresolved.push(ref)
     else if (!sources.includes(source)) sources.push(source)
@@ -416,11 +431,26 @@ export function resolveAccountRefs(
   return { sources, unresolved }
 }
 
+/** Members in configured `accounts` order (group names expanded), then the rest in their own order. */
+export function orderByConfig<M extends Member>(
+  members: readonly M[],
+  refs: readonly string[],
+  groups: Readonly<Record<string, AccountGroup>> = {},
+): M[] {
+  const first = resolveAccountRefs(refs, members, groups).sources
+  return [
+    ...first.map((s) => members.find((m) => m.source === s)!),
+    ...members.filter((m) => !first.includes(m.source)),
+  ]
+}
+
 export function resolvePools(
   members: readonly Member[],
-  cfg: Pick<ClaudeAuthConfig, "pools" | "accounts" | "strategy" | "weights">,
+  cfg: Pick<ClaudeAuthConfig, "pools" | "accounts" | "strategy" | "weights"> &
+    Partial<Pick<ClaudeAuthConfig, "groups">>,
 ): Pool[] {
-  const keep = (refs: string[]) => resolveAccountRefs(refs, members).sources
+  const keep = (refs: string[]) =>
+    resolveAccountRefs(refs, members, cfg.groups).sources
 
   if (cfg.pools.length > 0) {
     return cfg.pools

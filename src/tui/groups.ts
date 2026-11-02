@@ -1,0 +1,108 @@
+/**
+ * The sidebar's account list, split by configured group.
+ *
+ * Pure: the caller passes the visible accounts (already in configured order),
+ * the quota cache, request counts keyed by source, and a resolver from config
+ * reference to source. Quota is read through `utilisation`, which goes through
+ * `quotaEntry`, so an id-keyed cache entry is found from a source.
+ */
+import type { AccountGroup } from "../config.ts"
+import { accountKey, type QuotaCache } from "../balance/index.ts"
+import {
+  SEP,
+  accountHealth,
+  utilisation,
+  type ChipAccount,
+  type Health,
+} from "./chip.ts"
+
+export type GroupSection = {
+  /** Fold key, stable across renders. */
+  key: string
+  title: string
+  /** `5h 2.3/3 left · wk 0.4/3 left · 41% reqs` */
+  summary: string
+  /** The worst state of any member. */
+  health: Health
+  /** Members, in configured account order. */
+  sources: string[]
+}
+
+const RANK: Record<Health, number> = {
+  unknown: 0,
+  ok: 1,
+  paid: 2,
+  warn: 3,
+  critical: 4,
+}
+
+export const OTHER_GROUP = "Other"
+
+/**
+ * One section per group, in config order, then `Other` for accounts in no
+ * group. Empty when no groups are configured, so the caller renders the flat
+ * list. Room is counted in accounts (1.0 = one account's whole window); an
+ * account with no reading counts as no room, since no reading is not good news.
+ */
+export function groupRows(input: {
+  groups: Readonly<Record<string, AccountGroup>>
+  accounts: readonly ChipAccount[]
+  quota: QuotaCache
+  requests?: Record<string, number>
+  resolve: (ref: string) => string | undefined
+  thresholds?: { warnAt: number; weeklyWarnAt: number }
+  now?: number
+}): GroupSection[] {
+  const names = Object.keys(input.groups)
+  if (names.length === 0) return []
+  const thresholds = input.thresholds ?? { warnAt: 0.9, weeklyWarnAt: 0.85 }
+  const total = Object.values(input.requests ?? {}).reduce((n, r) => n + r, 0)
+
+  const section = (key: string, title: string, sources: string[]) => {
+    let five = 0
+    let week = 0
+    let served = 0
+    let health: Health = "unknown"
+    for (const s of sources) {
+      const u = utilisation(input.quota, s, input.now)
+      five += u.five === undefined ? 0 : Math.max(0, 1 - u.five / 100)
+      week += u.week === undefined ? 0 : Math.max(0, 1 - u.week / 100)
+      // Usage is keyed by account id; fall back to the source for un-migrated data.
+      served += input.requests?.[accountKey(s)] ?? input.requests?.[s] ?? 0
+      const h = accountHealth(input.quota, s, thresholds)
+      if (RANK[h] > RANK[health]) health = h
+    }
+    const n = sources.length
+    const share =
+      total > 0 ? `${SEP}${Math.round((served / total) * 100)}% reqs` : ""
+    return {
+      key,
+      title,
+      summary: `5h ${five.toFixed(1)}/${n} left${SEP}wk ${week.toFixed(1)}/${n} left${share}`,
+      health,
+      sources,
+    }
+  }
+
+  const grouped = new Set<string>()
+  const out: GroupSection[] = []
+  for (const name of names) {
+    const g = input.groups[name]!
+    const members = new Set(
+      g.accounts.flatMap((ref) => {
+        const s = input.resolve(ref)
+        return s ? [s] : []
+      }),
+    )
+    const sources = input.accounts
+      .map((a) => a.source)
+      .filter((s) => members.has(s))
+    for (const s of sources) grouped.add(s)
+    out.push(section(`group:${name}`, g.label ?? name, sources))
+  }
+  const rest = input.accounts
+    .map((a) => a.source)
+    .filter((s) => !grouped.has(s))
+  if (rest.length > 0) out.push(section("group-other", OTHER_GROUP, rest))
+  return out
+}

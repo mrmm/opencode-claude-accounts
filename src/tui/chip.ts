@@ -15,7 +15,12 @@ import type {
   SessionDetail,
   SessionUsage,
 } from "../balance/index.ts"
-import { creditHeadroom, formatDuration, quotaEntry } from "../balance/index.ts"
+import {
+  accountKey,
+  creditHeadroom,
+  formatDuration,
+  quotaEntry,
+} from "../balance/index.ts"
 
 export type ChipAccount = { source: string; label: string }
 
@@ -431,7 +436,8 @@ export function sidebarLines(input: ChipInput): {
     // Share of requests, not of quota: it answers "is the balancer actually
     // spreading load", which the quota percentages do not -- two accounts can
     // sit at the same utilisation while one serves everything.
-    const served = input.requests?.[a.source]
+    const served =
+      input.requests?.[accountKey(a.source)] ?? input.requests?.[a.source]
     const share =
       total > 0 && served !== undefined
         ? `${SEP}${Math.round((served / total) * 100)}% reqs`

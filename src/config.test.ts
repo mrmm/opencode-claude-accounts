@@ -17,6 +17,7 @@ import {
   sanitize,
   stripJsonc,
   parseContextEditing,
+  parseGroups,
 } from "./config.ts"
 
 /**
@@ -434,6 +435,7 @@ describe("config surface coverage", () => {
       '{"acme-1":{"match":{"account":"00000000-0000-0000-0000-000000000001","org":"00000000-0000-0000-0000-0000000000a1"},"name":"Team 1"}}',
     pools: '[{"accounts":["alpha"]}]',
     presets: '{"p":{"accounts":["alpha"]}}',
+    groups: '{"Main":{"accounts":["alpha","beta"]}}',
   }
 
   it("has an environment variable for every key in DEFAULT_CONFIG", () => {
@@ -546,6 +548,32 @@ describe("parseContextEditing", () => {
       envLayer({ CLAUDE_AUTH_CONTEXT_EDITING: "1" } as NodeJS.ProcessEnv)
         .contextEditing,
       true,
+    )
+  })
+})
+
+describe("parseGroups", () => {
+  it("keeps groups with accounts, trims the label, drops the rest", () => {
+    assert.deepEqual(
+      parseGroups({
+        Main: { accounts: ["acme-1", "acme-2"], label: " Main team " },
+        Empty: { accounts: [] },
+        Bad: "x",
+      }),
+      { Main: { accounts: ["acme-1", "acme-2"], label: "Main team" } },
+    )
+  })
+
+  it("is undefined for a non-object", () => {
+    assert.equal(parseGroups(["a"]), undefined)
+  })
+
+  it("survives sanitize, as the config file is read", () => {
+    assert.deepEqual(
+      sanitize({ groups: { Alt: { accounts: ["a"] } } }).groups,
+      {
+        Alt: { accounts: ["a"] },
+      },
     )
   })
 })
