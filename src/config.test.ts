@@ -425,6 +425,8 @@ describe("config surface coverage", () => {
     resetFormat: "DD/MM/YYYY HH:mm",
     preset: "rr-12",
     accounts: "alpha,beta",
+    accountIds:
+      '{"acme-1":{"match":{"account":"00000000-0000-0000-0000-000000000001","org":"00000000-0000-0000-0000-0000000000a1"},"name":"Team 1"}}',
     pools: '[{"accounts":["alpha"]}]',
     presets: '{"p":{"accounts":["alpha"]}}',
   }

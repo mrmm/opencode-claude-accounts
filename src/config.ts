@@ -126,6 +126,47 @@ export function parseAccounts(v: unknown): string[] | undefined {
 }
 
 /**
+ * A stable account identity: a reader-chosen id bound to the one thing that
+ * uniquely names a Claude account -- the (account uuid, org uuid) pair from the
+ * profile endpoint. The same login appears in several orgs, so neither uuid
+ * alone is the key. `name` is display only; routing never reads it.
+ */
+export type AccountId = {
+  match: { account: string; org: string }
+  name?: string
+}
+
+/** The id charset is deliberately URL- and filename-safe: it keys cache files. */
+export const ACCOUNT_ID_RE = /^[a-z0-9-]+$/
+
+/**
+ * Parse the top-level `accountIds` registry: `{ "<id>": { match: {account,
+ * org}, name? } }`. One malformed entry is dropped rather than rejecting the
+ * whole map, matching how `accountNames` and `weights` behave.
+ */
+export function parseAccountIds(
+  v: unknown,
+): Record<string, AccountId> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const out: Record<string, AccountId> = {}
+  for (const [id, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (!ACCOUNT_ID_RE.test(id)) continue
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as { match?: unknown; name?: unknown }
+    const m = r.match as { account?: unknown; org?: unknown } | undefined
+    if (!m || typeof m.account !== "string" || typeof m.org !== "string")
+      continue
+    const account = m.account.trim()
+    const org = m.org.trim()
+    if (!account || !org) continue
+    const entry: AccountId = { match: { account, org } }
+    if (typeof r.name === "string" && r.name.trim()) entry.name = r.name.trim()
+    out[id] = entry
+  }
+  return out
+}
+
+/**
  * How one pool chooses among its healthy members.
  *
  * `sticky` is the default because Anthropic's prompt cache is per-account:
@@ -380,6 +421,14 @@ export type ClaudeAuthConfig = {
    */
   accounts: string[]
   /**
+   * Stable account-id registry, keyed by id: `{ "<id>": { match: {account,
+   * org}, name? } }`. The id is what presets, caps and the quota cache key on;
+   * `match` binds it to the account's (account uuid, org uuid) pair so renaming
+   * a Keychain entry or re-logging in does not change which account an id means.
+   * Written by migration, not hand-maintained in the common case.
+   */
+  accountIds: Record<string, AccountId>
+  /**
    * Per-account weight for `weighted` on the flat (non-pool) path.
    *
    * A pool carries its own; this is for the case where there are no pools, and
@@ -502,6 +551,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   configReloadInterval: 3000,
 
   accounts: [],
+  accountIds: {},
   weights: {},
   autoSwitch: false,
   switchAt: 0.95,
@@ -655,6 +705,9 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
 
   const accounts = parseAccounts(r.accounts)
   if (accounts !== undefined) out.accounts = accounts
+
+  const accountIds = parseAccountIds(r.accountIds)
+  if (accountIds !== undefined) out.accountIds = accountIds
 
   const pools = parsePools(r.pools)
   if (pools !== undefined) out.pools = pools
@@ -833,6 +886,13 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   captureRequests: (v) => v,
   preset: (v) => v.trim(),
   accounts: (v) => parseAccounts(v.split(",")),
+  accountIds: (v) => {
+    try {
+      return parseAccountIds(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
   // Structured values arrive as JSON. Unwieldy to type by hand, but a config
   // surface that silently omits two keys is worse than one that is verbose.
   pools: (v) => {
