@@ -22,6 +22,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import { accountKey, accountReadKeys } from "./account-key.ts"
 
 /** One rate-limit window. */
 export type QuotaWindow = {
@@ -255,14 +256,19 @@ export function writeQuotaForAccount(
 ): boolean {
   try {
     const cache = readQuotaCache(path)
+    // Key by the stable account id, not the Keychain source, so a renamed or
+    // re-logged-in account keeps its history. Falls back to the source for an
+    // un-migrated install, where id == source.
+    const key = accountKey(source)
     // Merge, never replace. Two writers reach this cache and they know
     // different things: a response carries headers (windows, status,
     // representative) and a probe carries what no header mentions (credits,
     // the binding limit). Replacing meant every response erased the probe --
     // so the BUSIEST account lost its credit state fastest, which is exactly
-    // the account whose credit state decides anything.
-    const prior = cache[source]
-    cache[source] = {
+    // the account whose credit state decides anything. The prior reading may
+    // still be under the old source key, so merge from either.
+    const prior = cache[key] ?? cache[source]
+    cache[key] = {
       ...(prior?.extra !== undefined ? { extra: prior.extra } : {}),
       ...(prior?.activeLimits !== undefined
         ? { activeLimits: prior.activeLimits }
@@ -285,7 +291,15 @@ export function quotaForAccount(
   now: number = Math.floor(Date.now() / 1000),
   maxAgeSeconds = 60 * 60 * 12,
 ): AccountQuota | undefined {
-  const q = cache?.[source]
+  // Try the id key first (how new writes key), then the raw source (old
+  // writes, un-migrated installs). First hit wins.
+  let q: AccountQuota | undefined
+  for (const key of accountReadKeys(source)) {
+    if (cache?.[key]) {
+      q = cache[key]
+      break
+    }
+  }
   if (!q || typeof q.observedAt !== "number") return undefined
   if (now - q.observedAt > maxAgeSeconds) return undefined
   return q
