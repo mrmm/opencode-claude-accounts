@@ -8,6 +8,7 @@ import {
   consumed,
   forecast,
   forecastLines,
+  outsideBurn,
   simulate,
 } from "./forecast.ts"
 
@@ -130,7 +131,8 @@ describe("forecast", () => {
     const lines = forecastLines(f, (e) => String(e - NOW))
     assert.equal(lines[0]!.value, "idle")
     assert.match(lines[2]!.value, /idle/)
-    assert.match(lines[3]!.value, /^✓ lasts >7d · past /)
+    const week = lines.find((l) => l.label === "week")
+    assert.match(week!.value, /^✓ lasts >7d · past /)
   })
 
   it("says how long the pool lasts and when it runs out", () => {
@@ -220,5 +222,147 @@ describe("burn charts", () => {
     // Clock ticks at the start, middle and end of each span.
     assert.match(rows[4]!.value, /^t-5 +t-2.5 +t0$/)
     assert.match(rows[9]!.value, /^t0 +t2.5 +t5$/)
+  })
+})
+
+describe("ceilings", () => {
+  const quota = {
+    a: {
+      fiveHour: { utilization: 0.5, resetsAt: NOW + 10 * 3600 },
+      sevenDay: { utilization: 0.3, resetsAt: NOW + 10 * 86400 },
+    },
+  } as never
+  // Steady 100%/h over the last half hour.
+  const burst = [
+    { account: "a", at: at(30), u5: 0.0 },
+    { account: "a", at: at(0), u5: 0.5 },
+  ]
+
+  it("a lower ceiling runs the pool out sooner", () => {
+    const full = forecast(burst, quota, ["a"], NOW)
+    const capped = forecast(burst, quota, ["a"], NOW, {
+      ceilings: { a: { five: 0.7, week: 1 } },
+    })
+    assert.ok(full.five.runsOutAt !== undefined)
+    assert.ok(capped.five.runsOutAt !== undefined)
+    // 0.5 used, 100%/h: full window has 0.5 left (~30 min), ceiling 0.7 has
+    // 0.2 left (~12 min).
+    assert.ok(
+      capped.five.runsOutAt! < full.five.runsOutAt!,
+      `capped ${capped.five.runsOutAt! - NOW} vs full ${full.five.runsOutAt! - NOW}`,
+    )
+  })
+
+  it("reserveLeft is what sits above the ceilings for outside users", () => {
+    const f = forecast(burst, quota, ["a"], NOW, {
+      ceilings: { a: { five: 0.7, week: 0.8 } },
+    })
+    // used 0.5, ceiling 0.7 => 1 - 0.7 = 0.3 reserve above the ceiling.
+    assert.equal(f.five.reserveLeft.toFixed(2), "0.30")
+    // used 0.3, ceiling 0.8 => 0.2 reserve.
+    assert.equal(f.week.reserveLeft.toFixed(2), "0.20")
+  })
+
+  it("per-account lines carry used/ceiling", () => {
+    const f = forecast(burst, quota, ["a"], NOW, {
+      ceilings: { a: { five: 0.7, week: 0.8 } },
+    })
+    assert.equal(f.fivePerAccount[0]!.ceiling, 0.7)
+    assert.equal(f.fivePerAccount[0]!.used, 0.5)
+    const lines = forecastLines(f, (e) => `T${e - NOW}`, new Map([["a", "A1"]]))
+    const acct = lines.find((l) => l.label === "A1")
+    assert.match(acct!.value, /^50%\/70% · ours /)
+  })
+})
+
+describe("outsideBurn", () => {
+  // Our own tokens move the gauge at a learned ratio; here 1e-6 per token.
+  const k = 1e-6
+  const ours = (
+    minAgo: number,
+    u5: number,
+    tok: number,
+  ): {
+    account: string
+    at: number
+    u5: number
+    reqs: number
+    input: number
+  } => ({
+    account: "a",
+    at: at(minAgo),
+    u5,
+    reqs: 1,
+    input: tok,
+  })
+
+  it("detects a rise in an idle bucket as pure outside burn", () => {
+    // Ten buckets of our own traffic to learn k, then two idle buckets whose
+    // gauge still climbs: that climb is someone else on the subscription.
+    const learn = Array.from({ length: 10 }, (_, i) =>
+      ours(300 - i * 10, i * k * 1e5, 1e5),
+    )
+    const idle = [
+      { account: "a", at: at(60), u5: learn[9]!.u5, reqs: 0, input: 0 },
+      { account: "a", at: at(0), u5: learn[9]!.u5 + 0.1, reqs: 0, input: 0 },
+    ]
+    const b = outsideBurn([...learn, ...idle], NOW)
+    assert.ok(b["a"]!.five.pace !== undefined, "enough buckets to estimate")
+    assert.ok(b["a"]!.five.pace! > 0, `outside pace ${b["a"]!.five.pace}`)
+  })
+
+  it("separates our share from the outside when both burn", () => {
+    // Each bucket: our 1e5 tokens explain k*1e5 = 0.1; the gauge rises 0.15, so
+    // 0.05 per bucket is outside.
+    const rows = Array.from({ length: 12 }, (_, i) => ({
+      account: "a",
+      at: at(300 - i * 20),
+      u5: i * 0.15,
+      reqs: 1,
+      input: 1e5,
+    }))
+    const b = outsideBurn(rows, NOW)
+    const p = b["a"]!.five.pace
+    assert.ok(p !== undefined && p > 0, `pace ${p}`)
+    // Residual ~ 0.05/bucket, 11 rises over 5h => positive but well under the
+    // raw 0.15/bucket gross rise.
+    const gross = (0.15 * 11) / 5
+    assert.ok(p! < gross, `outside ${p} should be below gross ${gross}`)
+  })
+
+  it("is unknown with too few token-bearing buckets, and forecast still runs", () => {
+    const rows = [
+      { account: "a", at: at(20), u5: 0.1, reqs: 1, input: 1e5 },
+      { account: "a", at: at(10), u5: 0.2, reqs: 1, input: 1e5 },
+    ]
+    const b = outsideBurn(rows, NOW)
+    // Fewer than MIN_OUTSIDE_BUCKETS window buckets => unknown.
+    assert.equal(b["a"]!.five.pace, undefined)
+    const quota = {
+      a: { fiveHour: { utilization: 0.4, resetsAt: NOW + 3 * 3600 } },
+    } as never
+    const f = forecast(rows, quota, ["a"], NOW)
+    assert.equal(f.five.outsidePace, 0, "unknown burn contributes nothing")
+    assert.equal(f.fivePerAccount[0]!.outsidePace, undefined)
+    const lines = forecastLines(
+      f,
+      (e) => String(e - NOW),
+      new Map([["a", "A1"]]),
+    )
+    assert.match(lines.find((l) => l.label === "A1")!.value, /outside \?$/)
+  })
+
+  it("the weekly horizon learns from the full 8-day span", () => {
+    // Daily outside rise in u7 across eight days, no traffic of ours.
+    const rows = Array.from({ length: 8 }, (_, i) => ({
+      account: "a",
+      at: NOW * 1000 - (7 - i) * 86_400_000,
+      u7: i * 0.05,
+      reqs: 0,
+      input: 0,
+    }))
+    const b = outsideBurn(rows, NOW)
+    assert.ok(b["a"]!.week.pace !== undefined, "eight buckets over the week")
+    assert.ok(b["a"]!.week.pace! > 0, `week pace ${b["a"]!.week.pace}`)
   })
 })
