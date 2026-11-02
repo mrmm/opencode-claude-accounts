@@ -113,6 +113,18 @@ export function isSwitchWindow(v: unknown): v is SwitchWindow {
 }
 
 /**
+ * Cache-control TTL applied to outgoing requests. "5m" is the API default and
+ * changes nothing; "1h" writes a longer-lived cache (billed more, read-free);
+ * "auto" lifts to 1h only when the session has been idle or is long-running,
+ * where the extra write pays for itself.
+ */
+export type CacheTtl = "5m" | "1h" | "auto"
+
+export function isCacheTtl(v: unknown): v is CacheTtl {
+  return v === "5m" || v === "1h" || v === "auto"
+}
+
+/**
  * Keep the strings, drop everything else, and preserve the order given: the
  * order is the preference order, so it carries meaning beyond membership.
  */
@@ -131,9 +143,51 @@ export function parseAccounts(v: unknown): string[] | undefined {
  * profile endpoint. The same login appears in several orgs, so neither uuid
  * alone is the key. `name` is display only; routing never reads it.
  */
+/**
+ * A per-window usage ceiling, as ratios 0..1. A bare number caps both windows;
+ * an object caps each independently. Absent windows have no ceiling (1).
+ */
+export type MaxUsage = { "5h"?: number; "7d"?: number }
+
 export type AccountId = {
   match: { account: string; org: string }
   name?: string
+  /**
+   * Reserve quota above this utilisation: the account stops serving once it
+   * crosses the ceiling, kept in reserve unless the session opts in (soft) or
+   * never (hard). Distinct from `switchAt`, which only moves on to the next
+   * account; the effective limit is the lower of the two.
+   */
+  maxUsage?: MaxUsage
+}
+
+/** Whether a reserved account may be reached at all. */
+export type CapMode = "soft" | "hard"
+
+export function isCapMode(v: unknown): v is CapMode {
+  return v === "soft" || v === "hard"
+}
+
+/**
+ * Parse `maxUsage`: a bare number (or "80%") caps both windows, an object caps
+ * each named window. Values go through `parseRatio`, so a percentage or a bare
+ * fraction both work, and anything unparseable is dropped rather than applied.
+ * Returns undefined when nothing valid remains.
+ */
+export function parseMaxUsage(v: unknown): MaxUsage | undefined {
+  if (typeof v === "number" || (typeof v === "string" && v.trim())) {
+    const r = parseRatio(v as string | number, UNSET_RATIO)
+    return r === UNSET_RATIO ? undefined : { "5h": r, "7d": r }
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const o = v as Record<string, unknown>
+  const out: MaxUsage = {}
+  for (const w of ["5h", "7d"] as const) {
+    if (o[w] === undefined) continue
+    const r = parseRatio(o[w] as string | number, UNSET_RATIO)
+    if (r !== UNSET_RATIO) out[w] = r
+  }
+  return out["5h"] !== undefined || out["7d"] !== undefined ? out : undefined
 }
 
 /** The id charset is deliberately URL- and filename-safe: it keys cache files. */
@@ -152,7 +206,7 @@ export function parseAccountIds(
   for (const [id, raw] of Object.entries(v as Record<string, unknown>)) {
     if (!ACCOUNT_ID_RE.test(id)) continue
     if (!raw || typeof raw !== "object") continue
-    const r = raw as { match?: unknown; name?: unknown }
+    const r = raw as { match?: unknown; name?: unknown; maxUsage?: unknown }
     const m = r.match as { account?: unknown; org?: unknown } | undefined
     if (!m || typeof m.account !== "string" || typeof m.org !== "string")
       continue
@@ -161,6 +215,8 @@ export function parseAccountIds(
     if (!account || !org) continue
     const entry: AccountId = { match: { account, org } }
     if (typeof r.name === "string" && r.name.trim()) entry.name = r.name.trim()
+    const maxUsage = parseMaxUsage(r.maxUsage)
+    if (maxUsage) entry.maxUsage = maxUsage
     out[id] = entry
   }
   return out
@@ -316,8 +372,34 @@ export type Preset = {
   switchAt?: number
   switchWindow?: SwitchWindow
   ejectFor?: number
+  /**
+   * Per-account usage ceilings while this preset is selected, keyed by account
+   * id (or any reference the preset accepts). Overrides the account's own
+   * `maxUsage` for the keys it names; inherited for the rest.
+   */
+  maxUsage?: Record<string, MaxUsage>
+  /** Reserve mode while this preset is selected; inherited when absent. */
+  capMode?: CapMode
   /** Failover tiers, for a preset that needs more than one. */
   pools?: Pool[]
+}
+
+/**
+ * Parse a `maxUsage: { "<id>": number | {...} }` override map. Each value goes
+ * through `parseMaxUsage`; entries that parse to nothing are dropped.
+ */
+export function parseMaxUsageMap(
+  v: unknown,
+): Record<string, MaxUsage> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const out: Record<string, MaxUsage> = {}
+  for (const [ref, raw] of Object.entries(v as Record<string, unknown>)) {
+    const key = ref.trim()
+    if (!key) continue
+    const m = parseMaxUsage(raw)
+    if (m) out[key] = m
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 export function parsePresets(v: unknown): Record<string, Preset> | undefined {
@@ -352,6 +434,9 @@ export function parsePresets(v: unknown): Record<string, Preset> | undefined {
       UNSET_DURATION,
     )
     if (eject !== UNSET_DURATION) preset.ejectFor = eject
+    const maxUsage = parseMaxUsageMap(r.maxUsage)
+    if (maxUsage) preset.maxUsage = maxUsage
+    if (isCapMode(r.capMode)) preset.capMode = r.capMode
     // A preset that names no accounts and no pools would silently mean "all of
     // them", which is not what anyone writes a preset for.
     if (!preset.accounts && !preset.pools) continue
@@ -449,11 +534,23 @@ export type ClaudeAuthConfig = {
   /** Which window `switchAt` is measured against. */
   switchWindow: SwitchWindow
   /**
+   * Whether an account past its `maxUsage` ceiling may still be reached.
+   * "soft" (default): reserved, but a session can opt in to spend it. "hard":
+   * never, unless a session override is explicitly on.
+   */
+  capMode: CapMode
+  /**
    * Bind an account to each session, so parallel subagents — which arrive as
    * their own sessions — run on different accounts instead of queueing against
    * one subscription. "none" restores one account per process.
    */
   bindBy: "none" | "session"
+  /**
+   * Cache-control TTL for outgoing requests: "5m" (default, unchanged), "1h",
+   * or "auto". A longer TTL keeps a prompt prefix warm across an idle gap at a
+   * higher write price; "auto" only pays it when the gap makes it worthwhile.
+   */
+  cacheTtl: CacheTtl
   /**
    * A pin names one specific account, so honour it: do not move off it on
    * threshold or refusal. Turn off to let a pin be only a starting point.
@@ -557,6 +654,8 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   switchAt: 0.95,
   switchOn429: true,
   switchWindow: "binding",
+  capMode: "soft",
+  cacheTtl: "5m",
   strategy: "sticky",
   bindBy: "session",
   pinBlocksRotation: true,
@@ -701,6 +800,8 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
   if (on429 !== undefined) out.switchOn429 = on429
 
   if (isSwitchWindow(r.switchWindow)) out.switchWindow = r.switchWindow
+  if (isCapMode(r.capMode)) out.capMode = r.capMode
+  if (isCacheTtl(r.cacheTtl)) out.cacheTtl = r.cacheTtl
   if (isBalanceStrategy(r.strategy)) out.strategy = r.strategy
 
   const accounts = parseAccounts(r.accounts)
@@ -863,6 +964,8 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   autoSwitch: (v) => v === "1",
   switchOn429: (v) => v === "1",
   switchWindow: (v) => v,
+  capMode: (v) => v,
+  cacheTtl: (v) => v,
   strategy: (v) => v,
   bindBy: (v) => v,
   pinBlocksRotation: (v) => v === "1",

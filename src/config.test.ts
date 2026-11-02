@@ -412,6 +412,8 @@ describe("config surface coverage", () => {
     autoSwitch: "1",
     switchOn429: "0",
     switchWindow: "5h",
+    capMode: "hard",
+    cacheTtl: "1h",
     strategy: "round-robin",
     bindBy: "none",
     pinBlocksRotation: "0",
