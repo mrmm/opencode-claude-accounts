@@ -27,8 +27,10 @@ import { z } from "zod"
 
 import { assess, resolveRef } from "../balance/balancer.ts"
 import { ceilingFor } from "../balance/caps.ts"
+import { cacheImpact } from "../balance/cache-stats.ts"
 import {
   allowReserve,
+  boundSource,
   reserveAllowed,
   revokeReserve,
 } from "../balance/sessions.ts"
@@ -69,6 +71,8 @@ function describeSelection(value: string | null): string {
   return `pinned to ${members().find((m) => m.source === value)?.label ?? value}`
 }
 
+const pct = (n: number) => `${Math.round(n * 100)}%`
+
 export const claudeAuthTools = {
   claude_auth_status: tool({
     description:
@@ -96,14 +100,48 @@ export const claudeAuthTools = {
         ).map((h) => [h.source, h]),
       )
 
+      // Sessions bind to their own account; the process-wide active one is only
+      // what an unbound request would get.
+      const bound = ctx?.sessionID ? boundSource(ctx.sessionID) : undefined
+      const servingSource = bound ?? active?.source
+      const serving = members().find((m) => m.source === servingSource)
+      const nameOf = (source: string, label?: string) =>
+        cfg.accountIds[accountKey(source)]?.name ?? label ?? source
+
+      const day = readUsage(Date.now() - 24 * 60 * 60_000).flatMap((e) =>
+        e.kind === "request"
+          ? [
+              {
+                at: e.created_at,
+                account: e.account,
+                model: e.model,
+                input: e.input ?? 0,
+                output: e.output ?? 0,
+                cacheRead: e.cacheRead ?? 0,
+                cacheWrite: e.cacheWrite ?? 0,
+                cacheWrite1h: e.cacheWrite1h ?? 0,
+                ...(e.session ? { session: e.session } : {}),
+                ...(e.ttl ? { ttl: e.ttl } : {}),
+                ...(e.contextEdited ? { contextEdited: true } : {}),
+              },
+            ]
+          : [],
+      )
+      const ci = cacheImpact(day)
+      const misses = Object.entries(ci.byCause)
+        .map(([c, v]) => `${c} ${v.n}`)
+        .join(", ")
+
       const lines = [
-        `serving now: ${active ? `${accountKey(active.source)} (${cfg.accountIds[accountKey(active.source)]?.name ?? active.label})` : "none"}`,
+        `serving now: ${serving ? `${accountKey(serving.source)} (${nameOf(serving.source, serving.label)})${bound ? " — bound to this session" : ""}` : "none"}`,
         `selection:   ${describeSelection(selection)}`,
         `strategy:    ${cfg.strategy}${preset ? ` (from preset "${preset}")` : ""}`,
         `autoSwitch:  ${cfg.autoSwitch} — moves by itself at ${Math.round(cfg.switchAt * 100)}% of ${cfg.switchWindow}, on429 ${cfg.switchOn429}`,
         `caps:        capMode ${cfg.capMode}; this session may spend reserved quota: ${overrideOn}`,
+        `cache 24h:   ${ci.requests ? `${pct(ci.hitRate)} hit, saves ${pct(ci.saved)} of input cost over ${ci.requests} req; misses: ${misses || "none"}` : "no requests with token data"}`,
+        `optimise:    cacheTtl ${cfg.cacheTtl} (1h on ${ci.ttl1h.requests} req); contextEditing ${cfg.contextEditing ? "on" : "off"} (applied ${ci.contextEdited} req); bindBy ${cfg.bindBy} — change with /cc-cache or /cc-config`,
         "",
-        "accounts (* = serving now):",
+        "accounts (* = serving this session):",
       ]
 
       const ceilingLabel = (id: string): string => {
@@ -124,7 +162,7 @@ export const claudeAuthTools = {
             ? "usable"
             : `unusable — ${h?.reason ?? "?"}`
         lines.push(
-          `  ${m.source === active?.source ? "*" : " "} ${accountKey(m.source).padEnd(16)} ${(cfg.accountIds[accountKey(m.source)]?.name ?? m.label ?? m.source).padEnd(32)} ${(formatQuotaPrefix(quota[m.source]) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
+          `  ${m.source === servingSource ? "*" : " "} ${accountKey(m.source).padEnd(16)} ${nameOf(m.source, m.label).padEnd(32)} ${(formatQuotaPrefix(quota[m.source]) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
         )
       }
 
