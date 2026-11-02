@@ -235,7 +235,8 @@ export function knobRows(
     // A knob only the strategy in force reads. Showing the others would be a
     // control that appears to do something and does not.
     if (k.key === "weights") return strategy === "weighted"
-    if (k.key === "order") return strategy === "priority"
+    // Order is read by every strategy: priority tries it top-down,
+    // round-robin cycles in it, the others break ties with it.
     return true
   }).map((k) => {
     const own = (preset as Record<string, unknown>)[k.key]

@@ -2590,7 +2590,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           }
 
           /**
-           * Reorder the accounts `priority` reads.
+           * Reorder a preset's accounts: priority tries them in this order,
+           * round-robin cycles in it, the rest break ties with it.
            *
            * Two steps rather than one: a single tap that "moves up" cannot
            * express move-down or move-to-top, and guessing which one was meant

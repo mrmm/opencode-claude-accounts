@@ -250,7 +250,15 @@ describe("knobRows", () => {
       render,
     )
     assert.ok(weighted.some((r) => r.value === "k:weights"))
-    assert.ok(!weighted.some((r) => r.value === "k:order"))
+    // Regression: order was only editable under priority, so a round-robin
+    // preset's account order could not be changed from the TUI.
+    assert.ok(weighted.some((r) => r.value === "k:order"))
+    const rr = knobRows(
+      { accounts: ["a"], strategy: "round-robin" },
+      defaults,
+      render,
+    )
+    assert.ok(rr.some((r) => r.value === "k:order"))
 
     const prioritised = knobRows(
       { accounts: ["a"], strategy: "priority" },
@@ -261,7 +269,7 @@ describe("knobRows", () => {
     assert.ok(!prioritised.some((r) => r.value === "k:weights"))
 
     const plain = knobRows({ accounts: ["a"] }, defaults, render)
-    assert.equal(plain.length, PRESET_KNOBS.length - 2)
+    assert.equal(plain.length, PRESET_KNOBS.length - 1)
   })
 })
 
