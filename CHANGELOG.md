@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+Design decisions behind these changes are in [docs/adr](docs/adr/README.md).
+
+### Features
+
+* account groups: a generic `groups` setting with stable ids and editable labels, usable in presets, shown as collapsible sidebar sections with combined usage, and editable from Manage accounts ([ADR 0002](docs/adr/0002-account-groups.md))
+* when every account is spent, the 429 names the next account back and when, and retries are paced to reach that reset; the sidebar shows the same line ([ADR 0003](docs/adr/0003-spent-pool-retry-pacing.md))
+* cache-miss statistics overall, per account and per session in `claude_auth_status`, `/cc-cache` and the sidebar
+* "Agent may use reserved quota" (`agentReserve`) in Settings
+* `OPENCODE_CLAUDE_AUTH_HOST_RETRIES` to match a different OpenCode retry count
+
+### Bug Fixes
+
+* the sidebar, forecast and status read stale quota left under the old account key and showed a refused account as healthy ([ADR 0001](docs/adr/0001-stable-account-ids.md))
+* least-used and the request share undercounted accounts with usage logged before the move to stable ids
+* the preset editor showed a group name as an unresolved account
+* the server and the TUI no longer drop each other's writes to shared state files ([ADR 0004](docs/adr/0004-cross-process-file-locks.md))
+* context editing only on Messages calls; a 400 switches it off only when it names the feature; retries keep an earlier prefill fix; stale length headers dropped ([ADR 0005](docs/adr/0005-request-body-rewrites.md))
+* cache TTL telemetry records 1h only when a marker carried it
+* request captures are written owner-only
+* tests no longer write to the real reserve and credit-denial files
+
+### Performance
+
+* the request body is parsed once instead of three or four times
+* quota and reserve files are re-read only when they change; the usage index refresh went from about 10 ms to 0.3 ms
+* account profiles are fetched in parallel at start-up
+
 ## [2.1.4](https://github.com/griffinmartin/opencode-claude-auth/compare/v2.1.3...v2.1.4) (2026-07-26)
 
 
