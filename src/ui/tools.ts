@@ -26,6 +26,14 @@ import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
 
 import { assess, resolveRef } from "../balance/balancer.ts"
+import { ceilingFor } from "../balance/caps.ts"
+import {
+  allowReserve,
+  reserveAllowed,
+  revokeReserve,
+} from "../balance/sessions.ts"
+import { log } from "../logger.ts"
+import { accountKey } from "../balance/account-key.ts"
 import { getConfig } from "../config.ts"
 import {
   AUTO_SOURCE,
@@ -64,13 +72,14 @@ function describeSelection(value: string | null): string {
 export const claudeAuthTools = {
   claude_auth_status: tool({
     description:
-      "Report which Claude account is serving requests right now, what is selected (a preset, auto, or a pin), each account's quota, and whether automatic rotation is enabled. Read-only.",
+      "Report which Claude account is serving requests right now, what is selected (a preset, auto, or a pin), each account's quota, its usage ceiling and reserved state, whether this session may spend reserved quota, and whether automatic rotation is enabled. Read-only.",
     args: {},
-    async execute() {
+    async execute(_args, ctx) {
       const selection = loadPersistedAccountSource()
       const { cfg, preset } = resolveActiveConfig(getConfig(), selection)
       const active = getActiveAccount()
       const quota = readQuotaCache()
+      const overrideOn = ctx?.sessionID ? reserveAllowed(ctx.sessionID) : false
 
       // The balancer's own verdict, so this reports what would actually happen
       // rather than a figure the reader has to re-apply the rules to.
@@ -79,6 +88,7 @@ export const claudeAuthTools = {
           listAccounts().map((a) => ({
             source: a.source,
             label: a.label,
+            id: accountKey(a.source),
             credential: credentialState(a),
           })),
           quota,
@@ -91,15 +101,30 @@ export const claudeAuthTools = {
         `selection:   ${describeSelection(selection)}`,
         `strategy:    ${cfg.strategy}${preset ? ` (from preset "${preset}")` : ""}`,
         `autoSwitch:  ${cfg.autoSwitch} — moves by itself at ${Math.round(cfg.switchAt * 100)}% of ${cfg.switchWindow}, on429 ${cfg.switchOn429}`,
+        `caps:        capMode ${cfg.capMode}; this session may spend reserved quota: ${overrideOn}`,
         "",
         "accounts (* = serving now):",
       ]
 
+      const ceilingLabel = (id: string): string => {
+        const c5 = ceilingFor(cfg, id, "5h")
+        const c7 = ceilingFor(cfg, id, "7d")
+        if (c5 >= 1 && c7 >= 1) return ""
+        const parts: string[] = []
+        if (c5 < 1) parts.push(`5h<=${Math.round(c5 * 100)}%`)
+        if (c7 < 1) parts.push(`7d<=${Math.round(c7 * 100)}%`)
+        return ` ceiling ${parts.join(" ")}`
+      }
+
       for (const m of members()) {
         const h = health.get(m.source)
-        const verdict = h?.healthy ? "usable" : `unusable — ${h?.reason ?? "?"}`
+        const verdict = h?.reserved
+          ? `reserved — ${h.reason}`
+          : h?.healthy
+            ? "usable"
+            : `unusable — ${h?.reason ?? "?"}`
         lines.push(
-          `  ${m.source === active?.source ? "*" : " "} ${(m.label ?? m.source).padEnd(44)} ${(formatQuotaPrefix(quota[m.source]) || "[no reading]").padEnd(16)} ${verdict}`,
+          `  ${m.source === active?.source ? "*" : " "} ${(m.label ?? m.source).padEnd(44)} ${(formatQuotaPrefix(quota[m.source]) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
         )
       }
 
@@ -164,6 +189,30 @@ export const claudeAuthTools = {
       saveAccountSource(source)
       maybeRotate("tool-pin", { force: true })
       return `Pinned to ${members().find((m) => m.source === source)?.label ?? source}.`
+    },
+  }),
+
+  claude_auth_reserve: tool({
+    description:
+      "Turn this session's reserved-quota override on or off. When on, this session may draw on accounts that are past their configured usage ceiling (their reserved quota) once no free account is left — including in hard cap mode. Affects only this session, and is forgotten after an hour idle. Spending reserved quota may consume a teammate's share, so every change is logged.",
+    args: {
+      state: z
+        .enum(["on", "off"])
+        .describe(
+          '"on" to allow spending reserved quota this session, "off" to stop',
+        ),
+    },
+    async execute({ state }, ctx) {
+      const sessionId = ctx?.sessionID
+      if (!sessionId) {
+        return "No session in context, so the reserved-quota override cannot be set."
+      }
+      if (state === "on") allowReserve(sessionId)
+      else revokeReserve(sessionId)
+      log("reserve_override", { session: sessionId, state })
+      return state === "on"
+        ? "Reserved quota enabled for this session. It will spend accounts past their ceiling once nothing free is left."
+        : "Reserved quota disabled for this session."
     },
   }),
 

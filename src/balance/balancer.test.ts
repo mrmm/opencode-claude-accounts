@@ -118,6 +118,135 @@ describe("assess", () => {
   })
 })
 
+describe("reserved ceilings (maxUsage)", () => {
+  const capped = (id: string, maxUsage: { "5h"?: number; "7d"?: number }) =>
+    cfg({
+      accountIds: {
+        [id]: { match: { account: id, org: "o" }, maxUsage },
+      },
+    })
+
+  const idMember = (id: string): Member => ({ source: id, label: id, id })
+
+  it("marks an account past its ceiling reserved, under switchAt", () => {
+    const cache: QuotaCache = { a: reading(0.85) }
+    const [h] = assess(
+      [idMember("a")],
+      cache,
+      capped("a", { "5h": 0.8 }),
+      NOW_MS,
+    )
+    assert.equal(h!.healthy, false)
+    assert.equal(h!.reserved, true)
+    assert.match(h!.reason, /reserved: at 85% of 5h \(ceiling 80%\)/)
+  })
+
+  it("reserves on a weekly ceiling even while 5h looks fine", () => {
+    const cache: QuotaCache = {
+      a: {
+        fiveHour: { utilization: 0.1, resetsAt: NOW_SEC + 3600 },
+        sevenDay: { utilization: 0.7, resetsAt: NOW_SEC + 86400 },
+        representative: "five_hour",
+        observedAt: NOW_SEC,
+      },
+    }
+    const [h] = assess(
+      [idMember("a")],
+      cache,
+      capped("a", { "7d": 0.6 }),
+      NOW_MS,
+    )
+    assert.equal(h!.reserved, true)
+    assert.match(h!.reason, /7d/)
+  })
+
+  it("stays healthy below the ceiling", () => {
+    const cache: QuotaCache = { a: reading(0.5) }
+    const [h] = assess(
+      [idMember("a")],
+      cache,
+      capped("a", { "5h": 0.8 }),
+      NOW_MS,
+    )
+    assert.equal(h!.healthy, true)
+  })
+
+  it("in soft mode a reserved account serves as a last resort", () => {
+    const cache: QuotaCache = { a: reading(0.85) }
+    const d = selectAccount(
+      [idMember("a")],
+      cache,
+      capped("a", { "5h": 0.8 }),
+      null,
+      NOW_MS,
+    )
+    assert.equal(d!.pool, "reserved")
+    assert.equal(d!.source, "a")
+  })
+
+  it("in hard mode a reserved account does not serve without the override", () => {
+    const base = capped("a", { "5h": 0.8 })
+    const hard = { ...base, capMode: "hard" as const }
+    const cache: QuotaCache = { a: reading(0.85) }
+    const d = selectAccount([idMember("a")], cache, hard, null, NOW_MS)
+    // Falls through to exhausted rather than drawing on the reserve.
+    assert.equal(d!.pool, "exhausted")
+  })
+
+  it("the session override releases a reserve in hard mode", () => {
+    const base = capped("a", { "5h": 0.8 })
+    const hard = { ...base, capMode: "hard" as const }
+    const cache: QuotaCache = { a: reading(0.85) }
+    const d = selectAccount([idMember("a")], cache, hard, null, NOW_MS, {
+      allowReserve: true,
+    })
+    assert.equal(d!.pool, "reserved")
+  })
+
+  it("prefers a free account over a reserved one", () => {
+    const cache: QuotaCache = { a: reading(0.85), b: reading(0.3) }
+    const two = cfg({
+      accountIds: {
+        a: { match: { account: "a", org: "o" }, maxUsage: { "5h": 0.8 } },
+      },
+    })
+    const d = selectAccount(
+      [
+        { source: "a", label: "a", id: "a" },
+        { source: "b", label: "b", id: "b" },
+      ],
+      cache,
+      two,
+      null,
+      NOW_MS,
+    )
+    assert.equal(d!.source, "b")
+  })
+
+  it("picks the emptiest reserve by margin past ceiling", () => {
+    const cache: QuotaCache = { a: reading(0.95), b: reading(0.85) }
+    const two = cfg({
+      accountIds: {
+        a: { match: { account: "a", org: "o" }, maxUsage: { "5h": 0.8 } },
+        b: { match: { account: "b", org: "o" }, maxUsage: { "5h": 0.8 } },
+      },
+    })
+    const d = selectAccount(
+      [
+        { source: "a", label: "a", id: "a" },
+        { source: "b", label: "b", id: "b" },
+      ],
+      cache,
+      two,
+      null,
+      NOW_MS,
+    )
+    // b is 5% past its ceiling, a is 15% past: b is the emptier reserve.
+    assert.equal(d!.pool, "reserved")
+    assert.equal(d!.source, "b")
+  })
+})
+
 describe("credential health", () => {
   it("refuses an account that cannot authenticate, however much headroom it has", () => {
     const cache: QuotaCache = { a: reading(0.0) }

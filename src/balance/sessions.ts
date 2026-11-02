@@ -107,6 +107,68 @@ export function resetCreditDenials(): void {
 }
 
 /**
+ * Sessions that have opted in to spending reserved quota.
+ *
+ * Same cross-process story as credit denials, and the same reason: the opt-in
+ * is set from the TUI worker or an agent tool but consumed in the server, two
+ * processes an in-memory flag could not bridge. On disk, swept on the same idle
+ * rule, so the choice does not outlive the conversation that made it.
+ */
+function reservesPath(): string {
+  return join(
+    homedir(),
+    ".local",
+    "share",
+    "opencode",
+    "claude-auth-reserve-allows.json",
+  )
+}
+
+function readReserves(nowMs: number = Date.now()): Denials {
+  try {
+    const raw = JSON.parse(readFileSync(reservesPath(), "utf8")) as Denials
+    const live: Denials = {}
+    for (const [id, at] of Object.entries(raw)) {
+      if (typeof at === "number" && nowMs - at <= IDLE_MS) live[id] = at
+    }
+    return live
+  } catch {
+    return {}
+  }
+}
+
+function writeReserves(d: Denials): void {
+  try {
+    const p = reservesPath()
+    mkdirSync(dirname(p), { recursive: true })
+    const tmp = `${p}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(d, null, 2))
+    renameSync(tmp, p)
+  } catch {
+    // An opt-in that cannot be recorded simply does not take effect; it must
+    // not fail the request that tried to set it.
+  }
+}
+
+export function allowReserve(sessionId: string): void {
+  writeReserves({ ...readReserves(), [sessionId]: Date.now() })
+}
+
+export function revokeReserve(sessionId: string): void {
+  const d = readReserves()
+  delete d[sessionId]
+  writeReserves(d)
+}
+
+export function reserveAllowed(sessionId: string): boolean {
+  return sessionId in readReserves()
+}
+
+export function resetReserveAllows(): void {
+  writeReserves({})
+}
+
+/**
  * Sessions outlive nothing in particular, so the map is swept rather than
  * grown forever. An hour idle is well past any live conversation.
  */
@@ -194,6 +256,9 @@ export function resolveForSession(
   // A session opting out narrows its own view of the config; the global
   // setting still governs every other session.
   if (creditsDenied(sessionId)) cfg = { ...cfg, useCredits: false }
+  // A session opting IN to reserved quota widens only its own view: every other
+  // session still obeys the global capMode.
+  const allowReserve = reserveAllowed(sessionId)
   const current = boundSource(sessionId)
 
   if (current) {
@@ -209,7 +274,10 @@ export function resolveForSession(
     }
   }
 
-  const decision = selectAccount(members, cache, cfg, null, nowMs, opts)
+  const decision = selectAccount(members, cache, cfg, null, nowMs, {
+    ...opts,
+    allowReserve,
+  })
   if (!decision) return undefined
 
   bindSession(sessionId, decision.source, nowMs)

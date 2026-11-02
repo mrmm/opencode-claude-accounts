@@ -20,6 +20,10 @@ import {
   denyCredits,
   allowCredits,
   resetCreditDenials,
+  allowReserve,
+  revokeReserve,
+  reserveAllowed,
+  resetReserveAllows,
 } from "./sessions.ts"
 
 const NOW = 1785162626000
@@ -93,6 +97,48 @@ describe("session bindings", () => {
     assert.equal(boundSource("s1"), "a")
     forgetSession("s1")
     assert.equal(boundSource("s1"), undefined)
+  })
+
+  it("cache-aware routing: an existing session stays put while new ones spread (T1)", () => {
+    // Round-robin over three accounts. One long-running session must keep its
+    // account across 50 turns -- that is what keeps its prompt cache warm --
+    // while fresh sessions rotate across all three. This proves the rotating
+    // strategy applies only to NEW or unhealthy sessions, never moving a bound
+    // one that is still healthy.
+    const cache: QuotaCache = {
+      a: reading(0.1),
+      b: reading(0.1),
+      c: reading(0.1),
+    }
+    const c = cfg({ strategy: "round-robin", accounts: ["a", "b", "c"] })
+    const mem = members("a", "b", "c")
+
+    // The long-running session binds first.
+    const bound = resolveForSession("long", mem, cache, c, NOW)!.source
+
+    const spread = new Set<string>()
+    for (let turn = 0; turn < 50; turn++) {
+      // The long session takes its turn, interleaved with a brand-new session.
+      const again = resolveForSession("long", mem, cache, c, NOW + turn * 1000)!
+      assert.equal(again.source, bound, `turn ${turn}: long session moved`)
+      assert.equal(again.changed, false)
+
+      const fresh = resolveForSession(
+        `new-${turn}`,
+        mem,
+        cache,
+        c,
+        NOW + turn * 1000,
+      )!
+      spread.add(fresh.source)
+    }
+
+    // New sessions reached more than one account; the bound one never budged.
+    assert.ok(
+      spread.size >= 2,
+      `new sessions spread across ${spread.size} accounts`,
+    )
+    assert.equal(boundSource("long"), bound)
   })
 
   it("sweeps a session idle for over an hour", () => {
@@ -203,5 +249,66 @@ describe("a credit denial crosses the process boundary", () => {
     writeFileSync(p, JSON.stringify({ stale: Date.now() - 2 * 60 * 60_000 }))
     assert.equal(creditsDenied("stale"), false, "an hour idle, so forgotten")
     resetCreditDenials()
+  })
+})
+
+describe("the reserved-quota session override", () => {
+  const capped = (): ClaudeAuthConfig =>
+    cfg({
+      capMode: "hard",
+      accountIds: {
+        a: { match: { account: "a", org: "o" }, maxUsage: { "5h": 0.8 } },
+      },
+    })
+  const idMembers = (...s: string[]): Member[] =>
+    s.map((x) => ({ source: x, label: x, id: x, credential: "ok" as const }))
+
+  it("releases a reserve for only the opted-in session", () => {
+    resetBindings()
+    resetReserveAllows()
+    const cache: QuotaCache = { a: reading(0.85) }
+
+    allowReserve("opted-in")
+    const inSession = resolveForSession(
+      "opted-in",
+      idMembers("a"),
+      cache,
+      capped(),
+      NOW,
+    )
+    const other = resolveForSession(
+      "other",
+      idMembers("a"),
+      cache,
+      capped(),
+      NOW,
+    )
+
+    assert.equal(reserveAllowed("opted-in"), true)
+    assert.equal(reserveAllowed("other"), false)
+    // Hard mode: only the opted-in session reaches the reserved account.
+    assert.match(inSession!.reason, /reserved/)
+    assert.doesNotMatch(other!.reason, /reserved/)
+    resetReserveAllows()
+  })
+
+  it("can be revoked", () => {
+    resetReserveAllows()
+    allowReserve("s1")
+    assert.equal(reserveAllowed("s1"), true)
+    revokeReserve("s1")
+    assert.equal(reserveAllowed("s1"), false)
+  })
+
+  it("expires on the same idle rule", () => {
+    resetReserveAllows()
+    allowReserve("stale")
+    const p = join(
+      homedir(),
+      ".local/share/opencode/claude-auth-reserve-allows.json",
+    )
+    writeFileSync(p, JSON.stringify({ stale: Date.now() - 2 * 60 * 60_000 }))
+    assert.equal(reserveAllowed("stale"), false)
+    resetReserveAllows()
   })
 })

@@ -94,9 +94,24 @@ export function resolveActiveConfig(
     return { cfg, preset: null }
   }
 
+  // Fold the preset's per-account ceilings onto the registry: each id the
+  // preset names replaces that account's own maxUsage while the preset is
+  // selected, every other account inherits its own. Keyed by id, which is what
+  // migration rewrites every reference to.
+  const accountIds = preset.maxUsage
+    ? Object.fromEntries(
+        Object.entries(cfg.accountIds).map(([id, entry]) => {
+          const override = preset.maxUsage?.[id]
+          return [id, override ? { ...entry, maxUsage: override } : entry]
+        }),
+      )
+    : cfg.accountIds
+
   return {
     cfg: {
       ...cfg,
+      accountIds,
+      ...(preset.capMode ? { capMode: preset.capMode } : {}),
       ...(preset.strategy ? { strategy: preset.strategy } : {}),
       // Behaviour overrides: named on the preset, inherited when absent. The
       // top level is the default, not a floor -- a preset that says 0.8 means

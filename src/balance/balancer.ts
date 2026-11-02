@@ -22,6 +22,7 @@ import type {
   Pool,
   SwitchWindow,
 } from "../config.ts"
+import { ceilingFor } from "./caps.ts"
 import {
   type AccountQuota,
   type QuotaCache,
@@ -65,6 +66,15 @@ export type Health = {
    * last resort, not an equal.
    */
   paidCapacity?: boolean
+  /**
+   * At or above its configured `maxUsage` ceiling on some window: held in
+   * reserve. Unhealthy, but a rank above a genuinely spent account -- it has
+   * free allowance left, deliberately withheld, which a soft mode or a session
+   * override can release.
+   */
+  reserved?: boolean
+  /** How far past the ceiling it is (margin), for ranking the emptiest reserve. */
+  reservedMargin?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -161,11 +171,36 @@ function effectiveUtilization(
 export function assess(
   members: readonly Member[],
   cache: QuotaCache,
-  cfg: Pick<ClaudeAuthConfig, "switchAt" | "switchWindow" | "quotaMaxAge">,
+  cfg: Pick<
+    ClaudeAuthConfig,
+    "switchAt" | "switchWindow" | "quotaMaxAge" | "accountIds"
+  >,
   nowMs: number = Date.now(),
 ): Health[] {
   const nowSec = Math.floor(nowMs / 1000)
   const maxAgeSeconds = Math.floor((cfg.quotaMaxAge ?? 0) / 1000) || undefined
+
+  /**
+   * How far past its ceiling an account is on its worst window, or undefined
+   * when under every ceiling. Checks BOTH windows regardless of switchWindow:
+   * a weekly ceiling reserves an account even while its 5h figure looks fine.
+   */
+  const reserveMargin = (m: Member, q: AccountQuota): number | undefined => {
+    const id = m.id ?? m.source
+    let worst: number | undefined
+    for (const which of ["5h", "7d"] as const) {
+      const w = which === "5h" ? q.fiveHour : q.sevenDay
+      const util = effectiveUtilization(w, nowSec)
+      if (util === undefined) continue
+      const ceiling = ceilingFor(cfg, id, which)
+      if (ceiling >= 1) continue
+      if (util >= ceiling) {
+        const margin = util - ceiling
+        if (worst === undefined || margin > worst) worst = margin
+      }
+    }
+    return worst
+  }
 
   return members.map((m) => {
     const credential = m.credential ?? "ok"
@@ -206,6 +241,7 @@ export function assess(
 
     const w = windowFor(q, cfg.switchWindow)
     const util = effectiveUtilization(w, nowSec)
+    const margin = reserveMargin(m, q)
 
     if (w?.status === "rejected" && (w.resetsAt ?? 0) > nowSec) {
       return {
@@ -230,8 +266,28 @@ export function assess(
         // limit the account is still free, and spending money there would be
         // buying what it already has.
         paidCapacity: credits && util >= 1,
+        ...(margin !== undefined
+          ? { reserved: true, reservedMargin: margin }
+          : {}),
       }
     }
+
+    // Under switchAt, but past a configured ceiling on some window: reserved.
+    // Free allowance remains, held back deliberately -- a rank above spent.
+    if (margin !== undefined) {
+      const worst = reservedWindowPercent(m, q, cfg, nowSec)
+      return {
+        source: m.source,
+        utilization: util,
+        resetsAt: w?.resetsAt,
+        credential,
+        healthy: false,
+        reason: `reserved: at ${worst.percent}% of ${worst.window} (ceiling ${worst.ceiling}%)`,
+        reserved: true,
+        reservedMargin: margin,
+      }
+    }
+
     return {
       source: m.source,
       utilization: util,
@@ -241,6 +297,43 @@ export function assess(
       reason: "",
     }
   })
+}
+
+/**
+ * The window whose ceiling an account has most exceeded, with the figures the
+ * reason line quotes. Only called when `reserveMargin` already found a breach,
+ * so it always finds one.
+ */
+function reservedWindowPercent(
+  m: Member,
+  q: AccountQuota,
+  cfg: Pick<ClaudeAuthConfig, "accountIds">,
+  nowSec: number,
+): { window: "5h" | "7d"; percent: number; ceiling: number } {
+  const id = m.id ?? m.source
+  let best = {
+    window: "5h" as "5h" | "7d",
+    percent: 0,
+    ceiling: 100,
+    margin: -1,
+  }
+  for (const which of ["5h", "7d"] as const) {
+    const w = which === "5h" ? q.fiveHour : q.sevenDay
+    const util = effectiveUtilization(w, nowSec)
+    if (util === undefined) continue
+    const ceiling = ceilingFor(cfg, id, which)
+    if (ceiling >= 1 || util < ceiling) continue
+    const margin = util - ceiling
+    if (margin > best.margin) {
+      best = {
+        window: which,
+        percent: Math.round(util * 100),
+        ceiling: Math.round(ceiling * 100),
+        margin,
+      }
+    }
+  }
+  return { window: best.window, percent: best.percent, ceiling: best.ceiling }
 }
 
 // ---------------------------------------------------------------------------
@@ -529,6 +622,12 @@ export type SelectOptions = {
   usage?: Record<string, { requests: number; lastUsedAt: number }>
   /** Injected for the randomised strategies. */
   rng?: () => number
+  /**
+   * This session has opted in to spending reserved quota. Lets a reserved
+   * account serve even in hard mode; in soft mode reserved already serves as a
+   * last resort, so this only widens, never narrows.
+   */
+  allowReserve?: boolean
 }
 
 export function selectAccount(
@@ -584,12 +683,16 @@ export function selectAccount(
   const all = pools.flatMap((p) => p.accounts)
   const known = all.map((s) => health.get(s)).filter((h): h is Health => !!h)
 
+  // Over switchAt but still serving, and NOT reserved: a reserved account has
+  // free allowance deliberately withheld, so it waits for its own tier rather
+  // than being spent here.
   const overThresholdButServing = known
     .filter(
       (h) =>
         h.credential !== "unusable" &&
         h.reason !== "server rejected" &&
         !h.reason.startsWith("ejected") &&
+        !h.reserved &&
         (h.utilization ?? 0) < 1,
     )
     .sort(byHeadroom)
@@ -602,6 +705,33 @@ export function selectAccount(
       strategy: cfg.strategy,
       changed: fallback.source !== activeSource,
       reason: `every account is above switchAt; using the emptiest still serving (${Math.round((fallback.utilization ?? 0) * 100)}%)`,
+    }
+  }
+
+  // Reserved accounts: past their ceiling but with free allowance left. Served
+  // only when the mode permits -- soft always, hard only with a session
+  // override -- and then the one least past its ceiling (emptiest reserve).
+  const reserveAllowed = cfg.capMode === "soft" || opts.allowReserve === true
+  if (reserveAllowed) {
+    const reservedServing = known
+      .filter(
+        (h) =>
+          h.reserved === true &&
+          h.credential !== "unusable" &&
+          h.reason !== "server rejected" &&
+          !h.reason.startsWith("ejected") &&
+          (h.utilization ?? 0) < 1,
+      )
+      .sort((a, b) => (a.reservedMargin ?? 0) - (b.reservedMargin ?? 0))
+    const reserved = reservedServing[0]
+    if (reserved) {
+      return {
+        source: reserved.source,
+        pool: "reserved",
+        strategy: cfg.strategy,
+        changed: reserved.source !== activeSource,
+        reason: `every free account is spent; drawing on reserved quota (${Math.round((reserved.reservedMargin ?? 0) * 100 + 0)}% past ceiling)`,
+      }
     }
   }
 
