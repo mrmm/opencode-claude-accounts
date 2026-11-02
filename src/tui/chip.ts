@@ -395,6 +395,24 @@ export function formatChip(input: ChipInput): string {
 }
 
 /**
+ * Requests an account served, from a usage index keyed by account id. Rows
+ * written before migration are keyed by source, so both keys are summed.
+ * Undefined when neither key is present.
+ */
+export function servedBy(
+  requests: Record<string, number> | undefined,
+  source: string,
+  keyOf: (source: string) => string = accountKey,
+): number | undefined {
+  const id = keyOf(source)
+  const byId = requests?.[id]
+  const bySource = id === source ? undefined : requests?.[source]
+  return byId === undefined && bySource === undefined
+    ? undefined
+    : (byId ?? 0) + (bySource ?? 0)
+}
+
+/**
  * The sidebar block: a heading line plus one line per account.
  *
  * The prompt-right chip has to fit beside an input box; the sidebar has a
@@ -436,8 +454,7 @@ export function sidebarLines(input: ChipInput): {
     // Share of requests, not of quota: it answers "is the balancer actually
     // spreading load", which the quota percentages do not -- two accounts can
     // sit at the same utilisation while one serves everything.
-    const served =
-      input.requests?.[accountKey(a.source)] ?? input.requests?.[a.source]
+    const served = servedBy(input.requests, a.source)
     const share =
       total > 0 && served !== undefined
         ? `${SEP}${Math.round((served / total) * 100)}% reqs`

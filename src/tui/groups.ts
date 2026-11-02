@@ -7,10 +7,11 @@
  * `quotaEntry`, so an id-keyed cache entry is found from a source.
  */
 import type { AccountGroup } from "../config.ts"
-import { accountKey, type QuotaCache } from "../balance/index.ts"
+import type { QuotaCache } from "../balance/index.ts"
 import {
   SEP,
   accountHealth,
+  servedBy,
   utilisation,
   type ChipAccount,
   type Health,
@@ -67,8 +68,7 @@ export function groupRows(input: {
       const u = utilisation(input.quota, s, input.now)
       five += u.five === undefined ? 0 : Math.max(0, 1 - u.five / 100)
       week += u.week === undefined ? 0 : Math.max(0, 1 - u.week / 100)
-      // Usage is keyed by account id; fall back to the source for un-migrated data.
-      served += input.requests?.[accountKey(s)] ?? input.requests?.[s] ?? 0
+      served += servedBy(input.requests, s) ?? 0
       const h = accountHealth(input.quota, s, thresholds)
       if (RANK[h] > RANK[health]) health = h
     }

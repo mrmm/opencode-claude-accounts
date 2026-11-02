@@ -28,6 +28,7 @@ import {
   shortModel,
   sidebarLines,
   mostRecentlyObserved,
+  servedBy,
   utilisation,
   type ChipAccount,
 } from "./chip.ts"
@@ -1220,5 +1221,15 @@ describe("a chosen reset format", () => {
     const epoch = at.getTime() / 1000
     assert.equal(resetClock(epoch, noon, ""), "16:42")
     assert.equal(resetClock(epoch, noon, "   "), "16:42")
+  })
+})
+
+describe("servedBy", () => {
+  const key = (s: string) => (s === "src-1" ? "acme-1" : s)
+  it("sums the id key and the pre-migration source key", () => {
+    assert.equal(servedBy({ "acme-1": 3, "src-1": 2 }, "src-1", key), 5)
+    assert.equal(servedBy({ "src-1": 2 }, "src-1", key), 2)
+    assert.equal(servedBy({ "src-2": 4 }, "src-2", key), 4)
+    assert.equal(servedBy({}, "src-1", key), undefined)
   })
 })
