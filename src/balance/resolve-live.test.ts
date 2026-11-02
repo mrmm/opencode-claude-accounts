@@ -9,8 +9,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 
-import { resetConfigCache } from "../config.ts"
-import { liveIdToSource, resolveAccountRefs } from "./balancer.ts"
+import { DEFAULT_CONFIG, resetConfigCache } from "../config.ts"
+import {
+  liveIdToSource,
+  resolveAccountRefs,
+  selectAccount,
+} from "./balancer.ts"
+import { resolveForSession, resetBindings } from "./sessions.ts"
 
 describe("resolveRef against config + identity cache on disk", () => {
   const home = process.env.HOME
@@ -53,5 +58,38 @@ describe("resolveRef against config + identity cache on disk", () => {
       sources: ["src-1", "src-2"],
       unresolved: [],
     })
+  })
+
+  // Regression for the 429 with spare quota: a preset of ids, members without
+  // ids, its first account spent. Before the fix the pool resolved empty, no
+  // account was selected, and the session fell back to the spent global one.
+  it("routes a session off a spent account in an id preset", () => {
+    const now = Date.now()
+    const sec = Math.floor(now / 1000)
+    const quota = {
+      "acme-1": {
+        sevenDay: { utilization: 1, resetsAt: sec + 86400 },
+        representative: "seven_day",
+        observedAt: sec,
+      },
+      "acme-2": {
+        fiveHour: { utilization: 0.3, resetsAt: sec + 3600 },
+        representative: "five_hour",
+        observedAt: sec,
+      },
+    }
+    const members = [{ source: "src-1" }, { source: "src-2" }]
+    const cfg = {
+      ...DEFAULT_CONFIG,
+      accounts: ["acme-1", "acme-2"],
+      strategy: "round-robin" as const,
+    }
+    assert.equal(
+      selectAccount(members, quota as never, cfg, "src-1", now)?.source,
+      "src-2",
+    )
+    resetBindings()
+    const d = resolveForSession("ses-x", members, quota as never, cfg, now)
+    assert.equal(d?.source, "src-2")
   })
 })
