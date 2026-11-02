@@ -6,7 +6,12 @@ import { join } from "node:path"
 
 import { stripJsonc } from "../config.ts"
 import type { Member } from "./balancer.ts"
-import { applyMigration, backupStamp, planMigration } from "./migrate.ts"
+import {
+  applyMigration,
+  backupStamp,
+  membersForMigration,
+  planMigration,
+} from "./migrate.ts"
 
 const members: Member[] = [
   { source: "src-1", id: "acme-1", label: "Team 1" },
@@ -119,6 +124,54 @@ describe("applyMigration", () => {
       migrated: false,
       mapping: {},
     })
+  })
+})
+
+describe("membersForMigration", () => {
+  const identities = {
+    "src-1": {
+      accountUuid: "acc-1",
+      orgUuid: "org-1",
+      orgName: "Acme",
+      fetchedAt: 1,
+    },
+    "src-2": {
+      accountUuid: "acc-2",
+      orgUuid: "org-1",
+      orgName: "Acme",
+      email: "b@example.com",
+      fetchedAt: 1,
+    },
+  }
+  const accounts = [
+    { source: "src-1", label: "Team 1" },
+    { source: "src-2", label: "Team 2" },
+    { source: "src-3", label: "Expired" },
+  ]
+
+  it("gives bare accounts suggested ids so the plan registers them", () => {
+    const m = membersForMigration(accounts, identities, {})
+    assert.ok(m[0]?.id && m[1]?.id && m[0].id !== m[1].id)
+    assert.equal(m[2]?.id, undefined, "no identity, no id")
+    const pair = (s: string) => {
+      const i = identities[s as keyof typeof identities]
+      return i ? { account: i.accountUuid, org: i.orgUuid } : undefined
+    }
+    const plan = planMigration(
+      { accounts: ["src-1", "Team 2", "src-3"] },
+      m,
+      pair,
+    )
+    assert.equal(Object.keys(plan.accountIds).length, 2)
+    assert.deepEqual(plan.accounts, [m[0]!.id, m[1]!.id, "src-3"])
+  })
+
+  it("keeps an already registered id", () => {
+    const registry = { mine: { match: { account: "acc-1", org: "org-1" } } }
+    assert.equal(
+      membersForMigration(accounts, identities, registry)[0]?.id,
+      "mine",
+    )
   })
 })
 

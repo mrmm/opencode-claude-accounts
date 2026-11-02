@@ -94,6 +94,7 @@ import {
 } from "../dist/tui/caps-ui.js"
 import {
   applyMigration,
+  membersForMigration,
   cacheStats,
   suggestIds,
 } from "../dist/balance/index.js"
@@ -1705,7 +1706,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     if (v !== "__apply__") return menu()
                     const result = applyMigration(
                       candidatePaths()[0]!,
-                      accounts,
+                      membersForMigration(
+                        accounts,
+                        ids,
+                        getConfig().accountIds,
+                      ),
                       (source: string) => {
                         const id = ids[source]
                         return id

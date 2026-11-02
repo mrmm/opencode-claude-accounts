@@ -23,7 +23,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 
 import { type AccountId, stripJsonc } from "../config.ts"
 import { setJsoncValue } from "../config-edit.ts"
+import { accountIdFor, suggestIds } from "./accounts-id.ts"
 import { resolveRef, type Member } from "./balancer.ts"
+import type { IdentityCache } from "./identity.ts"
 
 /** The per-key rewrites a migration performs, plus the id registry it writes. */
 export type MigrationPlan = {
@@ -38,6 +40,31 @@ export type MigrationPlan = {
 }
 
 /** The id for a member: its own `id`, falling back to its source. */
+/**
+ * Members with the id a migration should write: the registered one, else the
+ * suggestion. planMigration only registers members that carry an id, so a
+ * caller handing it bare Keychain accounts would rewrite nothing.
+ */
+export function membersForMigration(
+  accounts: readonly { source: string; label?: string }[],
+  identities: IdentityCache,
+  registry: Record<string, AccountId>,
+): Member[] {
+  const sources = accounts.map((a) => a.source)
+  const suggested = new Map(
+    suggestIds(sources, identities, registry).map((s) => [s.source, s.id]),
+  )
+  return accounts.map((a) => {
+    const registered = accountIdFor(a.source, identities, registry)
+    const id = registered !== a.source ? registered : suggested.get(a.source)
+    return {
+      source: a.source,
+      ...(a.label ? { label: a.label } : {}),
+      ...(id && identities[a.source] ? { id } : {}),
+    }
+  })
+}
+
 function idOf(source: string, members: readonly Member[]): string {
   return members.find((m) => m.source === source)?.id ?? source
 }
