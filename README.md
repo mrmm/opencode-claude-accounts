@@ -532,6 +532,10 @@ its ceiling, while every other session still obeys the global `capMode`. Both
 are written to disk, since the balancer runs in a different process and would
 never see a flag set in the TUI.
 
+The agent's `claude_auth_reserve` tool can turn the override off, but turning it
+on is refused unless `agentReserve: true` is set: reserved quota may be a
+teammate's share, so spending it is the operator's call by default.
+
 ### /cc-accounts
 
 - **Accounts in use** -- each row shows the account's **ID first, then its
@@ -875,6 +879,7 @@ true, because ten keys had previously drifted into being file-only.
 | `strategy`             | `CLAUDE_AUTH_STRATEGY`                   |
 | `bindBy`               | `CLAUDE_AUTH_BIND_BY`                    |
 | `pinBlocksRotation`    | `CLAUDE_AUTH_PIN_BLOCKS_ROTATION`        |
+| `agentReserve`         | `CLAUDE_AUTH_AGENT_RESERVE`              |
 | `pools`                | `CLAUDE_AUTH_POOLS` (JSON)               |
 | `ejectFor`             | `CLAUDE_AUTH_EJECT_FOR`                  |
 | `presets`              | `CLAUDE_AUTH_PRESETS` (JSON)             |

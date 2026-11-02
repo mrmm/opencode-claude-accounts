@@ -598,6 +598,12 @@ export type ClaudeAuthConfig = {
    * threshold or refusal. Turn off to let a pin be only a starting point.
    */
   pinBlocksRotation: boolean
+  /**
+   * Whether the model may turn on the reserved-quota override itself through
+   * the claude_auth_reserve tool. Off: only the operator (TUI) can, since
+   * reserved quota may be a teammate's share.
+   */
+  agentReserve: boolean
   /** Strategy for pools that do not name their own. */
   strategy: BalanceStrategy
   /**
@@ -710,6 +716,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   strategy: "sticky",
   bindBy: "session",
   pinBlocksRotation: true,
+  agentReserve: false,
   pools: [],
   ejectFor: 5 * 60_000,
   accountNames: {},
@@ -834,6 +841,8 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
 
   const pinBlocks = bool(r.pinBlocksRotation)
   if (pinBlocks !== undefined) out.pinBlocksRotation = pinBlocks
+  const agentReserve = bool(r.agentReserve)
+  if (agentReserve !== undefined) out.agentReserve = agentReserve
 
   if (isCaptureLevel(r.captureRequests)) out.captureRequests = r.captureRequests
 
@@ -1026,6 +1035,7 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   strategy: (v) => v,
   bindBy: (v) => v,
   pinBlocksRotation: (v) => v === "1",
+  agentReserve: (v) => v === "1",
   tools: (v) => v === "1",
   contextLimit: strictInt,
   // "1"/"0" toggle the defaults; a JSON object overrides individual knobs.

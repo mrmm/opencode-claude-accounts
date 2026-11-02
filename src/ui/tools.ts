@@ -46,7 +46,7 @@ import {
   saveAccountSource,
 } from "../credentials.ts"
 import { formatQuotaPrefix, readQuotaCache } from "../balance/quota.ts"
-import { parseWindowMs } from "./tools-format.ts"
+import { parseWindowMs, reserveRefusal } from "./tools-format.ts"
 import {
   credentialState,
   maybeRotate,
@@ -232,7 +232,7 @@ export const claudeAuthTools = {
 
   claude_auth_reserve: tool({
     description:
-      "Turn this session's reserved-quota override on or off. When on, this session may draw on accounts that are past their configured usage ceiling (their reserved quota) once no free account is left — including in hard cap mode. Affects only this session, and is forgotten after an hour idle. Spending reserved quota may consume a teammate's share, so every change is logged.",
+      "Turn this session's reserved-quota override on or off. When on, this session may draw on accounts that are past their configured usage ceiling (their reserved quota) once no free account is left — including in hard cap mode. Affects only this session, and is forgotten after an hour idle. Spending reserved quota may consume a teammate's share, so every change is logged. Turning it on is refused unless the operator set agentReserve: true.",
     args: {
       state: z
         .enum(["on", "off"])
@@ -244,6 +244,11 @@ export const claudeAuthTools = {
       const sessionId = ctx?.sessionID
       if (!sessionId) {
         return "No session in context, so the reserved-quota override cannot be set."
+      }
+      const refused = reserveRefusal(state, getConfig().agentReserve)
+      if (refused) {
+        log("reserve_override_refused", { session: sessionId, state })
+        return refused
       }
       if (state === "on") allowReserve(sessionId)
       else revokeReserve(sessionId)

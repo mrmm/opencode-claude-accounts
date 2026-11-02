@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { classifySelection, parseWindowMs } from "./tools-format.ts"
+import {
+  classifySelection,
+  parseWindowMs,
+  reserveRefusal,
+} from "./tools-format.ts"
 
 describe("classifySelection", () => {
   it("reads the three things the selection file can hold", () => {
@@ -45,5 +49,13 @@ describe("parseWindowMs", () => {
     assert.equal(parseWindowMs("yesterday"), parseWindowMs("24h"))
     assert.equal(parseWindowMs(undefined), parseWindowMs("24h"))
     assert.equal(parseWindowMs(""), parseWindowMs("24h"))
+  })
+})
+
+describe("reserveRefusal", () => {
+  it("refuses the agent turning reserve on unless the operator allowed it", () => {
+    assert.match(reserveRefusal("on", false) ?? "", /^Refused/)
+    assert.equal(reserveRefusal("on", true), undefined)
+    assert.equal(reserveRefusal("off", false), undefined)
   })
 })

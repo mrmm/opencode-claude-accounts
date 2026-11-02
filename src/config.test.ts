@@ -418,6 +418,7 @@ describe("config surface coverage", () => {
     strategy: "round-robin",
     bindBy: "none",
     pinBlocksRotation: "0",
+    agentReserve: "1",
     tools: "0",
     contextLimit: "400000",
     contextEditing: '{"trigger":120000,"keep":4}',
@@ -481,6 +482,7 @@ describe("config surface coverage", () => {
       envNameFor("pinBlocksRotation"),
       "CLAUDE_AUTH_PIN_BLOCKS_ROTATION",
     )
+    assert.equal(envNameFor("agentReserve"), "CLAUDE_AUTH_AGENT_RESERVE")
     assert.equal(envNameFor("debug"), "CLAUDE_AUTH_DEBUG")
     // Shipped names win over the convention, so nobody's exported variable
     // stops being read.

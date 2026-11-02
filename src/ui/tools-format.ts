@@ -50,3 +50,15 @@ export function parseWindowMs(
   const unit = units[use.slice(-1)] ?? units.h!
   return n * unit
 }
+
+/**
+ * Why the model may not set the reserved-quota override, or undefined when it
+ * may. Turning it off is always allowed: it only ever reduces spend.
+ */
+export function reserveRefusal(
+  state: "on" | "off",
+  agentReserve: boolean,
+): string | undefined {
+  if (state === "off" || agentReserve) return undefined
+  return "Refused: spending reserved quota needs the operator. Turn it on from the TUI (This session > Use reserved quota), or set agentReserve: true in the config to let the agent do it."
+}
