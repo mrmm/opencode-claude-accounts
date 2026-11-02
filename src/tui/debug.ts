@@ -10,7 +10,7 @@
  * the build is, what the cache holds, what resolved and what did not. A debug
  * dump that reports what the code meant to do is worth nothing.
  */
-import { type QuotaCache } from "../balance/quota.ts"
+import { quotaEntry, type QuotaCache } from "../balance/quota.ts"
 import { type Preset } from "./presets.ts"
 
 export type DebugInput = {
@@ -51,7 +51,7 @@ export function debugReport(input: DebugInput): string {
 
   say("ACCOUNTS")
   for (const a of input.accounts) {
-    const q = input.quota[a.source]
+    const q = quotaEntry(input.quota, a.source)
     say(`  ${a.label ?? a.source}`)
     say(`    source    ${a.source}`)
     if (!q) {

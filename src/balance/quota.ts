@@ -281,6 +281,9 @@ export function writeQuotaForAccount(
         : {}),
       ...quota,
     }
+    // The source-keyed entry is now superseded; leaving it lets any reader
+    // that still tries the source see a stale window.
+    if (key !== source) delete cache[source]
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     // tmp + rename: the server and the TUI both write this file, and a torn
@@ -294,6 +297,20 @@ export function writeQuotaForAccount(
   }
 }
 
+/**
+ * The cache entry for one Keychain source: its id key first, then the source
+ * (un-migrated installs). Every reader goes through this -- indexing the cache
+ * by source directly reads a superseded pre-migration entry.
+ */
+export function quotaEntry(
+  cache: QuotaCache | undefined,
+  source: string | null | undefined,
+): AccountQuota | undefined {
+  if (!source || !cache) return undefined
+  for (const key of accountReadKeys(source)) if (cache[key]) return cache[key]
+  return undefined
+}
+
 /** Quota for one account, dropping entries older than `maxAgeSeconds`. */
 export function quotaForAccount(
   source: string,
@@ -303,13 +320,7 @@ export function quotaForAccount(
 ): AccountQuota | undefined {
   // Try the id key first (how new writes key), then the raw source (old
   // writes, un-migrated installs). First hit wins.
-  let q: AccountQuota | undefined
-  for (const key of accountReadKeys(source)) {
-    if (cache?.[key]) {
-      q = cache[key]
-      break
-    }
-  }
+  const q = quotaEntry(cache, source)
   if (!q || typeof q.observedAt !== "number") return undefined
   if (now - q.observedAt > maxAgeSeconds) return undefined
   return q

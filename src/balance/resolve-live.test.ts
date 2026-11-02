@@ -16,6 +16,8 @@ import {
   selectAccount,
 } from "./balancer.ts"
 import { resolveForSession, resetBindings } from "./sessions.ts"
+import { utilisation } from "../tui/chip.ts"
+import { quotaEntry, readQuotaCache, writeQuotaForAccount } from "./quota.ts"
 
 describe("resolveRef against config + identity cache on disk", () => {
   const home = process.env.HOME
@@ -91,5 +93,30 @@ describe("resolveRef against config + identity cache on disk", () => {
     resetBindings()
     const d = resolveForSession("ses-x", members, quota as never, cfg, now)
     assert.equal(d?.source, "src-2")
+  })
+
+  // Regression: the sidebar indexed the cache by Keychain source and showed
+  // the superseded pre-migration entry (old, reset, green) while the live
+  // id-keyed entry said the account was refused.
+  it("reads the id entry, not a stale source entry, and drops the stale one", () => {
+    const sec = Math.floor(Date.now() / 1000)
+    const stale = {
+      fiveHour: { utilization: 0.3, resetsAt: sec - 60 },
+      observedAt: sec - 3 * 3600,
+    }
+    const live = {
+      fiveHour: { utilization: 1, status: "rejected", resetsAt: sec + 3600 },
+      observedAt: sec,
+    }
+    const cache = { "src-1": stale, "acme-1": live }
+    assert.equal(quotaEntry(cache as never, "src-1"), live)
+    const u = utilisation(cache as never, "src-1", sec)
+    assert.equal(u.five, 100)
+    assert.equal(u.rejected, true)
+
+    const path = join(mkdtempSync(join(tmpdir(), "q-")), "quota.json")
+    writeFileSync(path, JSON.stringify({ "src-1": stale }))
+    writeQuotaForAccount("src-1", live as never, path)
+    assert.deepEqual(Object.keys(readQuotaCache(path)), ["acme-1"])
   })
 })

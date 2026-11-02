@@ -28,7 +28,11 @@
  *  - Utilisation is a fraction of ONE account's window, so a pool of two holds
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
-import { formatDuration, type QuotaCache } from "../balance/index.ts"
+import {
+  formatDuration,
+  quotaEntry,
+  type QuotaCache,
+} from "../balance/index.ts"
 import { lineChart, type Row } from "./tokens.ts"
 
 export type PaceSample = {
@@ -380,7 +384,7 @@ export function forecast(
     period: number,
   ): Slot[] =>
     accounts.map((a) => {
-      const q = quota?.[a] as
+      const q = quotaEntry(quota, a) as
         | {
             fiveHour?: {
               utilization?: number

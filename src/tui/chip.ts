@@ -15,7 +15,7 @@ import type {
   SessionDetail,
   SessionUsage,
 } from "../balance/index.ts"
-import { creditHeadroom, formatDuration } from "../balance/index.ts"
+import { creditHeadroom, formatDuration, quotaEntry } from "../balance/index.ts"
 
 export type ChipAccount = { source: string; label: string }
 
@@ -165,7 +165,7 @@ export type Health = "unknown" | "ok" | "warn" | "paid" | "critical"
 
 /** Credits exist, are funded, and are not yet spent out. */
 export function onCredits(quota: QuotaCache, source: string | null): boolean {
-  return creditHeadroom((source ? quota?.[source] : undefined)?.extra)
+  return creditHeadroom(quotaEntry(quota, source)?.extra)
 }
 
 const money = (minor: number) => (minor / 100).toFixed(2)
@@ -183,7 +183,7 @@ const money = (minor: number) => (minor / 100).toFixed(2)
  * the account is currently spending is carried by the `paid` health colour.
  */
 export function spendText(quota: QuotaCache, source: string | null): string {
-  const x = (source ? quota?.[source] : undefined)?.extra
+  const x = quotaEntry(quota, source)?.extra
   if (!x?.enabled || x.usedMinor === undefined || x.limitMinor === undefined) {
     return ""
   }
@@ -319,7 +319,7 @@ export function utilisation(
   weekIn?: number
   rejected: boolean
 } {
-  const q = source ? quota?.[source] : undefined
+  const q = quotaEntry(quota, source)
   const fiveIn = until(q?.fiveHour, now)
   const weekIn = until(q?.sevenDay, now)
   // A window past its reset holds a reading from before the turnover, so it is
@@ -548,7 +548,7 @@ export function resetText(
   now: number = Math.floor(Date.now() / 1000),
   template = "",
 ): string {
-  const q = source ? quota?.[source] : undefined
+  const q = quotaEntry(quota, source)
   const parts: string[] = []
   const five = resetClock(q?.fiveHour?.resetsAt, now, template)
   const week = resetClock(q?.sevenDay?.resetsAt, now, template)

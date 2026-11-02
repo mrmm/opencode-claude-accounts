@@ -36,6 +36,7 @@ import {
   type HeaderLike,
   bindingWindow,
   parseQuotaHeaders,
+  quotaEntry,
   readQuotaCache,
   writeQuotaForAccount,
 } from "./quota.ts"
@@ -319,7 +320,7 @@ export function maybeRotate(
       // limit can be full while the weekly budget is barely touched, and a bare
       // "all accounts spent" makes that look like the balancer refusing an
       // account that plainly has quota left.
-      const q = readQuotaCache()[decision.source]
+      const q = quotaEntry(readQuotaCache(), decision.source)
       const w = q ? bindingWindow(q) : undefined
       const isFiveHour = w !== undefined && w === q?.fiveHour
       // The server names the limit that actually bound. Deriving it from the
@@ -420,7 +421,7 @@ function reasonForPrevious(source: string, trigger: string): string {
   if (trigger === "429") return "was refused (429)"
   try {
     const cfg = getConfig()
-    const q = readQuotaCache()[source]
+    const q = quotaEntry(readQuotaCache(), source)
     if (!q) return "is unavailable"
     const w =
       cfg.switchWindow === "7d"
