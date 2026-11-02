@@ -44,7 +44,7 @@ import {
 } from "../dist/credentials.js"
 import { readQuotaCache } from "../dist/balance/quota.js"
 import { readShapeFile } from "../dist/introspect.js"
-import { resolveRef } from "../dist/balance/index.js"
+import { liveIdToSource, resolveRef } from "../dist/balance/index.js"
 import {
   addPool,
   indentJson,
@@ -72,7 +72,7 @@ import {
   summarizeSessions,
 } from "../dist/balance/usage.js"
 import { candidatePaths, getConfig, resetConfigCache } from "../dist/config.js"
-import { readSamples } from "../dist/balance/samples.js"
+import { prune, readSamples } from "../dist/balance/samples.js"
 import { ceilingFor } from "../dist/balance/caps.js"
 import { accountKey } from "../dist/balance/account-key.js"
 import {
@@ -131,7 +131,12 @@ import {
   type Health,
 } from "../dist/tui/chip.js"
 import { BUILD } from "../dist/version.js"
-import { forecast, forecastLines } from "../dist/tui/forecast.js"
+import {
+  forecast,
+  forecastLines,
+  forecastSummaryRows,
+  toSourceKeys,
+} from "../dist/tui/forecast.js"
 import {
   composition,
   latestShapes,
@@ -465,7 +470,9 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       // The compact samples file is the long memory (8 days); the request log
       // rotates under a day. Prefer samples, but fall back to the log when the
       // samples do not yet cover an hour — a fresh install has none.
-      const samples = readSamples().map((s) => ({
+      // prune: rows past retention (or stray fixture rows from long ago) would
+      // stretch the time axis and flatten every pace to zero.
+      const samples = prune(readSamples(), Date.now()).map((s) => ({
         account: s.account,
         at: s.at,
         u5: s.u5,
@@ -496,9 +503,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   ]
                 : [],
             )
-      const f = forecast(paceSamples, readQuotaCache(), sources, undefined, {
-        ceilings: forecastCeilings(sources),
-      })
+      const f = forecast(
+        toSourceKeys(paceSamples, liveIdToSource),
+        readQuotaCache(),
+        sources,
+        undefined,
+        {
+          ceilings: forecastCeilings(sources),
+        },
+      )
       // Per-account forecast lines are keyed by account id, which is what the
       // ceilings and the config are keyed by, so a line about a reserved account
       // names the id the operator would edit.
@@ -510,9 +523,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
           return [s, id === s ? (name ?? s) : name ? `${id} ${name}` : id]
         }),
       )
-      return forecastLines(f, (epoch: number) => resetClock(epoch), idNames)
+      const clock = (epoch: number) => resetClock(epoch)
+      return {
+        summary: forecastSummaryRows(f, clock, names),
+        lines: forecastLines(f, clock, idNames),
+        now: f.idle ? undefined : `${Math.round(f.nowPace * 100)}%/h`,
+      }
     } catch {
-      return []
+      return { summary: [] as Row[], lines: [] as Row[], now: undefined }
     }
   }
   const [pace, setPace] = createSignal(readForecast())
@@ -744,6 +762,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     const ranked = rankedFixes(id, c)
     return [
       { title: "Optimize", note: "(biggest first, /optimize)", rows: advice },
+      {
+        title: "Forecast",
+        note: "(per account, ours vs outside)",
+        rows: pace().lines,
+      },
       {
         title: "Charts",
         note: "(context per turn, reads per day)",
@@ -1245,10 +1268,9 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     order: 211,
     slots: {
       sidebar_content() {
-        // Only the two answers; pace and typical are in /tokens.
-        const windows = () =>
-          pace().filter((r) => r.label !== "now" && r.label !== "typical")
-        const now = () => pace().find((r) => r.label === "now")?.value
+        // The plain answers; per-account lines and charts are in details.
+        const windows = () => pace().summary
+        const now = () => pace().now
         return (
           <box>
             <Heading

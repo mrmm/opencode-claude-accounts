@@ -573,6 +573,94 @@ export function forecastLines(
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
 
+/**
+ * Samples keyed the way forecast() matches them: by Keychain source.
+ *
+ * Telemetry is written under account ids, the account list the caller passes
+ * is sources; without this every recent sample is dropped and the pool reads
+ * as idle while it is burning.
+ */
+export function toSourceKeys<T extends { account: string }>(
+  samples: readonly T[],
+  toSource: (key: string) => string | undefined,
+): T[] {
+  return samples.map((s) => {
+    const source = toSource(s.account)
+    return source && source !== s.account ? { ...s, account: source } : s
+  })
+}
+
+/**
+ * The sidebar's forecast: how much is left, whether it lasts, and which
+ * account is closest to empty.
+ *
+ * Room is counted in accounts (1.0 = one account's full window) because that
+ * is how the pool is bought and how it is reasoned about; per-account rows and
+ * the charts stay in forecastLines for the details view.
+ */
+export function forecastSummaryRows(
+  f: Forecast,
+  clock: (epoch: number) => string,
+  names: Map<string, string> = new Map(),
+): Row[] {
+  const name = (a: string) => names.get(a) ?? a
+  const room = (xs: AccountForecast[]) =>
+    xs.reduce((t, a) => t + Math.max(0, a.ceiling - a.used), 0)
+  const left = (label: string, xs: AccountForecast[]): Row => {
+    const r = room(xs)
+    return {
+      label,
+      value: `${r.toFixed(1)} of ${xs.length} account${xs.length === 1 ? "" : "s"}`,
+      level: r < 0.25 ? "critical" : r < 0.75 ? "warn" : "ok",
+    }
+  }
+  const lasts = (label: string, w: WindowForecast, unit: typeof pctH): Row =>
+    f.idle
+      ? { label, value: "idle, nothing burning", level: "ok" }
+      : w.runsOutAt === undefined
+        ? { label, value: `lasts at ${unit(w.pace)}`, level: "ok" }
+        : {
+            label,
+            value: `runs out ~${clock(w.runsOutAt)} (in ${formatDuration(w.runsOutAt - f.now)})`,
+            level: w.runsOutAt - f.now < HOUR ? "critical" : "warn",
+          }
+
+  const rows: Row[] = [
+    left("5h left", f.fivePerAccount),
+    lasts("5h", f.five, pctH),
+    left("week left", f.weekPerAccount),
+    lasts("week", f.week, pctD),
+  ]
+
+  // The usable account with the least weekly room: the next one to drop out.
+  const closest = f.weekPerAccount
+    .filter((a) => a.used < a.ceiling)
+    .sort((a, b) => b.used / b.ceiling - a.used / a.ceiling)[0]
+  if (closest)
+    rows.push({
+      label: "closest",
+      value: `${name(closest.account)}: ${pct(closest.used)} of week used`,
+      level: closest.used / closest.ceiling >= 0.9 ? "warn" : "ok",
+    })
+
+  const outside = f.five.outsidePace
+  if (outside > 0.005 && outside > f.five.ourPace)
+    rows.push({
+      label: "others",
+      value: `use ${pctH(outside)}, more than this machine`,
+      level: "warn",
+    })
+
+  // The next reset that gives back real room, not one on an idle account.
+  const refill = f.resets.find((r) => r.used >= 0.5)
+  if (refill)
+    rows.push({
+      label: "next refill",
+      value: `${name(refill.account)} 5h at ${clock(refill.at)}`,
+    })
+  return rows
+}
+
 /** `text` at `col` in a `width`-wide line, kept inside it. */
 function place(line: string[], col: number, text: string): void {
   const at = Math.max(0, Math.min(line.length - text.length, col))

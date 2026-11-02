@@ -8,8 +8,11 @@ import {
   consumed,
   forecast,
   forecastLines,
+  forecastSummaryRows,
   outsideBurn,
   simulate,
+  toSourceKeys,
+  type Forecast,
 } from "./forecast.ts"
 
 const NOW = 1_800_000_000 // unix s
@@ -364,5 +367,123 @@ describe("outsideBurn", () => {
     const b = outsideBurn(rows, NOW)
     assert.ok(b["a"]!.week.pace !== undefined, "eight buckets over the week")
     assert.ok(b["a"]!.week.pace! > 0, `week pace ${b["a"]!.week.pace}`)
+  })
+})
+
+// Regression: the sidebar forecast was a row per account per window plus two
+// charts, and never said plainly how much was left or whether it lasted.
+describe("forecastSummaryRows", () => {
+  const NOW = 1_800_000_000
+  const w = (over = {}) => ({
+    pace: 0.06,
+    ourPace: 0.05,
+    outsidePace: 0.01,
+    horizon: NOW + 5 * 3600,
+    reserveLeft: 0,
+    ...over,
+  })
+  const acct = (account: string, used: number) => ({
+    account,
+    used,
+    ceiling: 1,
+    ourPace: 0,
+  })
+  const base: Forecast = {
+    nowPace: 0.06,
+    typicalPace: 0.03,
+    five: w(),
+    week: w({ pace: 0.2, horizon: NOW + 7 * 86400 }),
+    fivePerAccount: [acct("a", 0.4), acct("b", 1), acct("c", 0.2)],
+    weekPerAccount: [acct("a", 0.94), acct("b", 1), acct("c", 0.05)],
+    idle: false,
+    history: [],
+    ahead: [],
+    now: NOW,
+    resets: [
+      { account: "c", at: NOW + 600, used: 0.2 },
+      { account: "b", at: NOW + 1800, used: 1 },
+    ],
+  }
+  const clock = (s: number) => `t+${Math.round((s - NOW) / 60)}m`
+  const by = (f: Forecast) =>
+    Object.fromEntries(
+      forecastSummaryRows(
+        f,
+        clock,
+        new Map([
+          ["a", "Team 1"],
+          ["b", "Team 2"],
+        ]),
+      ).map((r) => [r.label, r]),
+    )
+
+  it("says room in accounts, whether it lasts, the closest account and the next refill", () => {
+    const r = by(base)
+    assert.equal(r["5h left"]!.value, "1.4 of 3 accounts")
+    assert.equal(r["5h"]!.value, "lasts at 6%/h")
+    assert.equal(r["week left"]!.value, "1.0 of 3 accounts")
+    assert.equal(r.closest!.value, "Team 1: 94% of week used")
+    assert.equal(r.closest!.level, "warn")
+    assert.equal(r["next refill"]!.value, "Team 2 5h at t+30m")
+    assert.equal(r.others, undefined)
+  })
+
+  it("warns with the run-out time, and blames outside use when it dominates", () => {
+    const r = by({
+      ...base,
+      five: w({ runsOutAt: NOW + 1800, ourPace: 0.01, outsidePace: 0.05 }),
+    })
+    assert.equal(r["5h"]!.value, "runs out ~t+30m (in 30m)")
+    assert.equal(r["5h"]!.level, "critical")
+    assert.match(r.others!.value, /^use 5%\/h/)
+  })
+
+  it("says idle instead of a forecast", () => {
+    assert.equal(
+      by({ ...base, idle: true })["5h"]!.value,
+      "idle, nothing burning",
+    )
+  })
+})
+
+// Regression: telemetry keyed by account id never matched the source list the
+// forecast is given, so an active pool read as idle.
+describe("toSourceKeys", () => {
+  it("re-keys id samples to sources and leaves unknown keys alone", () => {
+    const out = toSourceKeys(
+      [
+        { account: "acme-1", at: 1 },
+        { account: "src-2", at: 2 },
+      ],
+      (k) => (k === "acme-1" ? "src-1" : undefined),
+    )
+    assert.deepEqual(
+      out.map((s) => s.account),
+      ["src-1", "src-2"],
+    )
+  })
+
+  it("makes id-keyed samples count toward the pace", () => {
+    const now = 1_800_000_000
+    const samples = [0, 1, 2, 3, 4, 5].map((i) => ({
+      account: "acme-1",
+      at: (now - (5 - i) * 300) * 1000,
+      u5: 0.1 + i * 0.02,
+    }))
+    const quota = {
+      "src-1": {
+        fiveHour: { utilization: 0.2, resetsAt: now + 3600 },
+        observedAt: now,
+      },
+    }
+    const raw = forecast(samples, quota as never, ["src-1"], now)
+    const keyed = forecast(
+      toSourceKeys(samples, (k) => (k === "acme-1" ? "src-1" : undefined)),
+      quota as never,
+      ["src-1"],
+      now,
+    )
+    assert.equal(raw.idle, true)
+    assert.equal(keyed.idle, false)
   })
 })
