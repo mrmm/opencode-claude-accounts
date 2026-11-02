@@ -97,7 +97,7 @@ export const claudeAuthTools = {
       )
 
       const lines = [
-        `serving now: ${active?.label ?? "none"}`,
+        `serving now: ${active ? `${accountKey(active.source)} (${cfg.accountIds[accountKey(active.source)]?.name ?? active.label})` : "none"}`,
         `selection:   ${describeSelection(selection)}`,
         `strategy:    ${cfg.strategy}${preset ? ` (from preset "${preset}")` : ""}`,
         `autoSwitch:  ${cfg.autoSwitch} — moves by itself at ${Math.round(cfg.switchAt * 100)}% of ${cfg.switchWindow}, on429 ${cfg.switchOn429}`,
@@ -124,7 +124,7 @@ export const claudeAuthTools = {
             ? "usable"
             : `unusable — ${h?.reason ?? "?"}`
         lines.push(
-          `  ${m.source === active?.source ? "*" : " "} ${(m.label ?? m.source).padEnd(44)} ${(formatQuotaPrefix(quota[m.source]) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
+          `  ${m.source === active?.source ? "*" : " "} ${accountKey(m.source).padEnd(16)} ${(cfg.accountIds[accountKey(m.source)]?.name ?? m.label ?? m.source).padEnd(32)} ${(formatQuotaPrefix(quota[m.source]) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
         )
       }
 
