@@ -49,6 +49,18 @@ export type RequestEvent = {
    * inventing a session for them.
    */
   session?: string
+  /**
+   * Token counts parsed from the response, when the usage tap saw them.
+   *
+   * Optional because every event written before the tap existed lacks them,
+   * and because a non-chat endpoint (a token count, a model list) has no usage
+   * to report. A reader treating absence as zero gets the right totals.
+   */
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  cacheWrite1h?: number
 }
 
 /** One move between accounts. */
