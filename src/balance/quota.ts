@@ -19,7 +19,13 @@
  * options synchronously and cannot await a request.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { accountKey, accountReadKeys } from "./account-key.ts"
@@ -277,7 +283,11 @@ export function writeQuotaForAccount(
     }
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
+    // tmp + rename: the server and the TUI both write this file, and a torn
+    // write would lose every account's reading.
+    const tmp = `${path}.tmp-${process.pid}`
+    writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
+    renameSync(tmp, path)
     return true
   } catch {
     return false

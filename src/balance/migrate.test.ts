@@ -2,7 +2,7 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 import { stripJsonc } from "../config.ts"
 import type { Member } from "./balancer.ts"
@@ -100,6 +100,8 @@ describe("applyMigration", () => {
     assert.equal(first.migrated, true)
     assert.ok(first.backupPath?.endsWith(".bak-20260102-0304"))
     assert.equal(readFileSync(first.backupPath!, "utf8"), original)
+    // Written via tmp + rename: no temp file survives a successful migration.
+    assert.ok(!readdirSync(dirname(path)).some((f) => f.includes(".tmp-")))
 
     const after = JSON.parse(stripJsonc(readFileSync(path, "utf8"))) as {
       accounts: string[]

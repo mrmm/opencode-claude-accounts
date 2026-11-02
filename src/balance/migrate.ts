@@ -19,7 +19,7 @@
  * it does not touch survive.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 
 import { type AccountId, stripJsonc } from "../config.ts"
 import { setJsoncValue } from "../config-edit.ts"
@@ -245,6 +245,10 @@ export function applyMigration(
   if (plan.presets) put("presets", plan.presets)
   if (plan.pools) put("pools", plan.pools)
 
-  writeFileSync(path, out, "utf8")
+  // Config is the one file a torn write would make unloadable; the backup
+  // above is not a substitute for never leaving it half-written.
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, out, "utf8")
+  renameSync(tmp, path)
   return { migrated: true, backupPath, mapping: plan.accountIds }
 }
