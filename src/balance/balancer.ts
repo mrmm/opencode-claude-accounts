@@ -32,6 +32,7 @@ import {
   type QuotaWindow,
   bindingWindow,
   creditHeadroom,
+  formatDuration,
   quotaForAccount,
 } from "./quota.ts"
 
@@ -802,4 +803,71 @@ export function selectAccount(
       ? `all accounts spent, credits exhausted or unavailable; earliest reset at ${new Date(soonest.resetsAt * 1000).toISOString()}`
       : "all accounts spent, credits exhausted or unavailable; no reset time known",
   }
+}
+
+// ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
+
+/**
+ * When each spent account can serve again, soonest first.
+ *
+ * An account is free once EVERY window holding it back has reset: a 5h reset
+ * does not help an account whose week is also full, so the time is the latest
+ * reset among its blocking windows (and any ejection). Accounts that cannot
+ * authenticate, or whose blocking window has no known reset, are left out
+ * rather than given a guessed time.
+ */
+export function recoveryTimes(
+  members: readonly Member[],
+  cache: QuotaCache,
+  cfg: Pick<ClaudeAuthConfig, "switchAt">,
+  nowMs: number = Date.now(),
+): { source: string; at: number }[] {
+  const nowSec = Math.floor(nowMs / 1000)
+  const out: { source: string; at: number }[] = []
+  for (const m of members) {
+    if (m.credential === "unusable") continue
+    const q = quotaForAccount(m.source, cache, nowSec)
+    let at = ejectedUntil(m.source, nowMs) ?? 0
+    let unknown = false
+    for (const w of [q?.fiveHour, q?.sevenDay]) {
+      if (!w || w.resetsAt === undefined || w.resetsAt <= nowSec) {
+        if (w && w.resetsAt === undefined && w.utilization >= cfg.switchAt)
+          unknown = true
+        continue
+      }
+      if (w.status === "rejected" || w.utilization >= cfg.switchAt)
+        at = Math.max(at, w.resetsAt * 1000)
+    }
+    if (unknown || at <= nowMs) continue
+    out.push({ source: m.source, at })
+  }
+  return out.sort((a, b) => a.at - b.at)
+}
+
+/** How often a spent pool is re-checked while OpenCode waits to retry. */
+export const SPENT_RECHECK_S = 60
+
+/**
+ * The retry the operator sees when every account refused: the real time the
+ * next account is back, and a short retry-after so a reset, a newly added
+ * account or a changed selection is picked up within a minute instead of
+ * after the server's own (often much longer) retry-after.
+ */
+export function spentRetry(
+  next: { name: string; at: number } | undefined,
+  nowMs: number,
+  clock: (ms: number) => string,
+  serverRetryAfterS?: number,
+): { retryAfterS: number; message: string } {
+  const wait = next ? Math.ceil((next.at - nowMs) / 1000) : undefined
+  const candidates = [SPENT_RECHECK_S, wait, serverRetryAfterS].filter(
+    (v): v is number => v !== undefined && v > 0,
+  )
+  const retryAfterS = Math.max(1, Math.min(...candidates))
+  const message = next
+    ? `Every account is spent. Next back: ${next.name} at ${clock(next.at)} (in ${formatDuration(wait!)}). Re-checking every ${SPENT_RECHECK_S}s, so freeing or adding an account is picked up on the next check.`
+    : `Every account is spent and no reset time is known. Re-checking every ${SPENT_RECHECK_S}s.`
+  return { retryAfterS, message }
 }

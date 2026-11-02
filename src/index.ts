@@ -11,6 +11,7 @@ import {
   formatQuotaPrefix,
   maybeRotate,
   noteRejection,
+  spentRetryNow,
   noteSuccess,
   parseQuotaHeaders,
   quotaForAccount,
@@ -208,6 +209,36 @@ function getMaxRetryDelayMs(): number {
     if (!Number.isNaN(parsed) && parsed > 0) return parsed
   }
   return DEFAULT_MAX_RETRY_DELAY_MS
+}
+
+/**
+ * The same 429 with the operator-facing message and retry-after replaced.
+ * Keeps the Anthropic error shape so OpenCode still classifies it as a rate
+ * limit; anything unparseable keeps its body and only gains the header.
+ */
+export async function withSpentRetry(
+  res: Response,
+  plan: { retryAfterS: number; message: string },
+): Promise<Response> {
+  const text = await res.text().catch(() => "")
+  let body = text
+  try {
+    const parsed = JSON.parse(text) as { error?: { message?: string } }
+    if (parsed?.error && typeof parsed.error === "object") {
+      parsed.error.message = plan.message
+      body = JSON.stringify(parsed)
+    }
+  } catch {}
+  const headers = new Headers(res.headers)
+  headers.set("retry-after", String(plan.retryAfterS))
+  headers.delete("retry-after-ms")
+  headers.delete("content-length")
+  headers.delete("content-encoding")
+  return new Response(body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  })
 }
 
 export async function fetchWithRetry(
@@ -1236,6 +1267,27 @@ const plugin: PluginWithOptions = async (
                     getExcludedBetas(modelId),
                   ),
                 })
+                preserveResponseUnchanged = false
+              }
+            }
+
+            // Still refused after rotating: the pool is spent, not congested.
+            // Tell OpenCode when the next account is really back, and retry
+            // within a minute so a reset or an added account is picked up.
+            if (response.status === 429) {
+              const raw = parseInt(
+                response.headers.get("retry-after") ?? "",
+                10,
+              )
+              const serverS = Number.isNaN(raw) ? undefined : raw
+              if (
+                serverS === undefined ||
+                serverS * 1000 > getMaxRetryDelayMs()
+              ) {
+                response = await withSpentRetry(
+                  response,
+                  spentRetryNow(serverS),
+                )
                 preserveResponseUnchanged = false
               }
             }

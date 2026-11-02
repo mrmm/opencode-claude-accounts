@@ -578,6 +578,34 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
     assert.equal(headers.get("x-stainless-runtime"), "custom-runtime")
   })
 
+  // Regression: a spent pool surfaced the server's retry-after (896s) and its
+  // generic message, hiding when an account was really back and ignoring an
+  // account freed or added meanwhile.
+  it("withSpentRetry rewrites the message and retry-after, keeps the shape", async () => {
+    const res = new Response(
+      JSON.stringify({
+        type: "error",
+        error: { type: "rate_limit_error", message: "would exceed" },
+      }),
+      {
+        status: 429,
+        headers: { "retry-after": "896", "content-length": "99" },
+      },
+    )
+    const out = await helpers.withSpentRetry(res, {
+      retryAfterS: 60,
+      message: "Next back: Alt 2 at 20:50",
+    })
+    assert.equal(out.status, 429)
+    assert.equal(out.headers.get("retry-after"), "60")
+    assert.equal(out.headers.get("content-length"), null)
+    const body = (await out.json()) as {
+      error: { type: string; message: string }
+    }
+    assert.equal(body.error.type, "rate_limit_error")
+    assert.equal(body.error.message, "Next back: Alt 2 at 20:50")
+  })
+
   it("fetchWithRetry retries on 429 and succeeds", async () => {
     let callCount = 0
     const mockFetch = (() => {
@@ -1438,8 +1466,11 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       )
 
       assert.equal(response.status, 429)
-      assert.equal(response.headers.get("retry-after"), "11218")
-      assert.equal(await response.text(), errorBody)
+      // A spent pool: retry within a minute, say when an account is back.
+      assert.equal(response.headers.get("retry-after"), "60")
+      const text = await response.text()
+      assert.notEqual(text, errorBody)
+      assert.match(text, /Every account is spent/)
       await new Promise<void>((resolve) => setImmediate(resolve))
       assert.equal(fetchCount, 1)
       assert.deepEqual(warnings, [])

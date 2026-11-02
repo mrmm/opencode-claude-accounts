@@ -14,6 +14,8 @@ import {
   resolveAccountRefs,
   resolvePools,
   resolveRef,
+  recoveryTimes,
+  spentRetry,
   selectAccount,
   type Member,
 } from "./balancer.ts"
@@ -981,5 +983,78 @@ describe("resolveRef with registered ids", () => {
   it("still prefers an id carried on the member", () => {
     const withId = [{ ...bare[0]!, id: "acme-2" }, bare[1]!]
     assert.equal(resolveRef("acme-2", withId, ids), "src-1")
+  })
+})
+
+describe("recoveryTimes", () => {
+  const win = (utilization: number, resetsIn: number, status?: string) => ({
+    utilization,
+    resetsAt: NOW_SEC + resetsIn,
+    ...(status ? { status } : {}),
+  })
+  it("waits for every blocking window, soonest account first", () => {
+    const cache = {
+      a: {
+        fiveHour: win(1, 600, "rejected"),
+        sevenDay: win(0.2, 86400),
+        observedAt: NOW_SEC,
+      },
+      b: {
+        fiveHour: win(0.1, 300),
+        sevenDay: win(1, 7200),
+        observedAt: NOW_SEC,
+      },
+      c: { fiveHour: win(1, 60), sevenDay: win(1, 3600), observedAt: NOW_SEC },
+    }
+    const r = recoveryTimes(
+      members("a", "b", "c"),
+      cache as never,
+      cfg(),
+      NOW_MS,
+    )
+    assert.deepEqual(
+      r.map((x) => [x.source, (x.at - NOW_MS) / 1000]),
+      [
+        ["a", 600],
+        ["c", 3600],
+        ["b", 7200],
+      ],
+    )
+  })
+  it("leaves out unusable credentials and accounts already free", () => {
+    const cache = {
+      a: { fiveHour: win(1, 600), observedAt: NOW_SEC },
+      b: { fiveHour: win(0.2, 600), observedAt: NOW_SEC },
+    }
+    const ms = [
+      { source: "a", credential: "unusable" as const },
+      { source: "b" },
+    ]
+    assert.deepEqual(recoveryTimes(ms, cache as never, cfg(), NOW_MS), [])
+  })
+})
+
+describe("spentRetry", () => {
+  const clock = (ms: number) => `T+${Math.round((ms - NOW_MS) / 60000)}m`
+  it("names the next account and its real wait, but re-checks within a minute", () => {
+    const r = spentRetry(
+      { name: "Alt 2", at: NOW_MS + 7020_000 },
+      NOW_MS,
+      clock,
+      896,
+    )
+    assert.equal(r.retryAfterS, 60)
+    assert.match(r.message, /Next back: Alt 2 at T\+117m \(in 1h57m\)/)
+  })
+  it("retries at the reset when it is sooner than the re-check", () => {
+    assert.equal(
+      spentRetry({ name: "a", at: NOW_MS + 20_000 }, NOW_MS, clock).retryAfterS,
+      20,
+    )
+  })
+  it("still re-checks when no reset is known", () => {
+    const r = spentRetry(undefined, NOW_MS, clock)
+    assert.equal(r.retryAfterS, 60)
+    assert.match(r.message, /no reset time is known/)
   })
 })

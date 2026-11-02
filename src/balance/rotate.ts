@@ -29,8 +29,12 @@ import {
   type Decision,
   clearEjection,
   eject,
+  recoveryTimes,
+  resolvePools,
   selectAccount,
+  spentRetry,
 } from "./balancer.ts"
+import { accountKey } from "./account-key.ts"
 import type { ClaudeAccount } from "../keychain.ts"
 import {
   type HeaderLike,
@@ -513,4 +517,48 @@ export function noteRejection(
 /** An account that just served a request is not ejected. */
 export function noteSuccess(source: string | null): void {
   if (source) clearEjection(source)
+}
+
+/**
+ * The retry to hand OpenCode when the request was refused on every account it
+ * could try: the selection's next account back, and when. Never throws.
+ */
+export function spentRetryNow(
+  serverRetryAfterS?: number,
+  nowMs: number = Date.now(),
+): { retryAfterS: number; message: string } {
+  const clock = (ms: number) =>
+    new Date(ms).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+  try {
+    const { cfg } = resolveActiveConfig(
+      getConfig(),
+      loadPersistedAccountSource(),
+    )
+    const all = listAccounts().map((a) => ({
+      source: a.source,
+      label: a.label,
+      credential: credentialState(a),
+    }))
+    const inPool = new Set(resolvePools(all, cfg).flatMap((p) => p.accounts))
+    const members = all.filter((m) => inPool.has(m.source))
+    const first = recoveryTimes(members, readQuotaCache(), cfg, nowMs)[0]
+    const id = first ? accountKey(first.source) : undefined
+    const name = first
+      ? (cfg.accountIds[id!]?.name ??
+        members.find((m) => m.source === first.source)?.label ??
+        id!)
+      : undefined
+    return spentRetry(
+      first ? { name: name!, at: first.at } : undefined,
+      nowMs,
+      clock,
+      serverRetryAfterS,
+    )
+  } catch {
+    return spentRetry(undefined, nowMs, clock, serverRetryAfterS)
+  }
 }
