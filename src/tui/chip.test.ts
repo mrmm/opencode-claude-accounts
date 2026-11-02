@@ -505,8 +505,35 @@ describe("account allow-list", () => {
     assert.equal(toggleAccount(ALL, ["s2"], "s2"), null)
   })
 
-  it("keeps preference order rather than click order", () => {
-    assert.deepEqual(toggleAccount(ALL, ["s3"], "s1"), ["s1", "s3"])
+  it("keeps the configured order and appends what is added", () => {
+    assert.deepEqual(toggleAccount(ALL, ["s3"], "s1"), ["s3", "s1"])
+  })
+
+  // Regression: after accounts moved to ids the allow-list matched nothing,
+  // so the sidebar showed every Keychain account in Keychain order.
+  describe("with id references", () => {
+    const byId: Record<string, string> = { a3: "s3", a1: "s1", a2: "s2" }
+    const resolve = (ref: string) =>
+      byId[ref] ?? (ref.startsWith("s") ? ref : undefined)
+    const refOf = (s: string) => `a${s.slice(1)}`
+
+    it("resolves ids and follows the configured order", () => {
+      assert.deepEqual(enabledSources(ALL, ["a3", "a1"], resolve), ["s3", "s1"])
+    })
+
+    it("toggles by id, keeping order and spelling", () => {
+      assert.deepEqual(
+        toggleAccount(ALL, ["a3", "a1"], "s2", resolve, refOf),
+        [],
+      )
+      assert.deepEqual(toggleAccount(ALL, ["a3", "s1"], "s3", resolve, refOf), [
+        "s1",
+      ])
+      assert.deepEqual(toggleAccount(ALL, ["a3"], "s2", resolve, refOf), [
+        "a3",
+        "a2",
+      ])
+    })
   })
 
   it("marks each row with its state and short name", () => {

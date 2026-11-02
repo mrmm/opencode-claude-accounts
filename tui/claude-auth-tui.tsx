@@ -236,11 +236,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
    * toggle dialog deliberately shows the full set, since you cannot re-enable
    * something you cannot see.
    */
+  // Config references are ids since the migration; resolve them the way the
+  // balancer does, so the TUI and routing agree on what is enabled.
+  const refToSource = (ref: string) =>
+    resolveRef(ref, accounts as { source: string; label?: string }[])
+  const enabled = () =>
+    enabledSources(accounts, getConfig().accounts, refToSource)
+  // In the configured order, which is the order the user ranks accounts in.
   const visible = () =>
-    (() => {
-      const allowed = new Set(enabledSources(accounts, getConfig().accounts))
-      return accounts.filter((a) => allowed.has(a.source))
-    })()
+    enabled().flatMap((s) => accounts.filter((a) => a.source === s))
 
   /**
    * Hue means load, and only load.
@@ -1700,14 +1704,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
 
           const menu = () => {
             const cfg = getConfig()
-            const enabled = enabledSources(accounts, cfg.accounts).length
+            const enabledCount = enabled().length
             const needIds = unassigned()
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
                 title="Claude accounts"
                 options={[
                   {
-                    title: `Accounts in use: ${enabled} of ${accounts.length}`,
+                    title: `Accounts in use: ${enabledCount} of ${accounts.length}`,
                     value: "__accounts__",
                     description: "include or exclude an account",
                     category: "Accounts",
@@ -1884,9 +1888,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             const row = accountCapRow({
               id,
               name: displayNames().get(a.source) ?? a.source,
-              enabled: enabledSources(accounts, cfg.accounts).includes(
-                a.source,
-              ),
+              enabled: enabled().includes(a.source),
               five: ceilingView(u.five, ceilingFor(cfg, id, "5h")),
               week: ceilingView(u.week, ceilingFor(cfg, id, "7d")),
               capMode: cfg.capMode,
@@ -1905,7 +1907,10 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 title="Accounts the balancer may use"
                 options={[
                   backRow("accounts"),
-                  ...accounts.map(capRowOf),
+                  ...[
+                    ...visible(),
+                    ...accounts.filter((a) => !enabled().includes(a.source)),
+                  ].map(capRowOf),
                   ...accounts.map((a) => ({
                     title: `Ceilings for ${accountKey(a.source)}`,
                     value: `c:${a.source}`,
@@ -1928,6 +1933,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     accounts,
                     getConfig().accounts,
                     String(row.value),
+                    refToSource,
+                    accountKey,
                   )
                   if (!next) {
                     api.ui.toast({
@@ -2931,7 +2938,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                       const seeded = {
                         label: checked.name,
                         strategy: "round-robin",
-                        accounts: enabledSources(accounts, cfg.accounts),
+                        accounts: enabled().map(accountKey),
                       }
                       savePresets(
                         { ...cfg.presets, [checked.name]: seeded },

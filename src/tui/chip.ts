@@ -672,12 +672,18 @@ export function ago(at: number, now: number = Date.now()): string {
 export function enabledSources(
   all: ChipAccount[],
   allowList: string[],
+  resolve: (ref: string) => string | undefined = (ref) => ref,
 ): string[] {
   if (allowList.length === 0) return all.map((a) => a.source)
   // An entry matching nothing is ignored rather than stranding the plugin, so
   // the same is done here: the list is filtered against what actually exists.
+  // Kept in allow-list order: that order is how the user ranks the accounts.
   const known = new Set(all.map((a) => a.source))
-  const kept = allowList.filter((s) => known.has(s))
+  const kept: string[] = []
+  for (const ref of allowList) {
+    const s = resolve(ref)
+    if (s && known.has(s) && !kept.includes(s)) kept.push(s)
+  }
   return kept.length > 0 ? kept : all.map((a) => a.source)
 }
 
@@ -691,22 +697,30 @@ export function enabledSources(
  * Returns `[]` when everything ends up enabled, because that is how the config
  * spells "all" and writing four entries that happen to be all of them would
  * pin the set: an account added later would arrive disabled.
+ *
+ * Entries keep their spelling and order; an added account is appended as
+ * `refOf(source)` (its id, when it has one).
  */
 export function toggleAccount(
   all: ChipAccount[],
   allowList: string[],
   source: string,
+  resolve: (ref: string) => string | undefined = (ref) => ref,
+  refOf: (source: string) => string = (s) => s,
 ): string[] | null {
-  const enabled = new Set(enabledSources(all, allowList))
-  if (enabled.has(source)) {
-    if (enabled.size === 1) return null
-    enabled.delete(source)
+  const enabled = enabledSources(all, allowList, resolve)
+  const refs = enabled.map(
+    (s) => allowList.find((r) => resolve(r) === s) ?? refOf(s),
+  )
+  const at = enabled.indexOf(source)
+  if (at >= 0) {
+    if (enabled.length === 1) return null
+    refs.splice(at, 1)
   } else {
-    enabled.add(source)
+    refs.push(refOf(source))
   }
-  if (enabled.size === all.length) return []
-  // Preserve the configured order, which is preference order.
-  return all.map((a) => a.source).filter((s) => enabled.has(s))
+  if (refs.length === all.length) return []
+  return refs
 }
 
 /** Rows for the include/exclude dialog. */
@@ -715,8 +729,9 @@ export function accountToggleRows(
   allowList: string[],
   quota: QuotaCache,
   names: Map<string, string> = shortNames(all),
+  resolve: (ref: string) => string | undefined = (ref) => ref,
 ): PickerOption[] {
-  const enabled = new Set(enabledSources(all, allowList))
+  const enabled = new Set(enabledSources(all, allowList, resolve))
   return all.map((a) => {
     const state = enabled.has(a.source) ? "[x]" : "[ ]"
     const load = quotaText(quota, a.source, { spend: true })
