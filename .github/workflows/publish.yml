@@ -1,9 +1,8 @@
 name: Publish to npm
 
+# Not published to npm from this fork; run by hand if that changes.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 jobs:
   publish:

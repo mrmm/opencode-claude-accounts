@@ -1019,6 +1019,25 @@ export ANTHROPIC_CLI_VERSION=2.2.0
 - If credentials aren't OAuth-based, the auth loader returns `{}` and falls through to API key auth
 - If credentials are unavailable or unreadable, the plugin disables itself and OpenCode continues without Claude auth
 
+## Versioning and releases
+
+This fork has its own version line, separate from upstream: semver from
+`3.0.0`, tagged `accounts-vX.Y.Z` so it never collides with upstream's `vX.Y.Z`
+tags.
+
+- Commits on `main` follow Conventional Commits. `fix:` makes a patch release,
+  `feat:` a minor one, and `feat!:` or a `BREAKING CHANGE:` footer a major one.
+- On every push to `main`, release-please opens or updates a release PR that
+  bumps `package.json` and `.release-please-manifest.json` and prepends to
+  `CHANGELOG.md`.
+- Merging that PR tags `accounts-vX.Y.Z` and publishes a GitHub release.
+  Nothing is published to npm.
+- The running build is shown as `<version>+<commit>` in the sidebar header and
+  in `dist/build-info.json`, so a stale process is visible at a glance.
+
+Feature work lands on a branch and reaches `main` through a PR, after
+`pnpm test`, `pnpm build`, `pnpm check:tui` and `pnpm lint` pass.
+
 ## Credits and lineage
 
 This is a fork, and most of what it is rests on other people's work.

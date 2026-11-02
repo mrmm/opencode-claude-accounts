@@ -9,7 +9,6 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
-  id-token: write
 
 jobs:
   release:
@@ -19,28 +18,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Fork releases: accounts-v* tags, GitHub release only, no npm publish.
+      # Version + changelog come from conventional commits via the manifest.
       - uses: googleapis/release-please-action@v4
-        id: release-please
         with:
-          release-type: node
-
-      - uses: pnpm/action-setup@v4
-        if: steps.release-please.outputs.releases_created == 'true'
-
-      - uses: actions/setup-node@v4
-        if: steps.release-please.outputs.releases_created == 'true'
-        with:
-          node-version: "22"
-          cache: "pnpm"
-          registry-url: "https://registry.npmjs.org"
-
-      - run: pnpm install --frozen-lockfile
-        if: steps.release-please.outputs.releases_created == 'true'
-
-      - run: pnpm run build
-        if: steps.release-please.outputs.releases_created == 'true'
-
-      - run: pnpm publish --access public --provenance --no-git-checks
-        if: steps.release-please.outputs.releases_created == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
