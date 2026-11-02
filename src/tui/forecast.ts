@@ -14,11 +14,17 @@
  *  - "Now" pace is the last 30 minutes; "typical" is the whole history divided
  *    by the time actually spent working (10-minute buckets with a request), so
  *    a night of idling does not make a busy afternoon look like a spike.
- *  - The forecast simulates the pool forward: usage drains whichever accounts
- *    still have room, and each account's window refills at its own reset.
- *    The 5h window runs at the current pace (it is the one a burst threatens);
- *    the weekly window at the wall-clock average of the last 24h, because a week
- *    includes the nights.
+ *  - Capacity per account is its CEILING (default 1): the share the operator
+ *    allows the pool to spend before leaving the rest for outside users. The
+ *    pool "runs out" when it reaches those ceilings, not the full windows.
+ *  - Two things drain a window: our own traffic, and everyone else on the same
+ *    subscription. `outsideBurn` learns each account's utilisation-per-token
+ *    ratio from buckets where WE sent tokens, then books the rise it cannot
+ *    explain (plus any rise in a bucket where we sent nothing) to the outside.
+ *  - The forecast simulates the pool forward: our pace drains whichever accounts
+ *    still have room, each account's own outside pace drains it regardless, and
+ *    each window refills at its reset. The 5h window runs at the current pace;
+ *    the weekly window at the wall-clock average of the last 24h.
  *  - Utilisation is a fraction of ONE account's window, so a pool of two holds
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
@@ -31,15 +37,48 @@ export type PaceSample = {
   at: number
   u5?: number
   u7?: number
+  /** Requests in this bucket. Absent (fallback source) is treated as unknown. */
+  reqs?: number
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+}
+
+/** A learned burn pace for one account and window, or unknown when too few buckets back it. */
+export type OutsidePace = {
+  /** Fraction of the account's window per hour (5h) or per day (7d). Undefined when unknown. */
+  pace?: number
+  /** How many buckets fed the estimate. 0 => unknown. */
+  buckets: number
 }
 
 export type WindowForecast = {
-  /** Fraction of one account per hour. */
+  /** Our own consumption, fraction of one account per hour (5h) or per day (7d). */
   pace: number
+  /** Our pace + the pool's outside pace: what the simulation actually drains. */
+  ourPace: number
+  outsidePace: number
   /** Unix seconds when the pool runs dry, or undefined when it lasts. */
   runsOutAt?: number
   /** Unix seconds the simulation covered up to. */
   horizon: number
+  /** Room above the ceilings, summed over accounts: what is left for outside users. */
+  reserveLeft: number
+}
+
+export type AccountForecast = {
+  account: string
+  /** Current utilisation of this account's window, fraction 0..1. */
+  used: number
+  /** The ceiling the operator allows the pool to spend, fraction 0..1. */
+  ceiling: number
+  /** Our pace against this account, fraction of the window per hour (5h) / per day (7d). */
+  ourPace: number
+  /** Outside burn against this account, same unit. Undefined when unknown. */
+  outsidePace?: number
+  /** Unix seconds this account alone runs out against its ceiling, if it does. */
+  runsOutAt?: number
 }
 
 export type Forecast = {
@@ -49,6 +88,8 @@ export type Forecast = {
   spike?: number
   five: WindowForecast
   week: WindowForecast
+  fivePerAccount: AccountForecast[]
+  weekPerAccount: AccountForecast[]
   idle: boolean
   /** 5h-window burn per bucket over the last CHART_S, oldest first. */
   history: number[]
@@ -60,15 +101,26 @@ export type Forecast = {
   resets: { account: string; at: number; used: number }[]
 }
 
+/** Optional inputs: ceilings cap each account's usable window; 1 (full window) is the default. */
+export type ForecastOpts = {
+  /** Per-account ceiling per window, fraction 0..1. Missing account => full window. */
+  ceilings?: Record<string, { five: number; week: number }>
+}
+
 const HOUR = 3600
+const DAY = 24 * HOUR
 const NOW_WINDOW_S = 30 * 60
 const BUCKET_MS = 10 * 60 * 1000
 const STEP_S = 5 * 60
 const FIVE_H = 5 * HOUR
-const WEEK = 7 * 24 * HOUR
+const WEEK = 7 * DAY
 const CHART_S = FIVE_H
 const CHART_BUCKETS = 20
 const CHART_ROWS = 3
+/** Below this many token-bearing buckets, the per-token ratio is noise, not a signal. */
+const MIN_RATIO_BUCKETS = 5
+/** Below this many window buckets, outside burn is unknown rather than zero. */
+const MIN_OUTSIDE_BUCKETS = 3
 
 /** Sum of rises per account, counting only pairs that both fall in [from, to] ms. */
 export function consumed(
@@ -131,16 +183,118 @@ export function activeHours(
   return (buckets.size * BUCKET_MS) / 3_600_000
 }
 
+const median = (xs: number[]): number => {
+  if (xs.length === 0) return 0
+  const s = [...xs].sort((a, b) => a - b)
+  const m = Math.floor(s.length / 2)
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
+}
+
+const tokens = (s: PaceSample): number =>
+  (s.input ?? 0) + (s.output ?? 0) + (s.cacheRead ?? 0) + (s.cacheWrite ?? 0)
+
+/**
+ * How fast each account's window is drained by traffic that is NOT ours.
+ *
+ * We only see the utilisation gauge move; it moves for our requests and for
+ * everyone else on the same subscription. So we learn, per account, how much
+ * the gauge rises per token WE send (the median ratio over buckets where we did
+ * send tokens, which is robust to the odd outlier), then attribute to the
+ * outside whatever rise a bucket shows beyond what our tokens explain — and all
+ * of any rise in a bucket where we sent nothing at all (the idle-probe signal).
+ *
+ * Pure. Returns a pace per hour for the 5h window and per day for the 7d window,
+ * marked unknown (undefined pace) when too few buckets back it to trust.
+ *
+ * @param now unix seconds
+ */
+export function outsideBurn(
+  samples: PaceSample[],
+  now: number,
+): Record<string, { five: OutsidePace; week: OutsidePace }> {
+  const nowMs = now * 1000
+  const byAccount = new Map<string, PaceSample[]>()
+  for (const s of samples) {
+    const arr = byAccount.get(s.account) ?? []
+    arr.push(s)
+    byAccount.set(s.account, arr)
+  }
+
+  const out: Record<string, { five: OutsidePace; week: OutsidePace }> = {}
+  for (const [account, rows] of byAccount) {
+    const sorted = [...rows].sort((a, b) => a.at - b.at)
+
+    // Learn k = utilisation rise per token, from buckets we drove.
+    const ratios: number[] = []
+    let prev5: number | undefined
+    for (const s of sorted) {
+      const v = s.u5
+      const tok = tokens(s)
+      if (typeof v === "number") {
+        if (prev5 !== undefined && v > prev5 && tok > 0)
+          ratios.push((v - prev5) / tok)
+        prev5 = v
+      }
+    }
+    const k = ratios.length >= MIN_RATIO_BUCKETS ? median(ratios) : undefined
+
+    const windowPace = (
+      key: "u5" | "u7",
+      fromMs: number,
+      perSeconds: number,
+    ): OutsidePace => {
+      let outside = 0
+      let buckets = 0
+      let prev: number | undefined
+      for (const s of sorted) {
+        const v = s[key]
+        if (typeof v !== "number") continue
+        if (s.at < fromMs) {
+          prev = v
+          continue
+        }
+        if (prev !== undefined) {
+          buckets++
+          const rise = Math.max(0, v - prev)
+          const ours = k !== undefined ? k * tokens(s) : 0
+          outside += Math.max(0, rise - ours)
+        }
+        prev = v
+      }
+      if (buckets < MIN_OUTSIDE_BUCKETS) return { pace: undefined, buckets }
+      const spanS = (nowMs - fromMs) / 1000
+      return {
+        pace: spanS > 0 ? (outside / spanS) * perSeconds : 0,
+        buckets,
+      }
+    }
+
+    out[account] = {
+      five: windowPace("u5", nowMs - FIVE_H * 1000, HOUR),
+      week: windowPace("u7", nowMs - WEEK * 1000, DAY),
+    }
+  }
+  return out
+}
+
 type Slot = {
   used: number
+  /** Ceiling: the pool may spend up to here, leaving 1 - ceiling in reserve. Default 1. */
+  ceiling?: number
   resetsAt?: number
   period: number
   blocked: boolean
+  /** Outside pace, fraction of this account's window per STEP (not per hour). Default 0. */
+  outsidePerStep?: number
 }
 
 /**
  * Drain the pool at `pace` (fraction per hour) from `now` until `horizon`.
  * Returns the moment no account has room left, or undefined if it lasts.
+ *
+ * Capacity is each slot's ceiling, so "room" is `ceiling - used`. Outside burn
+ * drains each slot independently every step, before we take our share; a reset
+ * zeroes a slot's usage and pushes its boundary one period out.
  */
 export function simulate(
   slots: Slot[],
@@ -149,8 +303,15 @@ export function simulate(
   horizon: number,
   trace?: (room: number) => void,
 ): number | undefined {
-  if (pace <= 0 && !trace) return undefined
-  const s = slots.map((x) => ({ ...x }))
+  const anyOutside = slots.some((x) => (x.outsidePerStep ?? 0) > 0)
+  if (pace <= 0 && !anyOutside && !trace) return undefined
+  const s = slots.map((x) => ({
+    ...x,
+    ceiling: x.ceiling ?? 1,
+    outsidePerStep: x.outsidePerStep ?? 0,
+  }))
+  const room = (x: { ceiling: number; used: number }) =>
+    Math.max(0, x.ceiling - x.used)
   let need = 0
   for (let t = now; t < horizon; t += STEP_S) {
     for (const x of s) {
@@ -159,18 +320,17 @@ export function simulate(
         x.resetsAt += x.period
       }
     }
+    // Outside users spend first; they do not respect our ceilings.
+    for (const x of s) if (!x.blocked) x.used += x.outsidePerStep
     need += (pace * STEP_S) / HOUR
     for (const x of s) {
       if (need <= 0) break
       if (x.blocked) continue
-      const room = Math.max(0, 1 - x.used)
-      const take = Math.min(room, need)
+      const take = Math.min(room(x), need)
       x.used += take
       need -= take
     }
-    trace?.(
-      s.reduce((r, x) => r + (x.blocked ? 0 : Math.max(0, 1 - x.used)), 0),
-    )
+    trace?.(s.reduce((r, x) => r + (x.blocked ? 0 : room(x)), 0))
     if (need > 1e-9) return t
   }
   return undefined
@@ -189,9 +349,15 @@ export function forecast(
   quota: QuotaCache,
   accounts: string[],
   now: number = Math.floor(Date.now() / 1000),
+  opts: ForecastOpts = {},
 ): Forecast {
   const nowMs = now * 1000
   const own = samples.filter((s) => accounts.includes(s.account))
+  const ceilings = opts.ceilings ?? {}
+  const ceilingOf = (a: string, w: "five" | "week") => {
+    const c = ceilings[a]?.[w]
+    return c === undefined ? 1 : frac(c)
+  }
 
   const nowPace =
     (consumed(own, "u5", nowMs - NOW_WINDOW_S * 1000, nowMs) / NOW_WINDOW_S) *
@@ -206,7 +372,13 @@ export function forecast(
   const weekPace =
     consumed(own, "u7", nowMs - 24 * HOUR * 1000, nowMs) / daySpan
 
-  const slots = (key: "fiveHour" | "sevenDay", period: number): Slot[] =>
+  const burn = outsideBurn(own, now)
+
+  const slots = (
+    key: "fiveHour" | "sevenDay",
+    w: "five" | "week",
+    period: number,
+  ): Slot[] =>
     accounts.map((a) => {
       const q = quota?.[a] as
         | {
@@ -222,10 +394,10 @@ export function forecast(
             }
           }
         | undefined
-      const w = q?.[key]
+      const win = q?.[key]
       const resetsAt =
-        typeof w?.resetsAt === "number" && w.resetsAt > 0
-          ? w.resetsAt
+        typeof win?.resetsAt === "number" && win.resetsAt > 0
+          ? win.resetsAt
           : undefined
       const turned = resetsAt !== undefined && resetsAt <= now
       // An account out of WEEKLY quota cannot serve the 5h window either.
@@ -235,20 +407,24 @@ export function forecast(
           (q?.sevenDay?.resetsAt ?? 0) <= now &&
           (q?.sevenDay?.resetsAt ?? 0) > 0
         )
+      const outsidePerHour = burn[a]?.[w]?.pace ?? 0
+      const perStepDivisor = w === "five" ? HOUR / STEP_S : DAY / STEP_S
       return {
-        used: turned ? 0 : frac(w?.utilization),
+        used: turned ? 0 : frac(win?.utilization),
+        ceiling: ceilingOf(a, w),
         resetsAt: turned ? resetsAt + period : resetsAt,
         period,
         blocked: key === "fiveHour" && weekGone,
+        outsidePerStep: outsidePerHour / perStepDivisor,
       }
     })
 
-  const fiveSlots = slots("fiveHour", FIVE_H)
+  const fiveSlots = slots("fiveHour", "five", FIVE_H)
   const fiveHorizon = Math.max(
     now + 24 * HOUR,
     ...fiveSlots.map((s) => s.resetsAt ?? 0),
   )
-  const weekSlots = slots("sevenDay", WEEK)
+  const weekSlots = slots("sevenDay", "week", WEEK)
   const weekHorizon = Math.max(
     now + WEEK,
     ...weekSlots.map((s) => s.resetsAt ?? 0),
@@ -258,20 +434,66 @@ export function forecast(
   simulate(fiveSlots, nowPace, now, now + CHART_S, (r) => ahead.push(r))
   while (ahead.length < CHART_S / STEP_S) ahead.push(0)
 
+  const outsideSum = (w: "five" | "week") =>
+    accounts.reduce((r, a) => r + (burn[a]?.[w]?.pace ?? 0), 0)
+
+  const reserveLeft = (sl: Slot[]) =>
+    sl.reduce(
+      (r, x) =>
+        r + (x.blocked ? 0 : Math.max(0, 1 - Math.max(x.used, x.ceiling ?? 1))),
+      0,
+    )
+
+  const perAccount = (
+    sl: Slot[],
+    w: "five" | "week",
+    horizon: number,
+  ): AccountForecast[] =>
+    accounts.map((a, i) => {
+      const slot = sl[i]!
+      const outsidePace = burn[a]?.[w]?.pace
+      // This account alone against its ceiling: our whole pace on just this slot.
+      const solo = simulate(
+        [{ ...slot }],
+        w === "five" ? nowPace : weekPace,
+        now,
+        horizon,
+      )
+      return {
+        account: a,
+        used: slot.used,
+        ceiling: slot.ceiling ?? 1,
+        ourPace: slot.blocked ? 0 : w === "five" ? nowPace : weekPace,
+        outsidePace,
+        runsOutAt: slot.blocked ? undefined : solo,
+      }
+    })
+
+  const fiveOutside = outsideSum("five")
+  const weekOutside = outsideSum("week")
+
   return {
     nowPace,
     typicalPace,
     spike: nowPace > 0 && typicalPace > 0 ? nowPace / typicalPace : undefined,
     five: {
       pace: nowPace,
+      ourPace: nowPace,
+      outsidePace: fiveOutside,
       runsOutAt: simulate(fiveSlots, nowPace, now, fiveHorizon),
       horizon: fiveHorizon,
+      reserveLeft: reserveLeft(fiveSlots),
     },
     week: {
       pace: weekPace,
+      ourPace: weekPace,
+      outsidePace: weekOutside,
       runsOutAt: simulate(weekSlots, weekPace, now, weekHorizon),
       horizon: weekHorizon,
+      reserveLeft: reserveLeft(weekSlots),
     },
+    fivePerAccount: perAccount(fiveSlots, "five", fiveHorizon),
+    weekPerAccount: perAccount(weekSlots, "week", weekHorizon),
     idle: nowPace === 0,
     history: burnHistory(own, nowMs, CHART_S * 1000, CHART_BUCKETS),
     ahead,
@@ -287,6 +509,7 @@ export function forecast(
 }
 
 const pctH = (v: number) => `${Math.round(v * 100)}%/h`
+const pctD = (v: number) => `${Math.round(v * 100)}%/d`
 
 /** Sidebar lines. `clock` renders a unix-seconds moment (resetClock in chip.ts). */
 export function forecastLines(
@@ -294,6 +517,7 @@ export function forecastLines(
   clock: (epoch: number) => string,
   names: Map<string, string> = new Map(),
 ): Row[] {
+  const name = (a: string) => names.get(a) ?? a
   const spike =
     f.spike !== undefined && f.spike >= 1.5 ? ` ↑${f.spike.toFixed(1)}×` : ""
   // How long the pool lasts at the window's pace, and the clock time it ends.
@@ -309,6 +533,25 @@ export function forecastLines(
           value: `✗ out in ${formatDuration(w.runsOutAt - f.now)} · ~${clock(w.runsOutAt)}`,
           level: w.runsOutAt - f.now < HOUR ? "critical" : "warn",
         }
+  // "ours x/h · outside y/h" so a surprise can be blamed on the pool's neighbours.
+  const burnLine = (
+    label: string,
+    w: WindowForecast,
+    unit: typeof pctH,
+  ): Row => ({
+    label,
+    value: `ours ${unit(w.ourPace)} · outside ${unit(w.outsidePace)}`,
+    level: w.outsidePace > w.ourPace ? "warn" : "ok",
+  })
+  // id used/ceiling · ours · outside — one line per account for the active window.
+  const acctLine = (a: AccountForecast, unit: typeof pctH): Row => ({
+    label: name(a.account),
+    value: `${pct(a.used)}/${pct(a.ceiling)} · ours ${unit(a.ourPace)} · outside ${
+      a.outsidePace === undefined ? "?" : unit(a.outsidePace)
+    }`,
+    level:
+      a.runsOutAt !== undefined && a.runsOutAt - f.now < HOUR ? "warn" : "ok",
+  })
   return [
     {
       label: "now",
@@ -319,7 +562,11 @@ export function forecastLines(
     f.idle
       ? { label: "5h", value: "idle — no forecast", level: "ok" }
       : line("5h", f.five),
+    burnLine("5h burn", f.five, pctH),
+    ...f.fivePerAccount.map((a) => acctLine(a, pctH)),
     line("week", f.week),
+    burnLine("wk burn", f.week, pctD),
+    ...f.weekPerAccount.map((a) => acctLine(a, pctD)),
     ...chartLines(f, clock, names),
   ]
 }
