@@ -70,9 +70,28 @@ export function bucketStart(ms: number): number {
  */
 export class SampleAggregator {
   private live = new Map<string, Sample>()
-  private readonly onFlush: (s: Sample) => void
-  constructor(onFlush: (s: Sample) => void) {
+  /** Where each live bucket goes, fixed when the bucket opens. */
+  private targets = new Map<string, string>()
+  private readonly onFlush: (s: Sample, path?: string) => void
+  private readonly target: (() => string) | undefined
+  /**
+   * `target` is read when a bucket opens, not when it flushes: the exit flush
+   * runs after HOME may have changed (a test restoring it), and must not write
+   * that bucket into a different user's data.
+   */
+  constructor(
+    onFlush: (s: Sample, path?: string) => void,
+    target?: () => string,
+  ) {
     this.onFlush = onFlush
+    this.target = target
+  }
+
+  private emit(key: string, s: Sample): void {
+    const path = this.targets.get(key)
+    this.targets.delete(key)
+    if (path === undefined) this.onFlush(s)
+    else this.onFlush(s, path)
   }
 
   private key(account: string, bucket: number): string {
@@ -87,7 +106,7 @@ export class SampleAggregator {
     // Covers the common case (time moving forward) without a timer.
     for (const [key, s] of this.live) {
       if (s.account === o.account && s.at < bucket) {
-        this.onFlush(s)
+        this.emit(key, s)
         this.live.delete(key)
       }
     }
@@ -104,6 +123,7 @@ export class SampleAggregator {
         cacheWrite: 0,
       }
       this.live.set(k, s)
+      if (this.target) this.targets.set(k, this.target())
     }
     s.reqs += 1
     s.input += o.input ?? 0
@@ -116,7 +136,7 @@ export class SampleAggregator {
 
   /** Emit every live bucket and clear. Call on interval and at exit. */
   flush(): void {
-    for (const s of this.live.values()) this.onFlush(s)
+    for (const [key, s] of this.live) this.emit(key, s)
     this.live.clear()
   }
 }

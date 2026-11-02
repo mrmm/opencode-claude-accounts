@@ -167,3 +167,21 @@ describe("appendSample + readSamples", () => {
     assert.equal(readSamples(path).length, 1)
   })
 })
+
+// Regression: a test pointed HOME at a temp dir, restored it, and the exit
+// flush then wrote its fixture rows into the real samples file.
+describe("SampleAggregator target", () => {
+  it("writes each bucket to the path current when it opened", () => {
+    const out: Array<[string, string | undefined]> = []
+    let where = "/tmp/a"
+    const agg = new SampleAggregator(
+      (s, p) => out.push([s.account, p]),
+      () => where,
+    )
+    agg.observe({ at: 1_000, account: "x" })
+    where = "/tmp/b"
+    agg.observe({ at: 2_000, account: "x" })
+    agg.flush()
+    assert.deepEqual(out, [["x", "/tmp/a"]])
+  })
+})

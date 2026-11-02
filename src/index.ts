@@ -31,6 +31,7 @@ import {
   parseNonStreamUsage,
   SampleAggregator,
   appendSample,
+  samplesPath,
   applyCacheTtl,
   resolveTtl,
   type UsageTokens,
@@ -175,7 +176,7 @@ const sessionId = crypto.randomUUID()
 // to claude-auth-samples.jsonl when a bucket closes. Held here so every request
 // in the process feeds the same aggregator. Flushed on a timer and at exit so a
 // short-lived process still records its final, open bucket.
-const sampleAggregator = new SampleAggregator(appendSample)
+const sampleAggregator = new SampleAggregator(appendSample, samplesPath)
 const SAMPLE_FLUSH_MS = 60_000
 
 // Per-session request timing, for the "auto" cache TTL: when a session was
