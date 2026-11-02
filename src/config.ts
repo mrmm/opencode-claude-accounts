@@ -445,6 +445,48 @@ export function parsePresets(v: unknown): Record<string, Preset> | undefined {
   return out
 }
 
+/**
+ * Server-side context editing. `false` off (default); `true` on with defaults;
+ * an object overrides individual knobs. Resolved to numbers in
+ * `balance/context-edit.ts`; this stays the raw, partial shape a file can hold.
+ */
+export type ContextEditingOptions = {
+  trigger?: number
+  keep?: number
+  clearAtLeast?: number
+  excludeTools?: string[]
+}
+
+const positiveInt = (x: unknown): number | undefined => {
+  const n = Number(x)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined
+}
+
+/** Keep only the valid numeric knobs; drop a bad one rather than the whole object. */
+export function parseContextEditing(
+  v: unknown,
+): boolean | ContextEditingOptions | undefined {
+  const b = bool(v)
+  if (b !== undefined) return b
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const r = v as Record<string, unknown>
+  const out: ContextEditingOptions = {}
+  const trigger = positiveInt(r.trigger)
+  if (trigger !== undefined) out.trigger = trigger
+  const keep = positiveInt(r.keep)
+  if (keep !== undefined) out.keep = keep
+  const clearAtLeast = positiveInt(r.clearAtLeast)
+  if (clearAtLeast !== undefined) out.clearAtLeast = clearAtLeast
+  if (Array.isArray(r.excludeTools)) {
+    const names = r.excludeTools
+      .filter((e): e is string => typeof e === "string")
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0)
+    if (names.length > 0) out.excludeTools = [...new Set(names)]
+  }
+  return out
+}
+
 export type ClaudeAuthConfig = {
   /** false disables logging; true uses the default path; a string is a path. */
   debug: boolean | string
@@ -585,6 +627,15 @@ export type ClaudeAuthConfig = {
    */
   contextLimit: number
   /**
+   * Server-side context editing on `/v1/messages` requests that carry tools:
+   * let Anthropic clear the oldest tool results once the input crosses a token
+   * trigger, instead of carrying every one to the limit. `false` off (default);
+   * `true` on with defaults; an object overrides the trigger / keep /
+   * clear-at-least knobs. Off by default because clearing invalidates the
+   * cached prefix.
+   */
+  contextEditing: boolean | ContextEditingOptions
+  /**
    * Record the SHAPE of outgoing requests for later analysis: which system
    * blocks, how large, which tools, how much is cacheable. "off" by default
    * because a request body contains the conversation.
@@ -668,6 +719,7 @@ export const DEFAULT_CONFIG: ClaudeAuthConfig = {
   preset: "",
   tools: true,
   contextLimit: 0,
+  contextEditing: false,
 }
 
 /**
@@ -791,6 +843,11 @@ export function sanitize(raw: unknown): Partial<ClaudeAuthConfig> {
   if (r.contextLimit !== undefined) {
     const limit = strictInt(String(r.contextLimit))
     if (limit !== undefined && limit >= 0) out.contextLimit = limit
+  }
+
+  if (r.contextEditing !== undefined) {
+    const ce = parseContextEditing(r.contextEditing)
+    if (ce !== undefined) out.contextEditing = ce
   }
 
   const autoSwitch = bool(r.autoSwitch)
@@ -971,6 +1028,16 @@ const ENV_PARSERS: Record<string, EnvParser> = {
   pinBlocksRotation: (v) => v === "1",
   tools: (v) => v === "1",
   contextLimit: strictInt,
+  // "1"/"0" toggle the defaults; a JSON object overrides individual knobs.
+  contextEditing: (v) => {
+    if (v === "1") return true
+    if (v === "0") return false
+    try {
+      return parseContextEditing(JSON.parse(v))
+    } catch {
+      return undefined
+    }
+  },
   weights: (v) => {
     try {
       return parseWeights(JSON.parse(v))

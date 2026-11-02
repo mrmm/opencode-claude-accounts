@@ -34,6 +34,10 @@ import {
   applyCacheTtl,
   resolveTtl,
   type UsageTokens,
+  applyContextEditing,
+  resolveContextEditing,
+  contextEditDisabledBy400,
+  clearedInputTokens,
 } from "./balance/index.ts"
 import crypto from "node:crypto"
 import { config } from "./model-config.ts"
@@ -240,6 +244,42 @@ export async function fetchWithRetry(
     return res
   }
   return fetchImpl(input, init)
+}
+
+// Server-side context editing is disabled for the rest of the process once the
+// API rejects it, so a run on a model or account that lacks the beta recovers
+// by retrying without it rather than failing every turn. Reset on restart.
+let contextEditingDisabled = false
+
+/**
+ * Thin shell over `applyContextEditing`: parse the outgoing body, add the
+ * `context_management` block when editing is on, and log it once. The decision
+ * is the pure function; this only handles the string<->object boundary and the
+ * process-level kill switch. Returns the body unchanged on anything unexpected.
+ */
+function maybeEditContext(body: BodyInit | null | undefined): {
+  body: BodyInit | null | undefined
+  changed: boolean
+} {
+  if (contextEditingDisabled || typeof body !== "string") {
+    return { body, changed: false }
+  }
+  const settings = resolveContextEditing(getConfig())
+  if (!settings) return { body, changed: false }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return { body, changed: false }
+  }
+  const result = applyContextEditing(parsed, settings)
+  if (!result.changed) return { body, changed: false }
+  log("context_edit_applied", {
+    trigger: settings.trigger,
+    keep: settings.keep,
+    clearAtLeast: settings.clearAtLeast,
+  })
+  return { body: JSON.stringify(result.body), changed: true }
 }
 
 export function buildRequestHeaders(
@@ -911,7 +951,9 @@ const plugin: PluginWithOptions = async (
               modelId,
               excluded,
             )
-            let body = transformBody(requestInit.body)
+            const edited = maybeEditContext(transformBody(requestInit.body))
+            let body = edited.body
+            const contextEdited = edited.changed
 
             // Relabel the request's cache_control markers to a longer TTL when
             // the session has paused long enough that the cheaper 5m write
@@ -1080,6 +1122,31 @@ const plugin: PluginWithOptions = async (
                         : "request body was not a string",
                   })
                 }
+              }
+            }
+
+            // The server rejected context editing itself (unsupported beta, or
+            // a model/account without it). Disable it for the process and retry
+            // once with the un-edited body, mirroring the prefill recovery — the
+            // retry body is the transformed one before the context_management
+            // block was added, so nothing else about the request changes.
+            if (response.status === 400 && contextEdited) {
+              const errorBody = await response.clone().text()
+              if (contextEditDisabledBy400(errorBody)) {
+                contextEditingDisabled = true
+                log("context_edit_disabled", { level: "warn", modelId })
+                const creds = getCachedCredentials()
+                response = await fetchWithRetry(requestUrl, {
+                  ...requestInit,
+                  body: transformed,
+                  headers: buildRequestHeaders(
+                    input,
+                    requestInit,
+                    creds?.accessToken ?? latest.accessToken,
+                    modelId,
+                    getExcludedBetas(modelId),
+                  ),
+                })
               }
             }
 
@@ -1312,7 +1379,21 @@ const plugin: PluginWithOptions = async (
             response
               .clone()
               .text()
-              .then((text) => recordRow(parseNonStreamUsage(text)))
+              .then((text) => {
+                recordRow(parseNonStreamUsage(text))
+                // Server-reported context editing: how many input tokens it
+                // cleared this turn, when the response echoes applied_edits.
+                // Only on the non-streamed path; a streamed chat delivers it
+                // inside the SSE events, which the usage tee does not surface.
+                if (contextEdited) {
+                  try {
+                    const cleared = clearedInputTokens(JSON.parse(text))
+                    if (cleared !== null) {
+                      log("context_edit_cleared", { modelId, cleared })
+                    }
+                  } catch {}
+                }
+              })
               .catch(() => recordRow(null))
             return response
           },
