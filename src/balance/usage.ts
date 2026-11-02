@@ -18,9 +18,12 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
   statSync,
 } from "node:fs"
@@ -288,16 +291,107 @@ export function usageIndex(
 let cachedIndex: Record<string, { requests: number; lastUsedAt: number }> = {}
 let cachedIndexAt = 0
 
+/**
+ * Request rows already parsed from the log, and how far into it. Only bytes
+ * appended since the last refresh are read; a rotation (new inode) or a
+ * shrink rebuilds from both generations. Parsing the whole 24h log took ~12 ms
+ * at 5 MB, paid on the request path every TTL.
+ */
+let tail:
+  | {
+      path: string
+      ino: bigint
+      offset: number
+      rows: { account: string; at: number }[]
+    }
+  | undefined
+
+function readRange(path: string, from: number, to: number): Buffer {
+  const fd = openSync(path, "r")
+  try {
+    const buf = Buffer.alloc(to - from)
+    let got = 0
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, from + got)
+      if (n === 0) break
+      got += n
+    }
+    return buf.subarray(0, got)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Complete lines only; returns the bytes consumed so a torn tail is re-read next time. */
+function parseRequestLines(
+  buf: Buffer,
+  out: { account: string; at: number }[],
+): number {
+  const end = buf.lastIndexOf(10) + 1
+  for (const line of buf.subarray(0, end).toString("utf-8").split("\n")) {
+    if (!line.trim()) continue
+    try {
+      const e = JSON.parse(line) as UsageEvent
+      if (e?.kind === "request" && typeof e.created_at === "number")
+        out.push({ account: e.account, at: e.created_at })
+    } catch {
+      continue
+    }
+  }
+  return end
+}
+
+/** Request (account, time) rows at or after `sinceMs`, reading only what was appended. */
+export function tailRequests(
+  sinceMs: number,
+  path: string = usagePath(),
+): { account: string; at: number }[] {
+  let ino: bigint
+  let size: number
+  try {
+    const st = statSync(path, { bigint: true })
+    ino = st.ino
+    size = Number(st.size)
+  } catch {
+    tail = undefined
+    return readUsage(sinceMs, path).flatMap((e) =>
+      e.kind === "request" ? [{ account: e.account, at: e.created_at }] : [],
+    )
+  }
+  if (!tail || tail.path !== path || tail.ino !== ino || size < tail.offset) {
+    const rows: { account: string; at: number }[] = []
+    try {
+      parseRequestLines(readFileSync(`${path}.1`), rows)
+    } catch {
+      // no previous generation
+    }
+    tail = { path, ino, offset: 0, rows }
+  }
+  if (size > tail.offset)
+    tail.offset += parseRequestLines(
+      readRange(path, tail.offset, size),
+      tail.rows,
+    )
+  tail.rows = tail.rows.filter((r) => r.at >= sinceMs)
+  return tail.rows
+}
+
 export function currentUsageIndex(
   windowMs = 24 * 60 * 60_000,
   ttlMs = 30_000,
   nowMs: number = Date.now(),
+  path: string = usagePath(),
 ): Record<string, { requests: number; lastUsedAt: number }> {
   if (nowMs - cachedIndexAt < ttlMs) return cachedIndex
   cachedIndexAt = nowMs
   try {
-    const since = nowMs - windowMs
-    cachedIndex = usageIndex(summarize(readUsage(since), since))
+    const out: Record<string, { requests: number; lastUsedAt: number }> = {}
+    for (const r of tailRequests(nowMs - windowMs, path)) {
+      const a = (out[r.account] ??= { requests: 0, lastUsedAt: 0 })
+      a.requests++
+      if (r.at > a.lastUsedAt) a.lastUsedAt = r.at
+    }
+    cachedIndex = out
   } catch {
     cachedIndex = {}
   }
@@ -308,6 +402,7 @@ export function currentUsageIndex(
 export function resetUsageCache(): void {
   cachedIndex = {}
   cachedIndexAt = 0
+  tail = undefined
 }
 
 /** One session's traffic, as the stats popup shows it. */

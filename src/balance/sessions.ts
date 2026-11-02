@@ -16,7 +16,7 @@
  * simply a separate consumer of one decision function.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { type ClaudeAuthConfig, getConfig } from "../config.ts"
@@ -33,6 +33,7 @@ import { credentialState, resolveActiveConfig } from "./rotate.ts"
 import { currentUsageIndex } from "./usage.ts"
 import { type Health, type Member, assess, selectAccount } from "./balancer.ts"
 import { type QuotaCache, readQuotaCache } from "./quota.ts"
+import { readJsonFresh } from "./file-memo.ts"
 
 type Binding = { source: string; boundAt: number; lastSeen: number }
 
@@ -64,7 +65,7 @@ type Denials = Record<string, number>
 
 function readDenials(nowMs: number = Date.now()): Denials {
   try {
-    const raw = JSON.parse(readFileSync(denialsPath(), "utf8")) as Denials
+    const raw = readJsonFresh(denialsPath(), (r) => r as Denials, {})
     const live: Denials = {}
     for (const [id, at] of Object.entries(raw)) {
       if (typeof at === "number" && nowMs - at <= IDLE_MS) live[id] = at
@@ -126,7 +127,7 @@ function reservesPath(): string {
 
 function readReserves(nowMs: number = Date.now()): Denials {
   try {
-    const raw = JSON.parse(readFileSync(reservesPath(), "utf8")) as Denials
+    const raw = readJsonFresh(reservesPath(), (r) => r as Denials, {})
     const live: Denials = {}
     for (const [id, at] of Object.entries(raw)) {
       if (typeof at === "number" && nowMs - at <= IDLE_MS) live[id] = at

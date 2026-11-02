@@ -1,6 +1,12 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -13,6 +19,9 @@ import {
   sessionDetail,
   summarizeSessions,
   usageIndex,
+  currentUsageIndex,
+  resetUsageCache,
+  tailRequests,
 } from "./usage.ts"
 
 const T0 = 1785000000000
@@ -297,5 +306,59 @@ describe("sessionDetail", () => {
   it("groups the sessionless events under the same label the list uses", () => {
     const d = sessionDetail([sessionReq(undefined, { at: 5 })], "(no session)")!
     assert.equal(d.requests, 1)
+  })
+})
+
+describe("tailRequests / currentUsageIndex", () => {
+  const line = (account: string, at: number, kind = "request") =>
+    `${JSON.stringify({ kind, account, created_at: at, status: 200, duration_ms: 1, trigger: "t" })}\n`
+
+  it("reads only appended lines, holds a torn tail, and evicts old rows", () => {
+    resetUsageCache()
+    const p = join(mkdtempSync(join(tmpdir(), "usage-tail-")), "u.jsonl")
+    writeFileSync(
+      p,
+      line("acme-1", 100) + line("acme-2", 200) + line("x", 250, "rotation"),
+    )
+    assert.deepEqual(tailRequests(0, p), [
+      { account: "acme-1", at: 100 },
+      { account: "acme-2", at: 200 },
+    ])
+    const next = line("acme-1", 300)
+    appendFileSync(p, next.slice(0, 10))
+    assert.equal(tailRequests(0, p).length, 2, "a partial line is not counted")
+    appendFileSync(p, next.slice(10))
+    assert.equal(tailRequests(0, p).length, 3)
+    assert.deepEqual(
+      tailRequests(150, p).map((r) => r.at),
+      [200, 300],
+    )
+  })
+
+  it("rebuilds from both generations after a rotation", () => {
+    resetUsageCache()
+    const p = join(mkdtempSync(join(tmpdir(), "usage-tail-")), "u.jsonl")
+    writeFileSync(p, line("acme-1", 100))
+    tailRequests(0, p)
+    renameSync(p, `${p}.1`)
+    writeFileSync(p, line("acme-2", 200))
+    assert.deepEqual(
+      tailRequests(0, p).map((r) => r.account),
+      ["acme-1", "acme-2"],
+    )
+  })
+
+  it("matches the full-scan index", () => {
+    resetUsageCache()
+    const p = join(mkdtempSync(join(tmpdir(), "usage-tail-")), "u.jsonl")
+    writeFileSync(
+      p,
+      line("acme-1", 1000) + line("acme-1", 3000) + line("acme-2", 2000),
+    )
+    const now = 10_000
+    const fast = currentUsageIndex(9_500, 0, now, p)
+    const since = now - 9_500
+    assert.deepEqual(fast, usageIndex(summarize(readUsage(since, p), since)))
+    resetUsageCache()
   })
 })

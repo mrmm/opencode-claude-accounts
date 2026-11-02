@@ -19,16 +19,11 @@
  * options synchronously and cannot await a request.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs"
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { accountKey, accountReadKeys } from "./account-key.ts"
+import { primeJsonFresh, readJsonFresh } from "./file-memo.ts"
 
 /** One rate-limit window. */
 export type QuotaWindow = {
@@ -240,13 +235,14 @@ export type QuotaCache = Record<string, AccountQuota>
 
 /** Read the cache; a missing or corrupt file is simply "no data". */
 export function readQuotaCache(path: string = quotaCachePath()): QuotaCache {
-  try {
-    if (!existsSync(path)) return {}
-    const parsed = JSON.parse(readFileSync(path, "utf8"))
-    return parsed && typeof parsed === "object" ? (parsed as QuotaCache) : {}
-  } catch {
-    return {}
-  }
+  // Parsed once per change: this runs several times per request. Shared, so
+  // callers must not mutate it.
+  return readJsonFresh(
+    path,
+    (parsed) =>
+      parsed && typeof parsed === "object" ? (parsed as QuotaCache) : {},
+    {},
+  )
 }
 
 /**
@@ -261,7 +257,8 @@ export function writeQuotaForAccount(
   path: string = quotaCachePath(),
 ): boolean {
   try {
-    const cache = readQuotaCache(path)
+    // A copy: the read is memoised and shared with every other reader.
+    const cache = { ...readQuotaCache(path) }
     // Key by the stable account id, not the Keychain source, so a renamed or
     // re-logged-in account keeps its history. Falls back to the source for an
     // un-migrated install, where id == source.
@@ -291,6 +288,7 @@ export function writeQuotaForAccount(
     const tmp = `${path}.tmp-${process.pid}`
     writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`, "utf8")
     renameSync(tmp, path)
+    primeJsonFresh(path, cache)
     return true
   } catch {
     return false

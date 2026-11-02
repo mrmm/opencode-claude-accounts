@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdtempSync, renameSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -748,5 +748,26 @@ describe("the cache merges rather than replaces", () => {
       p,
     )
     assert.equal(readQuotaCache(p).a!.extra?.capReached, true)
+  })
+})
+
+describe("readQuotaCache memo", () => {
+  it("serves the writer's value, never shares it mutably, and sees the other process's write", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "quota-memo-")), "q.json")
+    const at = Math.floor(Date.now() / 1000)
+    const w = (u: number) => ({
+      fiveHour: { utilization: u, resetsAt: at + 60, status: "allowed" },
+      observedAt: at,
+    })
+    writeQuotaForAccount("src-1", w(0.1) as never, path)
+    const before = readQuotaCache(path)
+    writeQuotaForAccount("src-2", w(0.2) as never, path)
+    assert.equal(before["src-2"], undefined, "an earlier read is not mutated")
+    assert.equal(readQuotaCache(path)["src-2"]?.fiveHour?.utilization, 0.2)
+
+    // The TUI process writes through tmp + rename.
+    writeFileSync(`${path}.other`, JSON.stringify({ "src-3": w(0.3) }))
+    renameSync(`${path}.other`, path)
+    assert.deepEqual(Object.keys(readQuotaCache(path)), ["src-3"])
   })
 })
