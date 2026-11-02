@@ -13,6 +13,7 @@ import {
   migrationPreviewRows,
   paletteTitle,
   optimizationRows,
+  optimizeSidebarRows,
   rankedAdvice,
   toastResult,
   toCacheRows,
@@ -295,5 +296,84 @@ describe("optimizationRows", () => {
     assert.equal(ce.label, "contextEditing = on (custom)")
     assert.match(ce.value, /3\/10/)
     assert.equal(rows.filter((r) => r.setting).length, 5)
+  })
+})
+
+describe("optimizeSidebarRows", () => {
+  const session = {
+    turns: 12,
+    cost: 3.456,
+    lastContext: 120_000,
+    input: 1_000,
+    cacheRead: 90_000,
+    cacheWrite: 9_000,
+  }
+
+  it("answers spent, cache, context, re-sent and the next fix in plain words", () => {
+    const rows = optimizeSidebarRows({
+      session,
+      cache: {
+        requests: 12,
+        saved: 0.85,
+        byCause: {
+          "first-request": { n: 1, tokens: 9_000 },
+          "account-switch": { n: 2, tokens: 50_000 },
+        },
+      },
+      composition: {
+        fixed: 45_000,
+        instructions: 30_000,
+        tools: 12_000,
+        injected: 0,
+      },
+      hints: [
+        {
+          label: "schema",
+          value: "Github ~8k/turn, 30 tools: disable if unused",
+          level: "warn",
+        },
+        { label: "hints", value: "x", level: "ok" },
+      ],
+      contextLimit: 200_000,
+    })
+    const by = Object.fromEntries(rows.map((r) => [r.label, r]))
+    assert.equal(by.spent!.value, "$3.46 over 12 turns")
+    assert.match(by.cache!.value, /^90% reused.*input cost 85% lower$/)
+    assert.equal(by.cache!.level, "ok")
+    assert.equal(by["cache miss"]!.value, "2\u00d7, mostly account switch")
+    assert.equal(by.context!.value, "120k of 200k (60%)")
+    assert.match(
+      by["re-sent"]!.value,
+      /^45k each turn \(rules 30k, tools 12k\)$/,
+    )
+    assert.match(by["fix next"]!.value, /^tool schemas: /)
+    assert.equal(by.then, undefined, "ok-level hints are not fixes")
+  })
+
+  it("warns on a cold cache and a full context, and says when nothing stands out", () => {
+    const rows = optimizeSidebarRows({
+      session: {
+        ...session,
+        lastContext: 170_000,
+        cacheRead: 10_000,
+        cacheWrite: 80_000,
+      },
+      hints: [],
+      contextLimit: 0,
+    })
+    const by = Object.fromEntries(rows.map((r) => [r.label, r]))
+    assert.equal(by.cache!.level, "warn")
+    assert.equal(by.context!.value, "170k, compact now")
+    assert.equal(by.context!.level, "warn")
+    assert.equal(by["fix next"]!.value, "nothing stands out")
+  })
+
+  it("has one row before the first turn", () => {
+    const rows = optimizeSidebarRows({
+      session: { ...session, turns: 0 },
+      hints: [],
+      contextLimit: 0,
+    })
+    assert.deepEqual(rows, [{ label: "session", value: "no turns yet" }])
   })
 })

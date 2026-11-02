@@ -544,13 +544,13 @@ export function adviceRows(advice: readonly Advice[]): Row[] {
       { label: "optimize", value: "\u2713 nothing stands out", level: "ok" },
     ]
   return advice.map((a) => {
-    const pct =
+    const share =
       a.windowShare !== undefined
         ? ` (${Math.round(a.windowShare * 100)}% of window/day)`
         : ""
     return {
       label: a.label,
-      value: `${a.value}${SEP}~${si(Math.round(a.savedPerDay))}/day${pct}`,
+      value: `${a.value}${SEP}~${si(Math.round(a.savedPerDay))}/day${share}`,
       level: a.level,
     }
   })
@@ -574,4 +574,130 @@ export function migrationPreviewRows(
     value: `\u2192 ${s.id}`,
     level: "ok",
   }))
+}
+
+// ---------------------------------------------------------------------------
+// Optimize sidebar
+// ---------------------------------------------------------------------------
+
+/** 120k, 1.2M: whole thousands read faster in a narrow column than 120.0k. */
+const short = (n: number) =>
+  n >= 1e6
+    ? `${(n / 1e6).toFixed(1)}M`
+    : n >= 1e3
+      ? `${Math.round(n / 1e3)}k`
+      : String(Math.round(n))
+
+/** Plain words for the hint labels, which are terse internal names. */
+const HINT_WORDS: Record<string, string> = {
+  duplicate: "duplicate file",
+  instructions: "rules/AGENTS",
+  injected: "reminders",
+  schema: "tool schemas",
+  context: "context",
+  cache: "cache",
+  "re-reads": "tool output",
+  subagents: "subagents",
+}
+
+export type OptimizeSidebarInput = {
+  session: {
+    turns: number
+    cost: number
+    lastContext: number
+    input: number
+    cacheRead: number
+    cacheWrite: number
+  }
+  /** This session's request rows priced by cacheImpact, when the usage log has them. */
+  cache?: Pick<CacheImpact, "requests" | "saved" | "byCause">
+  composition?: {
+    fixed: number
+    instructions: number
+    tools: number
+    injected: number
+  }
+  hints: readonly Row[]
+  /** Model context window; 0 when unknown. */
+  contextLimit: number
+}
+
+/**
+ * The Optimize section as four plain answers and the next fix.
+ *
+ * spent / cache / context / re-sent each say what the number means (reused,
+ * of the window, each turn), and colour only when it needs action. Hints keep
+ * their ranking but get readable names.
+ */
+export function optimizeSidebarRows(i: OptimizeSidebarInput): Row[] {
+  const s = i.session
+  if (s.turns === 0) return [{ label: "session", value: "no turns yet" }]
+  const rows: Row[] = [
+    {
+      label: "spent",
+      value: `$${s.cost.toFixed(2)} over ${s.turns} turn${s.turns === 1 ? "" : "s"}`,
+    },
+  ]
+
+  const read = s.input + s.cacheRead + s.cacheWrite
+  if (read > 0) {
+    const reused = s.cacheRead / read
+    const saved =
+      i.cache && i.cache.requests > 0
+        ? `${SEP}input cost ${pct(i.cache.saved)} lower`
+        : ""
+    rows.push({
+      label: "cache",
+      value: `${pct(reused)} reused${saved}`,
+      level: reused < 0.8 ? "warn" : "ok",
+    })
+    const causes = Object.entries(i.cache?.byCause ?? {})
+      .filter(([c]) => c !== "first-request")
+      .sort((a, b) => b[1].tokens - a[1].tokens)
+    if (causes.length > 0) {
+      const n = causes.reduce((t, [, v]) => t + v.n, 0)
+      rows.push({
+        label: "cache miss",
+        value: `${n}\u00d7, mostly ${CAUSE_LABEL[causes[0]![0] as MissCause]}`,
+        level: "warn",
+      })
+    }
+  }
+
+  const ctx = s.lastContext
+  rows.push({
+    label: "context",
+    value:
+      i.contextLimit > 0
+        ? `${short(ctx)} of ${short(i.contextLimit)} (${pct(ctx / i.contextLimit)})`
+        : `${short(ctx)}${ctx > 150_000 ? ", compact now" : ""}`,
+    level:
+      ctx > 150_000 || (i.contextLimit > 0 && ctx / i.contextLimit > 0.75)
+        ? "warn"
+        : "ok",
+  })
+
+  const c = i.composition
+  if (c && c.fixed > 0) {
+    const parts = [
+      c.instructions > 0 ? `rules ${short(c.instructions)}` : "",
+      c.tools > 0 ? `tools ${short(c.tools)}` : "",
+    ].filter(Boolean)
+    rows.push({
+      label: "re-sent",
+      value: `${short(c.fixed)} each turn${parts.length ? ` (${parts.join(", ")})` : ""}`,
+    })
+  }
+
+  const fixes = i.hints.filter((h) => h.level && h.level !== "ok").slice(0, 2)
+  fixes.forEach((h, n) =>
+    rows.push({
+      label: n === 0 ? "fix next" : "then",
+      value: `${HINT_WORDS[h.label] ?? h.label.trim()}: ${h.value}`,
+      level: h.level,
+    }),
+  )
+  if (fixes.length === 0)
+    rows.push({ label: "fix next", value: "nothing stands out", level: "ok" })
+  return rows
 }

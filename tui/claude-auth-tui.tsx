@@ -86,6 +86,7 @@ import {
   cacheViewRows,
   ceilingView,
   optimizationRows,
+  optimizeSidebarRows,
   migrationPreviewRows,
   paletteTitle,
   rankedAdvice,
@@ -139,7 +140,6 @@ import {
   globalTotals,
   sessionRows as tokenSessionRows,
   sessionTotals,
-  si,
   chartRows,
   contextSeries,
   dailySeries,
@@ -668,9 +668,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   // this session's measured misses. Complements `hints` (which ranks by raw
   // token weight): this one puts a per-day token saving on each item, so the
   // order is the 80/20 of where the quota actually goes.
-  const rankedFixes = (id: string, c: ReturnType<typeof compoOf>): Row[] => {
-    const since = Date.now() - 24 * 60 * 60_000
-    const rows: RequestLike[] = readUsage(since).flatMap((e) =>
+  // This session's request rows from the last 24h. The sidebar re-renders
+  // constantly and the usage log is megabytes, so one read serves 5 seconds.
+  const sessionReqCache = new Map<string, { at: number; rows: RequestLike[] }>()
+  const sessionRequests = (id: string): RequestLike[] => {
+    const hit = sessionReqCache.get(id)
+    if (hit && Date.now() - hit.at < 5_000) return hit.rows
+    const rows: RequestLike[] = readUsage(
+      Date.now() - 24 * 60 * 60_000,
+    ).flatMap((e) =>
       e.kind === "request" && e.session === id
         ? [
             {
@@ -683,10 +689,18 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               cacheRead: e.cacheRead,
               cacheWrite: e.cacheWrite,
               cacheWrite1h: e.cacheWrite1h,
+              ttl: e.ttl,
+              contextEdited: e.contextEdited,
             },
           ]
         : [],
     )
+    sessionReqCache.set(id, { at: Date.now(), rows })
+    return rows
+  }
+
+  const rankedFixes = (id: string, c: ReturnType<typeof compoOf>): Row[] => {
+    const rows = sessionRequests(id)
     if (rows.length === 0) return []
     const cfg = getConfig()
     const comp = typeof c === "string" ? undefined : c
@@ -1257,27 +1271,23 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       sidebar_content(_ctx, props: { session_id: string }) {
         // Short on purpose: the top fixes and one line of usage. Everything else is
         // in /tokens, which can paste it into the prompt.
-        const sections = () => report(props.session_id)
-        const top = () => sections()[0]!.rows.slice(0, 3)
-        const usage = (): Row[] => {
-          const t = sessionTotals(api.state.session.messages(props.session_id))
-          return t.turns === 0
-            ? []
-            : [
-                {
-                  label: "session",
-                  value: `${t.turns} turns · $${t.cost.toFixed(2)} · ctx ${si(t.lastContext)}`,
-                  level: t.lastContext > 150_000 ? "warn" : "ok",
-                },
-              ]
+        const rows = (): Row[] => {
+          const id = props.session_id
+          const c = compoOf(id)
+          const reqs = sessionRequests(id)
+          return optimizeSidebarRows({
+            session: sessionTotals(api.state.session.messages(id)),
+            ...(reqs.length ? { cache: cacheImpact(toCacheRows(reqs)) } : {}),
+            ...(typeof c === "string" ? {} : { composition: c }),
+            hints: report(id)[0]!.rows,
+            contextLimit: getConfig().contextLimit,
+          })
         }
         return (
           <box>
-            <Heading title="Optimize" note="(top 3)" fold="optimize" />
+            <Heading title="Optimize" note="(this session)" fold="optimize" />
             <Show when={!isFolded("optimize")}>
-              <Rows rows={top()} />
-              <Rows rows={usage()} />
-              <Rows rows={sections()[1]!.rows} />
+              <Rows rows={rows()} />
               <box flexDirection="row" gap={1}>
                 <Button label="↻ refresh" onClick={refreshAll} />
                 <Button
