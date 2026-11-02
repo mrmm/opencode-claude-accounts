@@ -6,6 +6,7 @@ import type { IdentityCache } from "./identity.ts"
 import {
   accountIdFor,
   cacheReadKeys,
+  namesBySource,
   slug,
   sourceForId,
   suggestIds,
@@ -153,5 +154,24 @@ describe("cacheReadKeys", () => {
     assert.deepEqual(cacheReadKeys("src-org1", sameEmailTwoOrgs, {}), [
       "src-org1",
     ])
+  })
+})
+
+describe("namesBySource", () => {
+  const registry: Record<string, AccountId> = {
+    one: { match: { account: "acc-1", org: "org-1" }, name: "Team 1 - Main" },
+    two: { match: { account: "acc-1", org: "org-2" } },
+  }
+
+  it("maps id names to sources and lets them beat legacy names", () => {
+    const out = namesBySource(registry, sameEmailTwoOrgs, {
+      "src-org1": "old",
+      "src-other": "kept",
+    })
+    assert.deepEqual(out, { "src-org1": "Team 1 - Main", "src-other": "kept" })
+  })
+
+  it("skips an id whose account has no identity", () => {
+    assert.deepEqual(namesBySource(registry, {}), {})
   })
 })

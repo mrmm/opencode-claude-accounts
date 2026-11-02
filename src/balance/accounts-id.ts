@@ -72,6 +72,26 @@ export function sourceForId(
   return undefined
 }
 
+/**
+ * Display-name overrides keyed by Keychain source, for the renderers.
+ *
+ * `accountIds.<id>.name` is the one place a name is set; legacy `accountNames`
+ * entries still apply to accounts that have no id yet, and lose to an id name.
+ */
+export function namesBySource(
+  registry: Record<string, AccountId>,
+  identities: IdentityCache,
+  legacy: Record<string, string> = {},
+): Record<string, string> {
+  const out: Record<string, string> = { ...legacy }
+  for (const [id, entry] of Object.entries(registry)) {
+    if (!entry.name) continue
+    const source = sourceForId(id, identities, registry)
+    if (source) out[source] = entry.name
+  }
+  return out
+}
+
 export type Suggestion = { source: string; id: string }
 
 /**
