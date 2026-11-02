@@ -31,6 +31,8 @@ import {
   parseNonStreamUsage,
   SampleAggregator,
   appendSample,
+  applyCacheTtl,
+  resolveTtl,
   type UsageTokens,
 } from "./balance/index.ts"
 import crypto from "node:crypto"
@@ -171,6 +173,12 @@ const sessionId = crypto.randomUUID()
 // short-lived process still records its final, open bucket.
 const sampleAggregator = new SampleAggregator(appendSample)
 const SAMPLE_FLUSH_MS = 60_000
+
+// Per-session request timing, for the "auto" cache TTL: when a session was
+// first seen and when it last sent a request. Per-process and unbounded is
+// fine -- a session key is small and the map is swept nowhere because these
+// windows are minutes, not a leak worth a sweep.
+const sessionTiming = new Map<string, { startedAt: number; lastAt: number }>()
 {
   const timer = setInterval(() => sampleAggregator.flush(), SAMPLE_FLUSH_MS)
   // Don't keep the process alive for telemetry.
@@ -903,7 +911,27 @@ const plugin: PluginWithOptions = async (
               modelId,
               excluded,
             )
-            const body = transformBody(requestInit.body)
+            let body = transformBody(requestInit.body)
+
+            // Relabel the request's cache_control markers to a longer TTL when
+            // the session has paused long enough that the cheaper 5m write
+            // would have gone cold before the next turn. Only touches markers
+            // OpenCode already placed; "5m" and a body with none are no-ops.
+            if (typeof body === "string" && ocSessionId) {
+              const now = Date.now()
+              const t = sessionTiming.get(ocSessionId)
+              const resolved = resolveTtl(getConfig().cacheTtl, {
+                nowMs: now,
+                ...(t
+                  ? { prevRequestAt: t.lastAt, sessionStartedAt: t.startedAt }
+                  : {}),
+              })
+              sessionTiming.set(ocSessionId, {
+                startedAt: t?.startedAt ?? now,
+                lastAt: now,
+              })
+              body = applyCacheTtl(body, resolved)
+            }
 
             // Record the shape of what actually goes out — system blocks, tool
             // schemas, message sizes. Off unless asked for: the body carries the
