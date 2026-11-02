@@ -32,9 +32,14 @@ src/
   credentials.ts keychain.ts refresh-lock.ts signing.ts    upstream: credentials
   transforms.ts betas.ts model-config.ts                   upstream: request shaping
   notify.ts         notice types — root, because credentials.ts imports it
+  request-body.ts   fork-owned: the body parsed once, all rewrites applied
   balance/          fork-owned: who serves the next request
   ui/               fork-owned: what the operator sees
 ```
+
+The engines, the shared state files and the request flow are drawn in
+[docs/architecture.md](docs/architecture.md); decisions are in
+[docs/adr/](docs/adr/README.md).
 
 - A module does one thing and says so in a header comment explaining **why** it
   exists, not what each function does.

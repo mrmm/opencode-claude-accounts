@@ -7,6 +7,7 @@ dist/
 .opencode/
 docs/*
 !docs/adr/
+!docs/architecture.md
 
 # derived knowledge graph — rebuild with `graphify update .`
 graphify-out/

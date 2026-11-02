@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Design decisions behind these changes are in [docs/adr](docs/adr/README.md).
+Design decisions behind these changes are in [docs/adr](docs/adr/README.md); the engines and request flow are drawn in [docs/architecture.md](docs/architecture.md).
 
 ### Features
 
@@ -25,7 +25,7 @@ Design decisions behind these changes are in [docs/adr](docs/adr/README.md).
 
 ### Performance
 
-* the request body is parsed once instead of three or four times
+* the request body is parsed once instead of three or four times, request capture included
 * quota and reserve files are re-read only when they change; the usage index refresh went from about 10 ms to 0.3 ms
 * account profiles are fetched in parallel at start-up
 

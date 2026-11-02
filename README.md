@@ -12,6 +12,9 @@ The plugin registers its own auth provider with a custom fetch handler that inte
 
 It also syncs credentials to OpenCode's `auth.json` as a fallback (on Windows, it writes to both `%USERPROFILE%\.local\share\opencode\auth.json` and `%LOCALAPPDATA%\opencode\auth.json` to cover all installation methods). If a token is near expiry, it refreshes directly via Anthropic's OAuth endpoint (zero LLM tokens consumed), falling back to the Claude CLI if the direct refresh fails. Background re-sync runs every 5 minutes.
 
+The engines inside the plugin, the files they share, and the path of one
+request (with diagrams) are in [docs/architecture.md](docs/architecture.md).
+
 ## Prerequisites
 
 - Claude Code installed and authenticated (run `claude` at least once)
