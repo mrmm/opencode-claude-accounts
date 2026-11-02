@@ -36,6 +36,8 @@ export type PresetKnob = {
     | "switchWindow"
     | "ejectFor"
     | "weights"
+    | "capMode"
+    | "maxUsage"
   label: string
   /** Shown when the preset does not name it, so inherited reads as inherited. */
   inheritsFrom: string
@@ -56,6 +58,8 @@ export const PRESET_KNOBS: PresetKnob[] = [
   { key: "switchAt", label: "Switch at", inheritsFrom: "switchAt" },
   { key: "switchWindow", label: "Switch window", inheritsFrom: "switchWindow" },
   { key: "ejectFor", label: "Eject for", inheritsFrom: "ejectFor" },
+  { key: "capMode", label: "Cap mode", inheritsFrom: "capMode" },
+  { key: "maxUsage", label: "Ceilings", inheritsFrom: "(none)" },
 ]
 
 /**
@@ -80,6 +84,9 @@ export type Preset = {
   switchAt?: number
   switchWindow?: string
   ejectFor?: number
+  capMode?: "soft" | "hard"
+  /** Per-account ceiling override, keyed by account id. */
+  maxUsage?: Record<string, { "5h"?: number; "7d"?: number }>
 }
 
 export type PresetMap = Record<string, Preset>

@@ -70,6 +70,30 @@ free while another client on the same account still spends.
 cheaper than a paid one at 100%, and enabling credits must not start spending
 them while any free headroom remains.
 
+## Caps, cache and advice (src/tui/caps-ui.ts)
+
+Three families of pure builders sit beside chip.ts, each tested there:
+
+- **Ceilings** -- `accountCapRow` / `ceilingBar` / `ceilingView` render an
+  account's used-vs-ceiling bar per window and its `reserved` state. The Manage
+  accounts rows show the ID first (the account key), then the display name. The
+  ceiling itself is edited into `accountIds.<id>.maxUsage` (global) or
+  `presets.<name>.maxUsage.<id>` (per preset).
+- **Cache** -- `toCacheRows` turns usage-log request rows into the shape
+  `cacheStats` (src/balance/cache-stats.ts) classifies; `cacheViewRows` totals
+  it per account and per session and labels each miss by cause. `/cc-cache`
+  renders it. Prefix hashes are joined from the shape log when present; today it
+  carries none, so classification falls back to account/model/TTL signals.
+- **Advice** -- `rankedAdvice` prices this session's measured misses with the
+  documented cache model (read 0.05×/0.1×, 5m write 1.25×, 1h write 2×) and ranks
+  fixes by input-token-equivalents saved per day. It complements `hints` in
+  traffic.ts (which ranks by raw token weight); its output is the "Ranked fixes"
+  section of the token report.
+
+Every palette command is titled through `paletteTitle(area, verb)`
+(`Claude › <Area> › <Verb>`), and a result toast through `toastResult(thing,
+result, reason)` (`Preset rr-12 not saved: name already used`).
+
 ## Colour
 
 `Health` (src/tui/chip.ts:162) maps to a theme colour in

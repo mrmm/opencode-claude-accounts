@@ -72,6 +72,32 @@ import {
   summarizeSessions,
 } from "../dist/balance/usage.js"
 import { candidatePaths, getConfig, resetConfigCache } from "../dist/config.js"
+import { readSamples } from "../dist/balance/samples.js"
+import { ceilingFor } from "../dist/balance/caps.js"
+import { accountKey } from "../dist/balance/account-key.js"
+import {
+  allowReserve,
+  reserveAllowed,
+  revokeReserve,
+} from "../dist/balance/sessions.js"
+import {
+  accountCapRow,
+  adviceRows,
+  cacheViewRows,
+  ceilingView,
+  migrationPreviewRows,
+  paletteTitle,
+  rankedAdvice,
+  toastResult,
+  toCacheRows,
+  type RequestLike,
+} from "../dist/tui/caps-ui.js"
+import {
+  applyMigration,
+  cacheStats,
+  suggestIds,
+} from "../dist/balance/index.js"
+import { readIdentityCache } from "../dist/balance/identity.js"
 import {
   configRows,
   display,
@@ -86,7 +112,6 @@ import {
   buildPickerOptions,
   formatChip,
   mostRecentlyObserved,
-  accountToggleRows,
   contextSummary,
   detailRows,
   enabledSources,
@@ -96,6 +121,7 @@ import {
   shortNames,
   sidebarLines,
   toggleAccount,
+  utilisation,
   type Health,
 } from "../dist/tui/chip.js"
 import { BUILD } from "../dist/version.js"
@@ -253,6 +279,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       resolveRef(ref, list as { source: string; label?: string }[]),
     )
 
+  // Utilisation as fractions 0..1 for the ceiling bars. chip's `utilisation`
+  // returns whole percents, so divide; undefined stays undefined (nothing read).
+  const utilisationOf = (source: string) => {
+    const u = utilisation(readQuotaCache(), source)
+    return {
+      five: u.five === undefined ? undefined : u.five / 100,
+      week: u.week === undefined ? undefined : u.week / 100,
+    }
+  }
+
   /**
    * Escape, routed to a parent screen instead of closing everything.
    *
@@ -352,30 +388,73 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   // The pace forecast scans up to two generations of the telemetry log, so it
   // refreshes on its own slower clock rather than on every quota poll.
   const FORECAST_MS = 60_000
+  // Ceilings the pool is allowed to spend, keyed by source for the forecast.
+  // The config stores them by account id, so each source is resolved to its id
+  // first; an un-migrated account keys by its own source and reads no ceiling.
+  const forecastCeilings = (sources: string[]) => {
+    const cfg = getConfig()
+    const out: Record<string, { five: number; week: number }> = {}
+    for (const source of sources) {
+      const id = accountKey(source)
+      out[source] = {
+        five: ceilingFor(cfg, id, "5h"),
+        week: ceilingFor(cfg, id, "7d"),
+      }
+    }
+    return out
+  }
   const readForecast = () => {
     try {
-      const samples = readUsage(Date.now() - 7 * 86_400_000).flatMap((e) =>
-        e.kind === "request"
-          ? [
-              {
-                account: e.account,
-                at: e.created_at,
-                u5: e.utilization_5h,
-                u7: e.utilization_7d,
-              },
-            ]
-          : [],
+      const sources = visible().map((a) => a.source)
+      // The compact samples file is the long memory (8 days); the request log
+      // rotates under a day. Prefer samples, but fall back to the log when the
+      // samples do not yet cover an hour — a fresh install has none.
+      const samples = readSamples().map((s) => ({
+        account: s.account,
+        at: s.at,
+        u5: s.u5,
+        u7: s.u7,
+        reqs: s.reqs,
+        input: s.input,
+        output: s.output,
+        cacheRead: s.cacheRead,
+        cacheWrite: s.cacheWrite,
+      }))
+      const spanMs =
+        samples.length > 0
+          ? Math.max(...samples.map((s) => s.at)) -
+            Math.min(...samples.map((s) => s.at))
+          : 0
+      const paceSamples =
+        spanMs >= 3_600_000
+          ? samples
+          : readUsage(Date.now() - 7 * 86_400_000).flatMap((e) =>
+              e.kind === "request"
+                ? [
+                    {
+                      account: e.account,
+                      at: e.created_at,
+                      u5: e.utilization_5h,
+                      u7: e.utilization_7d,
+                    },
+                  ]
+                : [],
+            )
+      const f = forecast(paceSamples, readQuotaCache(), sources, undefined, {
+        ceilings: forecastCeilings(sources),
+      })
+      // Per-account forecast lines are keyed by account id, which is what the
+      // ceilings and the config are keyed by, so a line about a reserved account
+      // names the id the operator would edit.
+      const names = displayNames()
+      const idNames = new Map(
+        sources.map((s) => {
+          const id = accountKey(s)
+          const name = names.get(s)
+          return [s, id === s ? (name ?? s) : name ? `${id} ${name}` : id]
+        }),
       )
-      const f = forecast(
-        samples,
-        readQuotaCache(),
-        visible().map((a) => a.source),
-      )
-      return forecastLines(
-        f,
-        (epoch: number) => resetClock(epoch),
-        displayNames(),
-      )
+      return forecastLines(f, (epoch: number) => resetClock(epoch), idNames)
     } catch {
       return []
     }
@@ -529,6 +608,52 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const sessionDir = (id: string) =>
     api.state.session.get(id)?.directory ?? api.state.path.directory
 
+  // Advice ranked by quota impact, priced with the documented cache model and
+  // this session's measured misses. Complements `hints` (which ranks by raw
+  // token weight): this one puts a per-day token saving on each item, so the
+  // order is the 80/20 of where the quota actually goes.
+  const rankedFixes = (id: string, c: ReturnType<typeof compoOf>): Row[] => {
+    const since = Date.now() - 24 * 60 * 60_000
+    const rows: RequestLike[] = readUsage(since).flatMap((e) =>
+      e.kind === "request" && e.session === id
+        ? [
+            {
+              account: e.account,
+              model: e.model,
+              created_at: e.created_at,
+              session: e.session,
+              input: e.input,
+              output: e.output,
+              cacheRead: e.cacheRead,
+              cacheWrite: e.cacheWrite,
+              cacheWrite1h: e.cacheWrite1h,
+            },
+          ]
+        : [],
+    )
+    if (rows.length === 0) return []
+    const cfg = getConfig()
+    const comp = typeof c === "string" ? undefined : c
+    const latest = rows[rows.length - 1]!
+    const advice = rankedAdvice({
+      cache: cacheStats(toCacheRows(rows)),
+      spanDays: Math.max(
+        1 / 24,
+        (latest.created_at - rows[0]!.created_at) / 86_400_000,
+      ),
+      opus: /opus/.test(latest.model),
+      instructionTokens: comp?.instructions,
+      toolTokens: comp?.tools,
+      avgContext:
+        typeof c === "string"
+          ? undefined
+          : sessionTotals(api.state.session.messages(id)).lastContext,
+      contextTrigger: 100_000,
+      contextEditingOn: cfg.contextEditing !== false,
+    })
+    return adviceRows(advice)
+  }
+
   type Section = { title: string; note?: string; rows: Row[] }
   // One source for the sidebar, the new-session toast and /optimize, so all three agree.
   const report = (id: string): Section[] => {
@@ -546,6 +671,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       files: setup.files,
       duplicateAgents: setup.duplicateAgents,
     })
+    const ranked = rankedFixes(id, c)
     return [
       { title: "Optimize", note: "(biggest first, /optimize)", rows: advice },
       {
@@ -575,6 +701,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         rows: work(),
       },
       { title: "Last request", note: "(est., bytes/3.7)", rows: compoRows(id) },
+      ...(ranked.length
+        ? [
+            {
+              title: "Ranked fixes",
+              note: "(by quota/day, priced)",
+              rows: ranked,
+            },
+          ]
+        : []),
     ]
   }
 
@@ -852,6 +987,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     const sid = lastSessionId
     const canDecline = sid !== null && getConfig().useCredits
     const CREDITS = "__credits_toggle__"
+    const RESERVE = "__reserve_toggle__"
     if (canDecline) {
       const off = creditsDenied(sid)
       options.push({
@@ -865,11 +1001,27 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         category: "This session",
       })
     }
+    // Reserved quota: an account past its ceiling is held back, unless a session
+    // opts in. Offered whenever there is a session to attach the choice to; the
+    // global capMode still governs every other session.
+    if (sid !== null) {
+      const on = reserveAllowed(sid)
+      options.push({
+        title: on
+          ? "Use reserved quota in this session: on"
+          : "Use reserved quota in this session: off",
+        value: RESERVE,
+        description: on
+          ? "this session may spend an account past its ceiling"
+          : "this session leaves quota above each ceiling in reserve",
+        category: "This session",
+      })
+    }
     // `dialog` is a stack: `replace` pushes this dialog, `clear` closes
     // it. There is no open()/close() pair.
     api.ui.dialog.replace(() => (
       <api.ui.DialogSelect
-        title="Claude account"
+        title={paletteTitle("Accounts", "Switch account or preset")}
         current={current.selection}
         options={options}
         onSelect={(option) => {
@@ -885,6 +1037,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               message: off
                 ? "This session may spend overflow again."
                 : "This session will stop rather than spend overflow.",
+            })
+            api.ui.dialog.clear()
+            return
+          }
+          if (String(option.value) === RESERVE && sid) {
+            // Same cross-process pattern as credits: the balancer reads this
+            // file, not a flag set in the TUI process.
+            const on = reserveAllowed(sid)
+            if (on) revokeReserve(sid)
+            else allowReserve(sid)
+            api.ui.toast({
+              variant: "success",
+              title: "Reserved quota",
+              message: on
+                ? "This session leaves reserved quota alone again."
+                : "This session may now spend accounts past their ceiling.",
             })
             api.ui.dialog.clear()
             return
@@ -1054,7 +1222,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     commands: [
       {
         name: "claude-auth.select",
-        title: "Claude account",
+        title: paletteTitle("Accounts", "Switch account or preset"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "cc-account",
@@ -1062,7 +1230,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
       {
         name: "claude-auth.debug",
-        title: "Claude auth: what is it actually doing",
+        title: paletteTitle("Diagnostics", "Explain routing"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "cc-debug",
@@ -1165,7 +1333,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
       {
         name: "claude-auth.optimize",
-        title: "Propose token optimisations",
+        title: paletteTitle("Optimize", "Ranked fixes"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "optimize",
@@ -1183,7 +1351,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
       {
         name: "claude-auth.tokens",
-        title: "Token usage details",
+        title: paletteTitle("Usage", "Token usage"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "tokens",
@@ -1201,7 +1369,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
       {
         name: "claude-auth.stats",
-        title: "Claude usage by session",
+        title: paletteTitle("Usage", "Usage by session"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "cc-stats",
@@ -1272,8 +1440,89 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         },
       },
       {
+        name: "claude-auth.presets",
+        title: paletteTitle("Presets", "Edit presets"),
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "cc-presets",
+        run() {
+          // Presets live on the Manage accounts menu, under their own category:
+          // a new preset, and each existing one with its accounts, knobs,
+          // maxUsage and capMode. Rather than a second copy of ~400 lines of
+          // editor, this opens that menu where the presets already are.
+          const dispatch = (api.keymap as { dispatch?: (id: string) => void })
+            .dispatch
+          if (typeof dispatch === "function") dispatch("claude-auth.accounts")
+          else
+            api.ui.toast({
+              variant: "info",
+              title: "Presets",
+              message: "Open Manage accounts; presets are edited there.",
+            })
+        },
+      },
+      {
+        name: "claude-auth.cache",
+        title: paletteTitle("Cache", "Hit rate and misses"),
+        category: "Claude Auth",
+        namespace: "palette",
+        slashName: "cc-cache",
+        run() {
+          // The request log carries the token counts the quota cache cannot:
+          // reads, writes and uncached input per request. cacheViewRows totals
+          // them per account and per session and labels each miss by cause.
+          const requests: RequestLike[] = readUsage(
+            Date.now() - 24 * 60 * 60_000,
+          ).flatMap((e) =>
+            e.kind === "request"
+              ? [
+                  {
+                    account: e.account,
+                    model: e.model,
+                    created_at: e.created_at,
+                    session: e.session,
+                    input: e.input,
+                    output: e.output,
+                    cacheRead: e.cacheRead,
+                    cacheWrite: e.cacheWrite,
+                    cacheWrite1h: e.cacheWrite1h,
+                  },
+                ]
+              : [],
+          )
+          // The shape log carries no prefix hashes today, so the join is a no-op
+          // and classification falls back to account/model/TTL signals.
+          const blocks = cacheViewRows(requests, [], displayNames())
+          const options = blocks.flatMap((b) =>
+            b.rows.map((r, j) => ({
+              title: r.label.trim(),
+              description: r.value,
+              value: `${b.title}:${j}`,
+              category: b.title,
+            })),
+          )
+          api.ui.dialog.replace(() => (
+            <api.ui.DialogSelect
+              title={paletteTitle("Cache", "Hit rate and misses")}
+              options={
+                options.length
+                  ? options
+                  : [
+                      {
+                        title: "No requests in the last 24h",
+                        value: "",
+                        description:
+                          "cache figures appear once the plugin has served requests",
+                      },
+                    ]
+              }
+            />
+          ))
+        },
+      },
+      {
         name: "claude-auth.accounts",
-        title: "Claude accounts in use",
+        title: paletteTitle("Accounts", "Manage accounts"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "cc-accounts",
@@ -1316,9 +1565,22 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             }
           }
 
+          // Accounts the config has no id mapping for yet, with a suggested id
+          // each. An empty list means every account is already migrated.
+          const unassigned = () => {
+            const cfg = getConfig()
+            const ids = readIdentityCache()
+            return suggestIds(
+              accounts.map((a) => a.source),
+              ids,
+              cfg.accountIds,
+            ).filter((s) => accountKey(s.source) === s.source)
+          }
+
           const menu = () => {
             const cfg = getConfig()
             const enabled = enabledSources(accounts, cfg.accounts).length
+            const needIds = unassigned()
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
                 title="Claude accounts"
@@ -1329,6 +1591,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     description: "include or exclude an account",
                     category: "Accounts",
                   },
+                  ...(needIds.length
+                    ? [
+                        {
+                          title: `Assign IDs (suggested: ${needIds.map((s) => s.id).join(", ")})`,
+                          value: "__migrate__",
+                          description: `${needIds.length} account${needIds.length === 1 ? "" : "s"} without a stable id`,
+                          category: "Accounts",
+                        },
+                      ]
+                    : []),
                   {
                     title: "Re-read the Keychain",
                     value: "__refresh__",
@@ -1354,6 +1626,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 onSelect={(row) => {
                   const v = String(row.value)
                   if (v === "__accounts__") openAccounts()
+                  else if (v === "__migrate__") openMigration()
                   else if (v === "__probe__") {
                     // Past the freshness gate, not past the rate limit: the
                     // endpoint allows about one call an hour per account and
@@ -1395,6 +1668,76 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             ))
           }
 
+          /**
+           * Preview the id rewrite, then apply it on confirm.
+           *
+           * applyMigration backs the file up and rewrites every reference, so it
+           * is shown first — the list of source → id it is about to write — and
+           * only run on a yes. pairFor reads the identity cache, which is where
+           * the account/org uuids that an id binds to live.
+           */
+          const openMigration = () => {
+            const ids = readIdentityCache()
+            const suggestions = unassigned()
+            const preview = migrationPreviewRows(suggestions, displayNames())
+            api.ui.dialog.replace(
+              () => (
+                <api.ui.DialogSelect
+                  title="Assign IDs — preview, enter to apply"
+                  options={[
+                    backRow("accounts"),
+                    {
+                      title: "Apply this rewrite",
+                      value: "__apply__",
+                      description:
+                        "backs up the config, then rewrites every reference to use ids",
+                      category: "Migration",
+                    },
+                    ...preview.map((r, i) => ({
+                      title: r.label,
+                      value: `p:${i}`,
+                      description: r.value,
+                      category: "Will assign",
+                    })),
+                  ]}
+                  onSelect={(row) => {
+                    const v = String(row.value)
+                    if (v !== "__apply__") return menu()
+                    const result = applyMigration(
+                      candidatePaths()[0]!,
+                      accounts,
+                      (source: string) => {
+                        const id = ids[source]
+                        return id
+                          ? { account: id.accountUuid, org: id.orgUuid }
+                          : undefined
+                      },
+                    )
+                    resetConfigCache()
+                    setSnap(read())
+                    api.ui.toast({
+                      variant: result.migrated ? "success" : "warning",
+                      title: "Assign IDs",
+                      message: result.migrated
+                        ? toastResult(
+                            "IDs",
+                            "assigned",
+                            `backup ${(result.backupPath ?? "").split("/").pop() ?? "written"}`,
+                          )
+                        : toastResult(
+                            "IDs",
+                            "not assigned",
+                            "nothing to rewrite, or the config could not be read",
+                          ),
+                    })
+                    menu()
+                  }}
+                />
+              ),
+              escapeTo(menu),
+            )
+          }
+
           const selectionOf = () => {
             try {
               return readFileSync(
@@ -1406,19 +1749,44 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             }
           }
 
-          const openAccounts = () => {
+          // The id-first caps row for one account: id, name, both windows'
+          // used-vs-ceiling bars and whether it is reserved. The utilisation is
+          // read from the quota cache the same way the chip reads it.
+          const capRowOf = (a: { source: string; label: string }) => {
             const cfg = getConfig()
+            const id = accountKey(a.source)
+            const u = utilisationOf(a.source)
+            const row = accountCapRow({
+              id,
+              name: displayNames().get(a.source) ?? a.source,
+              enabled: enabledSources(accounts, cfg.accounts).includes(
+                a.source,
+              ),
+              five: ceilingView(u.five, ceilingFor(cfg, id, "5h")),
+              week: ceilingView(u.week, ceilingFor(cfg, id, "7d")),
+              capMode: cfg.capMode,
+            })
+            return {
+              title: row.label,
+              value: a.source,
+              description: row.value,
+              category: "Accounts",
+            }
+          }
+
+          const openAccounts = () => {
             api.ui.dialog.replace(() => (
               <api.ui.DialogSelect
                 title="Accounts the balancer may use"
                 options={[
                   backRow("accounts"),
-                  ...accountToggleRows(
-                    accounts,
-                    cfg.accounts,
-                    readQuotaCache(),
-                    displayNames(),
-                  ),
+                  ...accounts.map(capRowOf),
+                  ...accounts.map((a) => ({
+                    title: `Ceilings for ${accountKey(a.source)}`,
+                    value: `c:${a.source}`,
+                    description: "reserve this account above a utilisation",
+                    category: "Ceilings",
+                  })),
                   ...accounts.map((a) => ({
                     title: `Rename ${displayNames().get(a.source) ?? a.source}`,
                     value: `r:${a.source}`,
@@ -1429,6 +1797,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 onSelect={(row) => {
                   const rv = String(row.value)
                   if (rv === BACK) return menu()
+                  if (rv.startsWith("c:")) return editCeiling(rv.slice(2))
                   if (rv.startsWith("r:")) return rename(rv.slice(2))
                   const next = toggleAccount(
                     accounts,
@@ -1438,8 +1807,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   if (!next) {
                     api.ui.toast({
                       variant: "error",
-                      title: "Not changed",
-                      message: "At least one account has to stay enabled.",
+                      title: "Accounts",
+                      message: toastResult(
+                        "Account",
+                        "not changed",
+                        "at least one has to stay enabled",
+                      ),
                     })
                     openAccounts()
                     return
@@ -1455,6 +1828,120 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 }}
               />
             ))
+          }
+
+          /**
+           * Edit one account's ceilings, written to `accountIds.<id>.maxUsage`.
+           *
+           * A ceiling is per window; an empty value clears it (inherit = unset,
+           * i.e. no ceiling). The id must exist in the registry before a ceiling
+           * can hang off it — an un-migrated account is sent to Assign IDs first.
+           */
+          const editCeiling = (source: string) => {
+            const id = accountKey(source)
+            const cfg = getConfig()
+            if (id === source || !cfg.accountIds[id]) {
+              api.ui.toast({
+                variant: "warning",
+                title: "Ceilings",
+                message: toastResult(
+                  "Ceiling",
+                  "not set",
+                  "assign an id to this account first",
+                ),
+              })
+              return openAccounts()
+            }
+
+            const askWindow = (window: "5h" | "7d") => {
+              const currentCfg = getConfig()
+              const cur = currentCfg.accountIds[id]?.maxUsage?.[window]
+              askText(
+                `${window} ceiling for ${id} (empty = none)`,
+                cur === undefined ? "" : String(cur),
+                (value: string) => {
+                  const trimmed = value.trim()
+                  const entry = {
+                    ...currentCfg.accountIds[id],
+                  } as {
+                    match: unknown
+                    name?: string
+                    maxUsage?: Record<string, number>
+                  }
+                  const maxUsage = { ...entry.maxUsage }
+                  if (trimmed === "") {
+                    delete maxUsage[window]
+                  } else {
+                    const n = Number(
+                      trimmed.endsWith("%")
+                        ? Number(trimmed.slice(0, -1)) / 100
+                        : trimmed,
+                    )
+                    if (!Number.isFinite(n) || n <= 0 || n > 1) {
+                      api.ui.toast({
+                        variant: "error",
+                        title: "Ceilings",
+                        message: toastResult(
+                          "Ceiling",
+                          "not set",
+                          "a ratio above 0 and at most 1, e.g. 0.8 or 80%",
+                        ),
+                      })
+                      return askWindow(window)
+                    }
+                    maxUsage[window] = n
+                  }
+                  if (Object.keys(maxUsage).length) entry.maxUsage = maxUsage
+                  else delete entry.maxUsage
+                  const nextIds = { ...currentCfg.accountIds, [id]: entry }
+                  writeKey(
+                    "accountIds",
+                    indentJson(nextIds, 2),
+                    toastResult(
+                      `Ceiling ${window} for ${id}`,
+                      trimmed === "" ? "cleared" : `set to ${trimmed}`,
+                    ),
+                  )
+                  openCeiling()
+                },
+                () => openCeiling(),
+                "0.8",
+              )
+            }
+
+            const openCeiling = () => {
+              const c = getConfig()
+              const mu = c.accountIds[id]?.maxUsage
+              api.ui.dialog.replace(
+                () => (
+                  <api.ui.DialogSelect
+                    title={`Ceilings for ${id}`}
+                    options={[
+                      backRow("accounts"),
+                      {
+                        title: `5h ceiling: ${mu?.["5h"] === undefined ? "none" : `${Math.round(mu["5h"] * 100)}%`}`,
+                        value: "5h",
+                        description:
+                          "reserve this account above this 5h utilisation",
+                      },
+                      {
+                        title: `7d ceiling: ${mu?.["7d"] === undefined ? "none" : `${Math.round(mu["7d"] * 100)}%`}`,
+                        value: "7d",
+                        description:
+                          "reserve this account above this weekly utilisation",
+                      },
+                    ]}
+                    onSelect={(row) => {
+                      const v = String(row.value)
+                      if (v === BACK) return openAccounts()
+                      askWindow(v as "5h" | "7d")
+                    }}
+                  />
+                ),
+                escapeTo(openAccounts),
+              )
+            }
+            openCeiling()
           }
 
           const rename = (source: string) => {
@@ -1772,7 +2259,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     preset,
                     cfg as unknown as Record<string, unknown>,
                     (key, v) =>
-                      key === "weights"
+                      key === "weights" || key === "maxUsage"
                         ? `${Object.keys((v ?? {}) as object).length} set`
                         : display(v),
                   ),
@@ -1873,6 +2360,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
 
             if (key === "weights") return editWeights(name, preset)
             if (key === "order") return editOrder(name, preset)
+            if (key === "maxUsage") return editPresetCeilings(name, preset)
 
             const clearRow = {
               title: `Use the default (${display(defaults[key])})`,
@@ -1884,12 +2372,14 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 ? STRATEGY_NAMES.map((v) => ({ title: v, value: v }))
                 : key === "switchWindow"
                   ? ["5h", "7d", "binding"].map((v) => ({ title: v, value: v }))
-                  : key === "autoSwitch"
-                    ? [
-                        { title: "on", value: "true" },
-                        { title: "off", value: "false" },
-                      ]
-                    : null
+                  : key === "capMode"
+                    ? ["soft", "hard"].map((v) => ({ title: v, value: v }))
+                    : key === "autoSwitch"
+                      ? [
+                          { title: "on", value: "true" },
+                          { title: "off", value: "false" },
+                        ]
+                      : null
 
             if (choices) {
               return api.ui.dialog.replace(
@@ -2148,6 +2638,117 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             )
           }
 
+          /**
+           * Per-account ceiling overrides for one preset, written to
+           * `presets.<name>.maxUsage.<id>`. The id keys it, the same id the
+           * global ceilings and the balancer use; an account with no stable id
+           * cannot carry a per-preset ceiling, so it is skipped with a note.
+           */
+          const editPresetCeilings = (
+            name: string,
+            preset: Record<string, unknown>,
+          ) => {
+            const names = displayNames()
+            const map = (preset.maxUsage ?? {}) as Record<
+              string,
+              { "5h"?: number; "7d"?: number }
+            >
+            const show = (id: string) => {
+              const w = map[id]
+              if (!w) return "inherited"
+              const parts: string[] = []
+              if (w["5h"] !== undefined)
+                parts.push(`5h ${Math.round(w["5h"] * 100)}%`)
+              if (w["7d"] !== undefined)
+                parts.push(`wk ${Math.round(w["7d"] * 100)}%`)
+              return parts.join(" · ") || "inherited"
+            }
+            const ask = (id: string, window: "5h" | "7d") => {
+              const cur = map[id]?.[window]
+              askText(
+                `${window} ceiling for ${id} in ${name} (empty = inherit)`,
+                cur === undefined ? "" : String(cur),
+                (value: string) => {
+                  const trimmed = value.trim()
+                  const entry = { ...map[id] }
+                  if (trimmed === "") {
+                    delete entry[window]
+                  } else {
+                    const n = trimmed.endsWith("%")
+                      ? Number(trimmed.slice(0, -1)) / 100
+                      : Number(trimmed)
+                    if (!Number.isFinite(n) || n <= 0 || n > 1) {
+                      api.ui.toast({
+                        variant: "error",
+                        title: "Ceilings",
+                        message: toastResult(
+                          "Ceiling",
+                          "not set",
+                          "a ratio above 0 and at most 1",
+                        ),
+                      })
+                      return perAccount()
+                    }
+                    entry[window] = n
+                  }
+                  const nextMap = { ...map }
+                  if (Object.keys(entry).length) nextMap[id] = entry
+                  else delete nextMap[id]
+                  const body = { ...preset }
+                  if (Object.keys(nextMap).length) body.maxUsage = nextMap
+                  else delete body.maxUsage
+                  savePresets(
+                    { ...getConfig().presets, [name]: body },
+                    toastResult(`Ceiling for ${id}`, "saved"),
+                  )
+                  editPresetCeilings(name, body)
+                },
+                () => perAccount(),
+                "0.8",
+              )
+            }
+            const perAccount = () =>
+              api.ui.dialog.replace(
+                () => (
+                  <api.ui.DialogSelect
+                    title={`Ceilings for ${name}`}
+                    options={[
+                      backRow(name),
+                      ...accounts.flatMap((a) => {
+                        const id = accountKey(a.source)
+                        if (id === a.source) {
+                          return [
+                            {
+                              title: `${names.get(a.source) ?? a.source}: no id`,
+                              value: "",
+                              description:
+                                "assign an id before setting a ceiling",
+                              category: "Accounts",
+                            },
+                          ]
+                        }
+                        return (["5h", "7d"] as const).map((w) => ({
+                          title: `${id} ${w}: ${map[id]?.[w] === undefined ? "inherited" : `${Math.round(map[id]![w]! * 100)}%`}`,
+                          value: `${id}|${w}`,
+                          description: show(id),
+                          category: `${names.get(a.source) ?? a.source}`,
+                        }))
+                      }),
+                    ]}
+                    onSelect={(row) => {
+                      const v = String(row.value)
+                      if (v === BACK) return openPreset(name)
+                      if (!v.includes("|")) return perAccount()
+                      const [id, w] = v.split("|")
+                      ask(id!, w as "5h" | "7d")
+                    }}
+                  />
+                ),
+                escapeTo(() => openPreset(name)),
+              )
+            perAccount()
+          }
+
           const newPreset = () => {
             const cfg = getConfig()
             const prompt = (seed: string) =>
@@ -2194,7 +2795,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
       {
         name: "claude-auth.config",
-        title: "Claude auth settings",
+        title: paletteTitle("Settings", "Edit settings"),
         category: "Claude Auth",
         namespace: "palette",
         slashName: "cc-config",
@@ -2334,13 +2935,13 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       },
     ],
     bindings: [
-      { key: "<leader>a", cmd: "claude-auth.select", desc: "Claude account" },
-      { key: "<leader>s", cmd: "claude-auth.stats", desc: "Claude usage" },
-      { key: "<leader>c", cmd: "claude-auth.config", desc: "Claude settings" },
+      { key: "<leader>a", cmd: "claude-auth.select", desc: "Switch account" },
+      { key: "<leader>s", cmd: "claude-auth.stats", desc: "Usage by session" },
+      { key: "<leader>c", cmd: "claude-auth.config", desc: "Edit settings" },
       {
         key: "<leader>A",
         cmd: "claude-auth.accounts",
-        desc: "Claude accounts in use",
+        desc: "Manage accounts",
       },
     ],
   })

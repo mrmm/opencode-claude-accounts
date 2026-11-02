@@ -503,12 +503,21 @@ touched at start-up and when a picker opens, never on the poll.
 
 ### Commands
 
-| command        | default key | what it is for                                      |
-| -------------- | ----------- | --------------------------------------------------- |
-| `/cc-account`  | `<leader>a` | choose a preset, Auto, or pin one account           |
-| `/cc-accounts` | `<leader>A` | manage accounts and the arrangements they belong to |
-| `/cc-config`   | `<leader>c` | the settings that apply without a restart           |
-| `/cc-stats`    | `<leader>s` | usage per session, last 24h                         |
+Every palette entry is titled `Claude › <Area> › <Verb>`, so the eight commands
+sort together under one vendor and group by what they touch — Accounts, Presets,
+Usage, Cache, Optimize, Diagnostics, Settings.
+
+| command        | title                                        | key         | what it is for                                            |
+| -------------- | -------------------------------------------- | ----------- | --------------------------------------------------------- |
+| `/cc-account`  | Claude › Accounts › Switch account or preset | `<leader>a` | choose a preset, Auto, or pin one account                 |
+| `/cc-accounts` | Claude › Accounts › Manage accounts          | `<leader>A` | enable/disable, rename, assign IDs, set ceilings, presets |
+| `/cc-presets`  | Claude › Presets › Edit presets              |             | the preset editor on the Manage accounts menu             |
+| `/cc-stats`    | Claude › Usage › Usage by session            | `<leader>s` | usage per session, last 24h                               |
+| `/tokens`      | Claude › Usage › Token usage                 |             | per-session token breakdown and the fix report            |
+| `/cc-cache`    | Claude › Cache › Hit rate and misses         |             | cache hit rate, reads/writes, and labelled misses         |
+| `/optimize`    | Claude › Optimize › Ranked fixes             |             | ask the agent for a fix plan                              |
+| `/cc-debug`    | Claude › Diagnostics › Explain routing       |             | what the balancer is actually doing, right now            |
+| `/cc-config`   | Claude › Settings › Edit settings            | `<leader>c` | the settings that apply without a restart                 |
 
 ### /cc-account
 
@@ -517,28 +526,46 @@ one writes the selection file and nothing else -- no `authorize()`, no
 `auth.json` rewrite, no provider rebuild. That is the whole reason it exists
 next to the provider auth flow, which does all three.
 
+Two per-session toggles live here, under "This session": **Paid credits**, and
+**Use reserved quota** -- the latter lets this one session spend an account past
+its ceiling, while every other session still obeys the global `capMode`. Both
+are written to disk, since the balancer runs in a different process and would
+never see a flag set in the TUI.
+
 ### /cc-accounts
 
-- **Accounts in use** -- include or exclude an account. This writes the
-  `accounts` allow-list, where an empty list means "all": disabling one writes
-  the others explicitly, re-enabling everything writes `[]` again rather than
-  pinning today's set, and disabling the last one is refused, because obeying it
-  would empty the list and re-enable everything.
+- **Accounts in use** -- each row shows the account's **ID first, then its
+  display name**, with a used-vs-ceiling bar per window and a `reserved` marker
+  when it is past its ceiling. Selecting a row includes or excludes it, writing
+  the `accounts` allow-list, where an empty list means "all": disabling one
+  writes the others explicitly, re-enabling everything writes `[]` again rather
+  than pinning today's set, and disabling the last one is refused.
+- **Assign IDs** -- shown when any account has no stable id yet. Previews the
+  source → id rewrite, then on confirm runs the one-time migration (which backs
+  the config up first) so quota, presets and caps key by id from then on.
+- **Ceilings** -- set each account's `maxUsage` per window (5h / 7d), written to
+  `accountIds.<id>.maxUsage`; an empty value clears it (inherit = no ceiling).
 - **Re-read the Keychain** -- pick up an account added or removed since the
   session started, without restarting.
 - **Rename** -- writes `accountNames`. An empty name clears the override and
   returns the account to its derived name.
-- **Presets** -- create, delete, change the strategy, and toggle which accounts
-  belong. A preset's accounts are _references_, resolved the way the balancer
+- **Presets** -- create, delete, change the strategy, toggle which accounts
+  belong, and set per-account `maxUsage` ceilings and the preset's `capMode`
+  override. A preset's accounts are _references_, resolved the way the balancer
   resolves them, so a hand-written `"Acme 1"` is understood and preserved;
   references that resolve to nothing are listed as `[?]` and can be removed.
-  Presets built from `pools` are listed and marked read-only -- tiered failover
-  is a list of groups each with its own strategy, and a one-line dialog editing
-  that would be a worse text editor than the one already open.
+
+### /cc-cache
+
+Cache efficiency over the last 24h, as one block per account and per session:
+hit rate, cache reads / writes / uncached input, and the top miss causes
+(account switch, TTL expired, prefix change, …) with the tokens each rewrote.
+The figures come from the usage log's per-request token counts, which the quota
+cache cannot see.
 
 ### /cc-config
 
-Twenty-one settings in four sections -- Balancing, Quota, Tokens, Diagnostics --
+The settings in four sections -- Balancing, Quota, Tokens, Diagnostics --
 each row carrying its label, current value, description and config key, so
 anything seen here can still be found in the file.
 
