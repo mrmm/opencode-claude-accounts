@@ -24,6 +24,7 @@ import {
   resolveSessionCredentials,
   boundSource,
   refreshQuotas,
+  fetchIdentities,
   writeQuotaForAccount,
 } from "./balance/index.ts"
 import crypto from "node:crypto"
@@ -289,13 +290,33 @@ export function buildRequestHeaders(
 export function topUpQuota(trigger: string): void {
   const cfg = getConfig()
   if (!cfg.quotaProbe) return
-  const targets = refreshAccountsList()
-    .map((a) => ({
-      source: a.source,
-      accessToken: a.credentials?.accessToken ?? "",
-    }))
-    .filter((a) => a.accessToken)
+  const accounts = refreshAccountsList().filter(
+    (a) => a.credentials?.accessToken,
+  )
+  const targets = accounts.map((a) => ({
+    source: a.source,
+    accessToken: a.credentials.accessToken,
+  }))
   if (targets.length === 0) return
+
+  // Resolve identity on the same fresh-token moment: an account not yet in the
+  // identity cache is fetched once, detached, never on the request path. A 401
+  // keeps whatever is cached.
+  void fetchIdentities(
+    accounts.map((a) => {
+      const t: {
+        source: string
+        accessToken: string
+        configDir?: string
+      } = { source: a.source, accessToken: a.credentials.accessToken }
+      if (a.configDir) t.configDir = a.configDir
+      return t
+    }),
+  )
+    .then((r) => {
+      if (r.fetched > 0) log("identity_resolved", { trigger, ...r })
+    })
+    .catch(() => {})
 
   void refreshQuotas(targets, {
     maxAgeSeconds: Math.floor(cfg.quotaProbeMaxAge / 1000),
