@@ -15,6 +15,7 @@ import {
   resolveAccountRefs,
   resolvePools,
   resolveRef,
+  hostRetries,
   recoveryTimes,
   spentRetry,
   usageOf,
@@ -1097,6 +1098,14 @@ describe("spentRetry", () => {
     assert.equal(r.retryAfterS, 780)
     assert.ok(r.retryAfterS * 9 >= 7020)
     assert.match(r.message, /Re-checking every 13m/)
+  })
+  it("paces to a different OpenCode retry count", () => {
+    const at = { name: "a", at: NOW_MS + 7020_000 }
+    assert.equal(spentRetry(at, NOW_MS, clock, undefined, 5).retryAfterS, 900)
+    assert.equal(spentRetry(at, NOW_MS, clock, undefined, 20).retryAfterS, 370)
+    assert.equal(hostRetries({ OPENCODE_CLAUDE_AUTH_HOST_RETRIES: "20" }), 20)
+    assert.equal(hostRetries({ OPENCODE_CLAUDE_AUTH_HOST_RETRIES: "x" }), 10)
+    assert.equal(hostRetries({}), 10)
   })
   it("never re-checks more often than a minute or less than every 15 minutes", () => {
     assert.equal(

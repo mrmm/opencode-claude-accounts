@@ -900,11 +900,17 @@ export const SPENT_RECHECK_S = 60
 /** OpenCode caps a retry-after at 15 minutes. */
 export const SPENT_RECHECK_MAX_S = 900
 /**
- * OpenCode (2.2.x) retries a 429 at most 10 times. Spreading the wait over 9
- * of them lands a retry at the reset, so the request resumes by itself instead
- * of failing after ten one-minute checks.
+ * How many times OpenCode retries a 429: 10 as of 2.2.x. Spreading the wait
+ * over all but one of them lands a retry at the reset, so the request resumes
+ * by itself instead of failing after ten one-minute checks. A different
+ * OpenCode can be matched with OPENCODE_CLAUDE_AUTH_HOST_RETRIES.
  */
-const SPENT_RETRIES = 9
+export const HOST_RETRIES = 10
+
+export function hostRetries(env: NodeJS.ProcessEnv = process.env): number {
+  const n = parseInt(env.OPENCODE_CLAUDE_AUTH_HOST_RETRIES ?? "", 10)
+  return Number.isNaN(n) || n < 2 ? HOST_RETRIES : n
+}
 
 /**
  * The retry the operator sees when every account refused: the real time the
@@ -917,6 +923,7 @@ export function spentRetry(
   nowMs: number,
   clock: (ms: number) => string,
   serverRetryAfterS?: number,
+  retries: number = hostRetries(),
 ): { retryAfterS: number; message: string } {
   const wait = next ? Math.ceil((next.at - nowMs) / 1000) : undefined
   const every =
@@ -924,7 +931,7 @@ export function spentRetry(
       ? SPENT_RECHECK_S
       : Math.min(
           SPENT_RECHECK_MAX_S,
-          Math.max(SPENT_RECHECK_S, Math.ceil(wait / SPENT_RETRIES)),
+          Math.max(SPENT_RECHECK_S, Math.ceil(wait / (retries - 1))),
         )
   const candidates = [every, wait, serverRetryAfterS].filter(
     (v): v is number => v !== undefined && v > 0,
