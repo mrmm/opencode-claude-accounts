@@ -45,7 +45,11 @@ import {
   loadPersistedAccountSource,
   saveAccountSource,
 } from "../credentials.ts"
-import { formatQuotaPrefix, readQuotaCache } from "../balance/quota.ts"
+import {
+  formatQuotaPrefix,
+  quotaEntry,
+  readQuotaCache,
+} from "../balance/quota.ts"
 import { parseWindowMs, reserveRefusal } from "./tools-format.ts"
 import {
   credentialState,
@@ -162,7 +166,7 @@ export const claudeAuthTools = {
             ? "usable"
             : `unusable — ${h?.reason ?? "?"}`
         lines.push(
-          `  ${m.source === servingSource ? "*" : " "} ${accountKey(m.source).padEnd(16)} ${nameOf(m.source, m.label).padEnd(32)} ${(formatQuotaPrefix(quota[m.source]) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
+          `  ${m.source === servingSource ? "*" : " "} ${accountKey(m.source).padEnd(16)} ${nameOf(m.source, m.label).padEnd(32)} ${(formatQuotaPrefix(quotaEntry(quota, m.source)) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
         )
       }
 
