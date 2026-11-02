@@ -44,6 +44,8 @@ export type CredentialState = "ok" | "refreshable" | "unusable"
 export type Member = {
   source: string
   label?: string
+  /** Stable account id, when one is registered for this account. */
+  id?: string
   credential?: CredentialState
 }
 
@@ -257,10 +259,11 @@ export function assess(
 /**
  * Turn one account reference into a live Keychain source.
  *
- * A reference is either an exact source (`Claude Code-credentials-aaaa1111`) or
- * a case-insensitive fragment of the account's label (`Team B`). The fragment
- * form exists so a preset reads like the thing it is — "round-robin over Team A
- * and Team B" — rather than a row of hex suffixes nobody can check by eye.
+ * A reference is, in precedence order: an exact account id (`acme-1`), an exact
+ * source (`Claude Code-credentials-aaaa1111`), or a case-insensitive fragment of
+ * the account's label (`Team B`). Ids come first and win outright -- that is the
+ * stable form migration rewrites everything to. The source and label forms are
+ * kept for one release so an un-migrated config still resolves.
  *
  * A fragment matching more than one account returns undefined rather than
  * guessing: silently picking one of two plausible accounts is worse than saying
@@ -270,6 +273,9 @@ export function resolveRef(
   ref: string,
   members: readonly Member[],
 ): string | undefined {
+  const byId = members.find((m) => m.id === ref)
+  if (byId) return byId.source
+
   const exact = members.find((m) => m.source === ref)
   if (exact) return exact.source
 

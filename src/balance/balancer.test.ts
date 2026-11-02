@@ -512,6 +512,17 @@ describe("account references", () => {
     assert.equal(resolveRef("Claude Team", live), undefined)
   })
 
+  it("matches an exact id before source or label", () => {
+    const live: Member[] = [
+      { source: "s1", id: "acme-1", label: "Team A" },
+      { source: "s2", id: "acme-2", label: "Team B" },
+    ]
+    assert.equal(resolveRef("acme-2", live), "s2")
+    // Source and label forms still resolve for one release.
+    assert.equal(resolveRef("s1", live), "s1")
+    assert.equal(resolveRef("Team B", live), "s2")
+  })
+
   it("reports references that went nowhere", () => {
     const live: Member[] = [{ source: "s1", label: "Team A" }]
     const { sources, unresolved } = resolveAccountRefs(
