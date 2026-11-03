@@ -1260,6 +1260,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               }),
           })
         }
+        // One name column for groups and accounts, so every figure after it
+        // starts at the same place whatever the names are.
+        const groupLabel = (g: { title: string; count: string }) =>
+          `${g.title} ${g.count}`
+        const nameWidth = () =>
+          Math.max(
+            0,
+            ...view().rows.map((r) => r.name.length),
+            ...sections().map((g) => groupLabel(g).length),
+          )
         const rowBySource = () =>
           new Map(visible().map((a, i) => [a.source, view().rows[i]!]))
         type SidebarRow = ReturnType<typeof view>["rows"][number]
@@ -1282,7 +1292,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     : api.theme.current.textMuted,
                 }}
               >
-                {props.row.name}
+                {props.row.name.padEnd(nameWidth())}
                 <span style={{ fg: healthColour(props.row.health) }}>
                   {"  "}
                   {props.row.detail}
@@ -1329,7 +1339,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                         onMouseUp={() => toggleSection(g.key)}
                       >
                         {isFolded(g.key) ? "\u25b8 " : "\u25be "}
-                        <b>{g.title}</b>
+                        <b>{groupLabel(g).padEnd(nameWidth())}</b>
                         <span style={{ fg: healthColour(g.health) }}>
                           {`  ${g.summary}`}
                         </span>

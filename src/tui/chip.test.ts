@@ -31,6 +31,7 @@ import {
   servedBy,
   utilisation,
   gauge,
+  windowCell,
   type ChipAccount,
 } from "./chip.ts"
 import type { QuotaCache } from "../balance/index.ts"
@@ -298,7 +299,7 @@ describe("sidebarLines", () => {
     const { rows } = sidebarLines({ ...base, selection: "__auto__" })
     assert.equal(
       rows[0]!.detail,
-      "5h \u2588\u2582\u2581 41%  wk \u2588\u2583\u2581 45%",
+      "5h \u2588\u2582\u2581 41%   wk \u2588\u2583\u2581 45%",
     )
     assert.match(rows[1]!.detail, /no reading/)
   })
@@ -1254,5 +1255,12 @@ describe("gauge", () => {
     assert.equal(gauge(50), "\u2588\u2584\u2581")
     assert.equal(gauge(100), "\u2588\u2588\u2588")
     assert.equal(gauge(140), "\u2588\u2588\u2588")
+  })
+})
+
+describe("windowCell", () => {
+  it("is the same width whatever the percentage", () => {
+    const widths = [0, 5, 16, 100].map((p) => windowCell("5h", p).length)
+    assert.deepEqual(new Set(widths).size, 1)
   })
 })

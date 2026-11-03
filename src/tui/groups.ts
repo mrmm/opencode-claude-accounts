@@ -10,7 +10,7 @@ import type { AccountGroup } from "../config.ts"
 import type { QuotaCache } from "../balance/index.ts"
 import {
   accountHealth,
-  gauge,
+  windowCell,
   servedBy,
   utilisation,
   type ChipAccount,
@@ -21,8 +21,10 @@ export type GroupSection = {
   /** Fold key, stable across renders. */
   key: string
   title: string
-  /** `1/3  5h ▁▁▁ 3%  wk ███ 70%`: usable accounts, then the group's use per window. */
+  /** `5h ▁▁▁ 3%    wk ███ 70%`: the group's use per window, in the account columns. */
   summary: string
+  /** `1/3`: accounts that can still take a request, of all members. */
+  count: string
   /** `41% reqs`, or empty when nothing was served. */
   share: string
   /** The worst state of any member. */
@@ -89,7 +91,9 @@ export function groupRows(input: {
     return {
       key,
       title,
-      summary: `${usable}/${n}  5h ${gauge(used(five))} ${used(five)}%  wk ${gauge(used(week))} ${used(week)}%`,
+      summary:
+        `${windowCell("5h", used(five))}  ${windowCell("wk", used(week))}`.trimEnd(),
+      count: `${usable}/${n}`,
       share,
       health,
       sources,

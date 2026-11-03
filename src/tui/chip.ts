@@ -122,6 +122,11 @@ export function gauge(pct: number): string {
   return out
 }
 
+/** One window as a fixed-width cell, `5h ▄▁▁ 16% `, so columns line up. */
+export function windowCell(label: string, pct: number): string {
+  return `${label} ${gauge(pct)} ${`${pct}%`.padEnd(4)}`
+}
+
 export function quotaText(
   quota: QuotaCache,
   source: string | null,
@@ -150,12 +155,18 @@ export function quotaText(
   const win = (label: string, pct: number | undefined, secs?: number) =>
     pct === undefined
       ? `${label} ${NONE}`
-      : `${label} ${opts.bars ? `${gauge(pct)} ` : ""}${pct}%${left(secs, pct)}`
+      : opts.bars
+        ? `${windowCell(label, pct)}${left(secs, pct)}`
+        : `${label} ${pct}%${left(secs, pct)}`
   const parts = [win("5h", five, fiveIn)]
   if (opts.includeWeek !== false) parts.push(win("wk", week, weekIn))
   // Said in a word rather than punctuation: "!" needs a legend, "refused" does
   // not, and this is the one state that means requests are failing right now.
-  if (rejected) parts.unshift("refused")
+  // In the sidebar it goes last, so it cannot push the columns out of line.
+  if (rejected) {
+    if (opts.bars) parts.push("refused")
+    else parts.unshift("refused")
+  }
 
   // Always, when there is a funded line: knowing an account has 66 EUR left
   // is what tells you it can take over, and that is worth knowing BEFORE the
@@ -165,7 +176,7 @@ export function quotaText(
     const spent = spendText(quota, source)
     if (spent) parts.push(spent)
   }
-  return parts.join(opts.bars ? "  " : SEP)
+  return opts.bars ? parts.join("  ").trimEnd() : parts.join(SEP)
 }
 
 /**

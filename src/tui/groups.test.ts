@@ -58,11 +58,12 @@ describe("groupRows", () => {
     )
     assert.equal(
       out[0]!.summary,
-      "2/2  5h \u2588\u2581\u2581 35%  wk \u2588\u2588\u2584 80%",
+      "5h \u2588\u2581\u2581 35%   wk \u2588\u2588\u2584 80%",
     )
+    assert.equal(out[0]!.count, "2/2")
     assert.equal(out[0]!.share, "40% reqs")
     assert.equal(
-      out[1]!.summary.slice(0, 3),
+      out[1]!.count,
       "0/1",
       "a spent 5h window makes the account unusable",
     )
@@ -71,7 +72,7 @@ describe("groupRows", () => {
     assert.equal(out[2]!.health, "unknown")
     assert.equal(
       out[2]!.summary,
-      "0/1  5h \u2588\u2588\u2588 100%  wk \u2588\u2588\u2588 100%",
+      "5h \u2588\u2588\u2588 100%  wk \u2588\u2588\u2588 100%",
       "no reading counts as no room",
     )
   })

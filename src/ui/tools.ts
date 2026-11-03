@@ -180,7 +180,7 @@ export const claudeAuthTools = {
         lines.push("", "groups (room in accounts; worst state):")
         for (const g of groups) {
           lines.push(
-            `  ${g.title.padEnd(16)} ${`${g.summary}  ${g.share}`.padEnd(44)} ${g.health.padEnd(8)} ${g.sources.map((s) => accountKey(s)).join(", ") || "(no live account)"}`,
+            `  ${g.title.padEnd(16)} ${`${g.count}  ${g.summary}  ${g.share}`.padEnd(48)} ${g.health.padEnd(8)} ${g.sources.map((s) => accountKey(s)).join(", ") || "(no live account)"}`,
           )
         }
       }
