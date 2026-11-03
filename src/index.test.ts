@@ -594,33 +594,45 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
   // Regression: a spent pool surfaced the server's retry-after (896s) and its
   // generic message, hiding when an account was really back and ignoring an
   // account freed or added meanwhile.
-  it("withSpentRetry rewrites the message and retry-after, keeps the shape", async () => {
+  // Regression: the server's "usage limit" wording, kept in the body as
+  // upstream_message, made OpenCode classify the 429 as quota exhaustion,
+  // which it never retries: the turn failed with no auto retry.
+  it("withSpentRetry asks OpenCode to retry and reads as a rate limit", async () => {
     const res = new Response(
       JSON.stringify({
         type: "error",
-        error: { type: "rate_limit_error", message: "would exceed" },
+        error: {
+          type: "rate_limit_error",
+          message: "Claude AI usage limit reached; quota exceeded",
+        },
       }),
       {
         status: 429,
         headers: { "retry-after": "896", "content-length": "99" },
       },
     )
-    const out = await helpers.withSpentRetry(res, {
+    const { response: out, upstream } = await helpers.withSpentRetry(res, {
       retryAfterS: 60,
-      message: "Next back: Alt 2 at 20:50",
+      message: "Every account is spent. Next back: Alt 2 at 20:50",
     })
     assert.equal(out.status, 429)
     assert.equal(out.headers.get("retry-after"), "60")
+    assert.equal(out.headers.get("x-should-retry"), "true")
     assert.equal(out.headers.get("content-length"), null)
-    const body = (await out.json()) as {
+    const text = await out.text()
+    // OpenCode 2.2.x's quota-exhaustion pattern: a match makes a 429 final.
+    const quotaWording =
+      /insufficient[-_\s]?(?:quota|balance)|(?<!token_)quota[-_\s]?exceeded|budget exceeded|usage limit|limit exhausted|package has expired|plan does not yet include/i
+    assert.doesNotMatch(text, quotaWording)
+    const body = JSON.parse(text) as {
       error: { type: string; message: string }
     }
     assert.equal(body.error.type, "rate_limit_error")
-    assert.equal(body.error.message, "Next back: Alt 2 at 20:50")
     assert.equal(
-      (body.error as { upstream_message?: string }).upstream_message,
-      "would exceed",
+      body.error.message,
+      "Every account is spent. Next back: Alt 2 at 20:50",
     )
+    assert.equal(upstream, "Claude AI usage limit reached; quota exceeded")
   })
 
   it("fetchWithRetry retries on 429 and succeeds", async () => {

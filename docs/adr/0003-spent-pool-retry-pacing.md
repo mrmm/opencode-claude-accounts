@@ -14,9 +14,12 @@ but runs out of retries after about ten minutes, long before any reset.
 
 ## Decision
 
-- The final 429 keeps its Anthropic error shape. Its message names the next
-  account back and the clock time. The server's own message is kept as
-  `error.upstream_message`.
+- The final 429 is a plain `rate_limit_error` whose message names the next
+  account back and the clock time, and it carries `x-should-retry: true`.
+  OpenCode retries only a rate limit or a response with that header; a 429
+  whose text reads as quota exhaustion ("usage limit", "quota exceeded") is
+  final. So none of the server's wording goes into the body; it is logged
+  (`spent_pool_retry`) instead.
 - `retry-after` is the wait until that account is back, spread over all but
   one of OpenCode's retries, kept between 60 seconds and 15 minutes. The
   retries then reach the reset and the request resumes by itself.

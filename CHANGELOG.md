@@ -15,6 +15,7 @@ Design decisions behind these changes are in [docs/adr](docs/adr/README.md); the
 
 ### Bug Fixes
 
+* when every account is spent, OpenCode retries the request again instead of failing it: the 429 carries `x-should-retry: true` and no longer includes the server's quota wording, which OpenCode treats as final ([ADR 0003](docs/adr/0003-spent-pool-retry-pacing.md))
 * the sidebar, forecast and status read stale quota left under the old account key and showed a refused account as healthy ([ADR 0001](docs/adr/0001-stable-account-ids.md))
 * least-used and the request share undercounted accounts with usage logged before the move to stable ids
 * the preset editor showed a group name as an unresolved account

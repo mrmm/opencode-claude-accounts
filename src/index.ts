@@ -208,41 +208,45 @@ function getMaxRetryDelayMs(): number {
 }
 
 /**
- * The same 429 with the operator-facing message and retry-after replaced.
- * Keeps the Anthropic error shape so OpenCode still classifies it as a rate
- * limit; anything unparseable keeps its body and only gains the header.
+ * The same 429, rewritten so OpenCode waits and retries instead of failing.
+ *
+ * OpenCode (2.2.x) retries a refused request only when it is classified as a
+ * rate limit or carries `x-should-retry: true`; one whose text reads as quota
+ * exhaustion ("usage limit", "quota exceeded", ...) is final. So the body is
+ * a plain `rate_limit_error` with our message and nothing of the server's
+ * wording, and the header asks for the retry explicitly. The server's own
+ * message is returned for the log instead.
  */
 export async function withSpentRetry(
   res: Response,
   plan: { retryAfterS: number; message: string },
-): Promise<Response> {
+): Promise<{ response: Response; upstream?: string }> {
   const text = await res.text().catch(() => "")
-  let body = text
+  let upstream: string | undefined
   try {
-    const parsed = JSON.parse(text) as { error?: { message?: string } }
-    if (
-      parsed?.error &&
-      typeof parsed.error === "object" &&
-      !Array.isArray(parsed.error)
-    ) {
-      // Keep the server's own reason; the logs read the rewritten body.
-      if (typeof parsed.error.message === "string")
-        (parsed.error as Record<string, unknown>).upstream_message =
-          parsed.error.message
-      parsed.error.message = plan.message
-      body = JSON.stringify(parsed)
-    }
+    const m = (JSON.parse(text) as { error?: { message?: unknown } })?.error
+      ?.message
+    if (typeof m === "string") upstream = m
   } catch {}
+  const body = JSON.stringify({
+    type: "error",
+    error: { type: "rate_limit_error", message: plan.message },
+  })
   const headers = new Headers(res.headers)
   headers.set("retry-after", String(plan.retryAfterS))
+  headers.set("x-should-retry", "true")
+  headers.set("content-type", "application/json")
   headers.delete("retry-after-ms")
   headers.delete("content-length")
   headers.delete("content-encoding")
-  return new Response(body, {
-    status: res.status,
-    statusText: res.statusText,
-    headers,
-  })
+  return {
+    response: new Response(body, {
+      status: 429,
+      statusText: res.statusText,
+      headers,
+    }),
+    ...(upstream !== undefined ? { upstream } : {}),
+  }
 }
 
 export async function fetchWithRetry(
@@ -1300,10 +1304,13 @@ const plugin: PluginWithOptions = async (
                 serverS * 1000 > getMaxRetryDelayMs()
               ) {
                 steps.push("spent")
-                response = await withSpentRetry(
-                  response,
-                  spentRetryNow(serverS),
-                )
+                const plan = spentRetryNow(serverS)
+                const spent = await withSpentRetry(response, plan)
+                response = spent.response
+                log("spent_pool_retry", {
+                  retryAfterS: plan.retryAfterS,
+                  upstream: spent.upstream,
+                })
                 preserveResponseUnchanged = false
               }
             }
