@@ -110,6 +110,18 @@ const NONE = "\u2014"
  * in a week), so reading the wrong one leads to the wrong decision. A percentage
  * above 100 is not a bug: it means the account is past its threshold.
  */
+const LEVELS = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+/** Percent used as three cells, fuller meaning more used: `▁▁▁` idle, `███` spent. */
+export function gauge(pct: number): string {
+  let out = ""
+  for (let i = 0; i < 3; i++) {
+    const cell = Math.min(1, Math.max(0, (pct / 100) * 3 - i))
+    out += LEVELS[Math.max(0, Math.ceil(cell * 8) - 1)]
+  }
+  return out
+}
+
 export function quotaText(
   quota: QuotaCache,
   source: string | null,
@@ -119,6 +131,8 @@ export function quotaText(
     now?: number
     /** Append the money once credits are actually covering this account. */
     spend?: boolean
+    /** Sidebar form: a gauge per window, and a reset time only on a spent one. */
+    bars?: boolean
   } = {},
 ): string {
   const { five, week, fiveIn, weekIn, rejected } = utilisation(
@@ -129,12 +143,16 @@ export function quotaText(
   if (five === undefined && week === undefined) return "no reading"
   // Percentage then time-remaining, the shape the account switcher already
   // uses, so the two surfaces read the same way.
-  const left = (secs: number | undefined) =>
-    opts.resets && secs !== undefined ? ` ${formatDuration(secs)}` : ""
-  const parts = [`5h ${five === undefined ? NONE : `${five}%`}${left(fiveIn)}`]
-  if (opts.includeWeek !== false) {
-    parts.push(`wk ${week === undefined ? NONE : `${week}%`}${left(weekIn)}`)
-  }
+  const left = (secs: number | undefined, pct: number | undefined) =>
+    opts.resets && secs !== undefined && (!opts.bars || (pct ?? 0) >= 100)
+      ? ` ${formatDuration(secs)}`
+      : ""
+  const win = (label: string, pct: number | undefined, secs?: number) =>
+    pct === undefined
+      ? `${label} ${NONE}`
+      : `${label} ${opts.bars ? `${gauge(pct)} ` : ""}${pct}%${left(secs, pct)}`
+  const parts = [win("5h", five, fiveIn)]
+  if (opts.includeWeek !== false) parts.push(win("wk", week, weekIn))
   // Said in a word rather than punctuation: "!" needs a legend, "refused" does
   // not, and this is the one state that means requests are failing right now.
   if (rejected) parts.unshift("refused")
@@ -147,7 +165,7 @@ export function quotaText(
     const spent = spendText(quota, source)
     if (spent) parts.push(spent)
   }
-  return parts.join(SEP)
+  return parts.join(opts.bars ? "  " : SEP)
 }
 
 /**
@@ -424,6 +442,8 @@ export function sidebarLines(input: ChipInput): {
   rows: {
     name: string
     detail: string
+    /** `41% reqs`, kept off the sidebar line to fit one line. */
+    share: string
     active: boolean
     health: Health
   }[]
@@ -443,6 +463,7 @@ export function sidebarLines(input: ChipInput): {
     const quota = quotaText(input.quota, a.source, {
       resets: true,
       spend: true,
+      bars: true,
       now: input.now,
     })
     const health = accountHealth(
@@ -462,7 +483,8 @@ export function sidebarLines(input: ChipInput): {
 
     return {
       name: names.get(a.source) ?? shortLabel(a.label),
-      detail: `${quota}${share}`,
+      detail: quota,
+      share: share.slice(SEP.length),
       active: a.source === input.activeSource,
       health,
     }

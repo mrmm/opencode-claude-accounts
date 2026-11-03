@@ -9,8 +9,8 @@
 import type { AccountGroup } from "../config.ts"
 import type { QuotaCache } from "../balance/index.ts"
 import {
-  SEP,
   accountHealth,
+  gauge,
   servedBy,
   utilisation,
   type ChipAccount,
@@ -21,8 +21,10 @@ export type GroupSection = {
   /** Fold key, stable across renders. */
   key: string
   title: string
-  /** `5h 2.3/3 left · wk 0.4/3 left · 41% reqs` */
+  /** `1/3  5h ▁▁▁ 3%  wk ███ 70%`: usable accounts, then the group's use per window. */
   summary: string
+  /** `41% reqs`, or empty when nothing was served. */
+  share: string
   /** The worst state of any member. */
   health: Health
   /** Members, in configured account order. */
@@ -63,22 +65,32 @@ export function groupRows(input: {
     let five = 0
     let week = 0
     let served = 0
+    let usable = 0
     let health: Health = "unknown"
     for (const s of sources) {
       const u = utilisation(input.quota, s, input.now)
       five += u.five === undefined ? 0 : Math.max(0, 1 - u.five / 100)
       week += u.week === undefined ? 0 : Math.max(0, 1 - u.week / 100)
       served += servedBy(input.requests, s) ?? 0
+      if (
+        u.five !== undefined &&
+        u.week !== undefined &&
+        u.five < 100 &&
+        u.week < 100 &&
+        !u.rejected
+      )
+        usable++
       const h = accountHealth(input.quota, s, thresholds)
       if (RANK[h] > RANK[health]) health = h
     }
     const n = sources.length
-    const share =
-      total > 0 ? `${SEP}${Math.round((served / total) * 100)}% reqs` : ""
+    const share = total > 0 ? `${Math.round((served / total) * 100)}% reqs` : ""
+    const used = (left: number) => Math.round((1 - left / n) * 100)
     return {
       key,
       title,
-      summary: `5h ${five.toFixed(1)}/${n} left${SEP}wk ${week.toFixed(1)}/${n} left${share}`,
+      summary: `${usable}/${n}  5h ${gauge(used(five))} ${used(five)}%  wk ${gauge(used(week))} ${used(week)}%`,
+      share,
       health,
       sources,
     }

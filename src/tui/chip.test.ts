@@ -30,6 +30,7 @@ import {
   mostRecentlyObserved,
   servedBy,
   utilisation,
+  gauge,
   type ChipAccount,
 } from "./chip.ts"
 import type { QuotaCache } from "../balance/index.ts"
@@ -295,8 +296,10 @@ describe("sidebarLines", () => {
 
   it("says so when an account has no reading, rather than implying 0%", () => {
     const { rows } = sidebarLines({ ...base, selection: "__auto__" })
-    assert.match(rows[0]!.detail, /5h 41%/)
-    assert.match(rows[0]!.detail, /wk 45%/)
+    assert.equal(
+      rows[0]!.detail,
+      "5h \u2588\u2582\u2581 41%  wk \u2588\u2583\u2581 45%",
+    )
     assert.match(rows[1]!.detail, /no reading/)
   })
 
@@ -306,8 +309,8 @@ describe("sidebarLines", () => {
       selection: "__auto__",
       requests: { s1: 75, s2: 25 },
     })
-    assert.match(rows[0]!.detail, /75% reqs/)
-    assert.match(rows[1]!.detail, /25% reqs/)
+    assert.equal(rows[0]!.share, "75% reqs")
+    assert.equal(rows[1]!.share, "25% reqs")
   })
 
   it("omits the share rather than printing 0% when nothing is known", () => {
@@ -948,7 +951,7 @@ describe("reset countdowns", () => {
     )
   })
 
-  it("puts the countdown in the sidebar", () => {
+  it("puts the countdown in the sidebar only on a spent window", () => {
     const { rows } = sidebarLines({
       accounts: [{ source: "s1", label: "Acme 1" }],
       quota: withResets(7800, 273_600),
@@ -956,8 +959,18 @@ describe("reset countdowns", () => {
       activeSource: "s1",
       now: NOW,
     })
-    assert.match(rows[0]!.detail, /5h 24% 2h10m/)
-    assert.match(rows[0]!.detail, /wk 56% 3d4h/)
+    assert.doesNotMatch(rows[0]!.detail, /2h10m|3d4h/)
+    const spent = withResets(7800, 273_600)
+    spent["s1"]!.sevenDay!.utilization = 1
+    const { rows: full } = sidebarLines({
+      accounts: [{ source: "s1", label: "Acme 1" }],
+      quota: spent,
+      selection: "__auto__",
+      activeSource: "s1",
+      now: NOW,
+    })
+    assert.match(full[0]!.detail, /wk \u2588\u2588\u2588 100% 3d4h/)
+    assert.doesNotMatch(full[0]!.detail, /2h10m/)
   })
 })
 
@@ -1231,5 +1244,15 @@ describe("servedBy", () => {
     assert.equal(servedBy({ "src-1": 2 }, "src-1", key), 2)
     assert.equal(servedBy({ "src-2": 4 }, "src-2", key), 4)
     assert.equal(servedBy({}, "src-1", key), undefined)
+  })
+})
+
+describe("gauge", () => {
+  it("fills three cells with use, never blank", () => {
+    assert.equal(gauge(0), "\u2581\u2581\u2581")
+    assert.equal(gauge(3), "\u2581\u2581\u2581")
+    assert.equal(gauge(50), "\u2588\u2584\u2581")
+    assert.equal(gauge(100), "\u2588\u2588\u2588")
+    assert.equal(gauge(140), "\u2588\u2588\u2588")
   })
 })
