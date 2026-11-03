@@ -122,9 +122,19 @@ export function gauge(pct: number): string {
   return out
 }
 
-/** One window as a fixed-width cell, `5h ▄▁▁ 16% `, so columns line up. */
-export function windowCell(label: string, pct: number): string {
-  return `${label} ${gauge(pct)} ${`${pct}%`.padEnd(4)}`
+/**
+ * One window as a fixed-width cell, `5h ▄▁▁ 16%  `, so columns line up. A spent
+ * window shows when it is back instead of `100%`: the full gauge already says
+ * spent, and the countdown is the figure worth reading.
+ */
+export function windowCell(
+  label: string,
+  pct: number,
+  resetIn?: number,
+): string {
+  const value =
+    pct >= 100 && resetIn !== undefined ? formatDuration(resetIn) : `${pct}%`
+  return `${label} ${gauge(pct)} ${value.padEnd(5)}`
 }
 
 export function quotaText(
@@ -156,7 +166,7 @@ export function quotaText(
     pct === undefined
       ? `${label} ${NONE}`
       : opts.bars
-        ? `${windowCell(label, pct)}${left(secs, pct)}`
+        ? windowCell(label, pct, opts.resets ? secs : undefined)
         : `${label} ${pct}%${left(secs, pct)}`
   const parts = [win("5h", five, fiveIn)]
   if (opts.includeWeek !== false) parts.push(win("wk", week, weekIn))

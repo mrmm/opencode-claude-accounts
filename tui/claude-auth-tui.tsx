@@ -127,7 +127,7 @@ import {
 import { readIdentityCache } from "../dist/balance/identity.js"
 import { namesBySource } from "../dist/balance/accounts-id.js"
 import { readFolds, toggleFold, writeFolds } from "../dist/tui/fold.js"
-import { groupRows } from "../dist/tui/groups.js"
+import { groupRows, memberName } from "../dist/tui/groups.js"
 import {
   configRows,
   display,
@@ -1264,16 +1264,28 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         // starts at the same place whatever the names are.
         const groupLabel = (g: { title: string; count: string }) =>
           `${g.title} ${g.count}`
+        // Inside a group a member drops the group's name from its own.
+        const shownName = () => {
+          const m = new Map<string, string>()
+          for (const g of sections())
+            for (const s of g.sources) {
+              const row = rowBySource().get(s)
+              if (row) m.set(s, memberName(g.title, row.name))
+            }
+          return m
+        }
         const nameWidth = () =>
           Math.max(
             0,
-            ...view().rows.map((r) => r.name.length),
+            ...(sections().length > 0
+              ? [...shownName().values()].map((n) => n.length)
+              : view().rows.map((r) => r.name.length)),
             ...sections().map((g) => groupLabel(g).length),
           )
         const rowBySource = () =>
           new Map(visible().map((a, i) => [a.source, view().rows[i]!]))
         type SidebarRow = ReturnType<typeof view>["rows"][number]
-        const AccountRow = (props: { row: SidebarRow }) => {
+        const AccountRow = (props: { row: SidebarRow; name?: string }) => {
           return (
             <box flexDirection="row" gap={1}>
               <text
@@ -1292,7 +1304,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                     : api.theme.current.textMuted,
                 }}
               >
-                {props.row.name.padEnd(nameWidth())}
+                {(props.name ?? props.row.name).padEnd(nameWidth())}
                 <span style={{ fg: healthColour(props.row.health) }}>
                   {"  "}
                   {props.row.detail}
@@ -1349,7 +1361,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                           <For each={g.sources}>
                             {(source) => (
                               <Show when={rowBySource().get(source)}>
-                                {(row) => <AccountRow row={row()} />}
+                                {(row) => (
+                                  <AccountRow
+                                    row={row()}
+                                    name={shownName().get(source)}
+                                  />
+                                )}
                               </Show>
                             )}
                           </For>

@@ -299,7 +299,7 @@ describe("sidebarLines", () => {
     const { rows } = sidebarLines({ ...base, selection: "__auto__" })
     assert.equal(
       rows[0]!.detail,
-      "5h \u2588\u2582\u2581 41%   wk \u2588\u2583\u2581 45%",
+      "5h \u2588\u2582\u2581 41%    wk \u2588\u2583\u2581 45%",
     )
     assert.match(rows[1]!.detail, /no reading/)
   })
@@ -970,7 +970,7 @@ describe("reset countdowns", () => {
       activeSource: "s1",
       now: NOW,
     })
-    assert.match(full[0]!.detail, /wk \u2588\u2588\u2588 100% 3d4h/)
+    assert.match(full[0]!.detail, /wk \u2588\u2588\u2588 3d4h$/)
     assert.doesNotMatch(full[0]!.detail, /2h10m/)
   })
 })

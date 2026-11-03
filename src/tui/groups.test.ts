@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import type { QuotaCache } from "../balance/index.ts"
-import { groupRows } from "./groups.ts"
+import { groupRows, memberName } from "./groups.ts"
 
 const FUTURE = Math.floor(Date.now() / 1000) + 3600
 
@@ -58,7 +58,7 @@ describe("groupRows", () => {
     )
     assert.equal(
       out[0]!.summary,
-      "5h \u2588\u2581\u2581 35%   wk \u2588\u2588\u2584 80%",
+      "5h \u2588\u2581\u2581 35%    wk \u2588\u2588\u2584 80%",
     )
     assert.equal(out[0]!.count, "2/2")
     assert.equal(out[0]!.share, "40% reqs")
@@ -72,7 +72,7 @@ describe("groupRows", () => {
     assert.equal(out[2]!.health, "unknown")
     assert.equal(
       out[2]!.summary,
-      "5h \u2588\u2588\u2588 100%  wk \u2588\u2588\u2588 100%",
+      "5h \u2588\u2588\u2588 100%   wk \u2588\u2588\u2588 100%",
       "no reading counts as no room",
     )
   })
@@ -104,5 +104,17 @@ describe("groupRows with an empty group", () => {
       out.map((s) => s.title),
       ["main", "Other"],
     )
+  })
+})
+
+describe("memberName", () => {
+  it("drops the group's name from a member's", () => {
+    assert.equal(memberName("Main", "Main - Team 1"), "Team 1")
+    assert.equal(memberName("Alt", "alt: Team 2"), "Team 2")
+    assert.equal(memberName("Main", "Mainframe"), "Mainframe")
+  })
+  it("keeps a name that does not start with the group's, or would be empty", () => {
+    assert.equal(memberName("Alt", "Main - Team 1"), "Main - Team 1")
+    assert.equal(memberName("Main", "Main"), "Main")
   })
 })

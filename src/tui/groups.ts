@@ -43,6 +43,17 @@ const RANK: Record<Health, number> = {
 
 export const OTHER_GROUP = "Other"
 
+/** `Main - Team 1` under `Main` reads `Team 1`; the group already says Main. */
+export function memberName(groupTitle: string, name: string): string {
+  const prefix = name.slice(0, groupTitle.length)
+  if (prefix.toLowerCase() !== groupTitle.toLowerCase()) return name
+  const tail = name.slice(groupTitle.length)
+  // Only at a word boundary: "Mainframe" is not a member of "Main".
+  if (!/^[\s\-\u2013\u2014:\u00b7]/.test(tail)) return name
+  const rest = tail.replace(/^[\s\-\u2013\u2014:\u00b7]+/, "")
+  return rest.length > 0 ? rest : name
+}
+
 /**
  * One section per group, in config order, then `Other` for accounts in no
  * group. Empty when no groups are configured, so the caller renders the flat
