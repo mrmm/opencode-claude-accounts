@@ -13,7 +13,7 @@ const home = mkdtempSync(join(tmpdir(), "bench-request-path-"))
 process.env.HOME = home
 process.env.XDG_DATA_HOME = join(home, ".local", "share")
 process.env.XDG_CONFIG_HOME = join(home, ".config")
-const data = join(home, ".local", "share", "opencode")
+const data = join(home, ".local", "share", "opencode", "claude-auth")
 mkdirSync(data, { recursive: true })
 
 const N = Number(process.argv[2] ?? 2000)
@@ -26,7 +26,7 @@ const window = (u: number) => ({
   status: "allowed",
 })
 writeFileSync(
-  join(data, "claude-auth-quota.json"),
+  join(data, "quota.json"),
   JSON.stringify(
     Object.fromEntries(
       ACCOUNTS.map((a, i) => [
@@ -46,14 +46,8 @@ writeFileSync(
 const sessions = Object.fromEntries(
   Array.from({ length: 20 }, (_, i) => [`ses_${i}`, Date.now()]),
 )
-writeFileSync(
-  join(data, "claude-auth-reserve-allows.json"),
-  JSON.stringify(sessions),
-)
-writeFileSync(
-  join(data, "claude-auth-credit-denials.json"),
-  JSON.stringify(sessions),
-)
+writeFileSync(join(data, "reserve-allows.json"), JSON.stringify(sessions))
+writeFileSync(join(data, "credit-denials.json"), JSON.stringify(sessions))
 
 // ~5 MB of request rows spread over the last 24h.
 const lines: string[] = []
@@ -80,7 +74,7 @@ for (let i = 0; bytes < 5 * 1024 * 1024; i++) {
   lines.push(line)
   bytes += line.length + 1
 }
-const usageFile = join(data, "claude-auth-usage.jsonl")
+const usageFile = join(data, "usage.jsonl")
 writeFileSync(usageFile, `${lines.join("\n")}\n`)
 
 const { getConfig } = await import("../src/config.ts")

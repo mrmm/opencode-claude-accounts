@@ -10,8 +10,8 @@ fact is rendered in the TUI is in [src/tui/SURFACES.md](../src/tui/SURFACES.md).
 
 OpenCode runs the plugin twice: once in the server, which sends every model
 request, and once in the TUI, which draws the sidebar, dialogs and commands.
-They never call each other. They share state through files under
-`~/.local/share/opencode/` and the config file, and each re-reads a file only
+They never call each other. They share state through files in
+`~/.local/share/opencode/claude-auth/` and the config file, and each re-reads a file only
 when it changed.
 
 ```mermaid
@@ -42,14 +42,14 @@ flowchart LR
 
 | File (under `~/.local/share/opencode/`)                              | Written by | Read by  | Holds                                                            |
 | -------------------------------------------------------------------- | ---------- | -------- | ---------------------------------------------------------------- |
-| `claude-auth-quota.json`                                             | server     | both     | latest 5h / weekly utilisation and reset per account id          |
-| `claude-auth-usage.jsonl`                                            | server     | both     | one row per request: account, session, tokens, cache use         |
-| `claude-auth-samples.jsonl`                                          | server     | TUI      | a week of utilisation samples, for the pace forecast             |
-| `claude-auth-identities.json`                                        | both       | both     | account and org per Keychain entry (owner-only)                  |
-| `claude-account-source.txt`                                          | both       | both     | the current selection: an account, a preset, or auto             |
-| `claude-auth-reserve-allows.json`, `claude-auth-credit-denials.json` | both       | server   | per-session opt-ins to reserved quota and paid credits           |
-| `claude-auth-tui-folds.json`                                         | TUI        | TUI      | which sidebar sections are collapsed                             |
-| `claude-auth-requests.jsonl`                                         | server     | operator | request captures, only when `captureRequests` is on (owner-only) |
+| `claude-auth/quota.json`                                             | server     | both     | latest 5h / weekly utilisation and reset per account id          |
+| `claude-auth/usage.jsonl`                                            | server     | both     | one row per request: account, session, tokens, cache use         |
+| `claude-auth/samples.jsonl`                                          | server     | TUI      | a week of utilisation samples, for the pace forecast             |
+| `claude-auth/identities.json`                                        | both       | both     | account and org per Keychain entry (owner-only)                  |
+| `claude-auth/selection.txt`                                          | both       | both     | the current selection: an account, a preset, or auto             |
+| `claude-auth/reserve-allows.json`, `claude-auth/credit-denials.json` | both       | server   | per-session opt-ins to reserved quota and paid credits           |
+| `claude-auth/tui-folds.json`                                         | TUI        | TUI      | which sidebar sections are collapsed                             |
+| `claude-auth/requests.jsonl`                                         | server     | operator | request captures, only when `captureRequests` is on (owner-only) |
 
 Read-modify-write of shared files holds a short lock
 ([ADR 0004](adr/0004-cross-process-file-locks.md)); frequent readers parse a file

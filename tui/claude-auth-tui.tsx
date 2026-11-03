@@ -51,6 +51,7 @@ import {
   selectionRecovery,
 } from "../dist/balance/index.js"
 import { spentBanner } from "../dist/tui/spent.js"
+import { dataFile } from "../dist/paths.js"
 import {
   recentRequests,
   requestListRow,
@@ -882,19 +883,10 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   // until you press enter. Without the command, the text stays on the clipboard.
   const toPrompt = (text: string, what: string) => {
     if (!copyText(text)) {
-      writeFileSync(
-        join(
-          homedir(),
-          ".local",
-          "share",
-          "opencode",
-          "claude-auth-optimize.md",
-        ),
-        text,
-      )
+      writeFileSync(dataFile("optimize.md"), text)
       api.ui.toast({
         variant: "warning",
-        message: `No clipboard tool; ${what} saved to ~/.local/share/opencode/claude-auth-optimize.md`,
+        message: `No clipboard tool; ${what} saved to ~/.local/share/opencode/claude-auth/optimize.md`,
       })
       return
     }
@@ -920,13 +912,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
   const sendOptimize = (sid: string) => {
     const text = reportText(sid)
     const fallback = (why: string) => {
-      const file = join(
-        homedir(),
-        ".local",
-        "share",
-        "opencode",
-        "claude-auth-optimize.md",
-      )
+      const file = dataFile("optimize.md")
       writeFileSync(file, text)
       api.ui.toast({
         variant: "warning",
@@ -1604,10 +1590,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             `probe      ${probe}`,
           ].join("\n")
 
-          const out = join(
-            homedir(),
-            ".local/share/opencode/claude-auth-report.txt",
-          )
+          const out = dataFile("report.txt")
           try {
             writeFileSync(out, `${text}\n`, "utf8")
             api.ui.toast({
@@ -2092,10 +2075,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
 
           const selectionOf = () => {
             try {
-              return readFileSync(
-                `${process.env.XDG_DATA_HOME ?? `${process.env.HOME}/.local/share`}/opencode/claude-account-source.txt`,
-                "utf8",
-              ).trim()
+              return readFileSync(dataFile("selection.txt"), "utf8").trim()
             } catch {
               return "__auto__"
             }

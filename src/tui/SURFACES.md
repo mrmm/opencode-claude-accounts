@@ -143,7 +143,7 @@ last ones reported rather than pretending they are current.
 
 `/cc-debug` re-reads config, accounts and quota from disk, forces a probe
 ignoring both the freshness gate and the 429 backoff, then writes
-`~/.local/share/opencode/claude-auth-report.txt` and shows it. It reports FACTS
+`~/.local/share/opencode/claude-auth/report.txt` and shows it. It reports FACTS
 READ AT CALL TIME, never intent: the running build, what the cache holds per
 account, which preset references resolve to nothing, and the config keys that
 decide routing.

@@ -27,14 +27,15 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs"
-import { homedir } from "node:os"
+
 import { dirname, join } from "node:path"
+import { dataFile } from "./paths.ts"
 
 /** A refresh that has not completed in this long is presumed dead. */
 export const LOCK_STALE_MS = 30_000
 
 export function lockDir(): string {
-  return join(homedir(), ".local", "share", "opencode", "claude-auth-locks")
+  return dataFile("locks")
 }
 
 /** One lock per account, so unrelated accounts never block each other. */

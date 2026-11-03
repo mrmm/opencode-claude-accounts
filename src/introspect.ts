@@ -29,8 +29,9 @@ import {
   statSync,
 } from "node:fs"
 import { createHash } from "node:crypto"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+
+import { dirname } from "node:path"
+import { dataFile } from "./paths.ts"
 
 /**
  * How much of a request to record.
@@ -87,13 +88,7 @@ export type RequestShape = {
 const MAX_BYTES = 8 * 1024 * 1024
 
 export function capturePath(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-auth-requests.jsonl",
-  )
+  return dataFile("requests.jsonl")
 }
 
 const sha1 = (s: string) =>

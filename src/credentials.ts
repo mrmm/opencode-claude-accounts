@@ -22,6 +22,7 @@ import { resetExcludedBetas } from "./betas.ts"
 import { emitNotice } from "./notify.ts"
 import { acquireRefreshLock } from "./refresh-lock.ts"
 import { log } from "./logger.ts"
+import { dataFile } from "./paths.ts"
 
 export type { ClaudeAccount } from "./keychain.ts"
 export type { ClaudeCredentials } from "./keychain.ts"
@@ -138,13 +139,7 @@ export function getActiveAccount(): ClaudeAccount | null {
 }
 
 function getAccountStateFile(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-account-source.txt",
-  )
+  return dataFile("selection.txt")
 }
 
 export function loadPersistedAccountSource(): string | null {

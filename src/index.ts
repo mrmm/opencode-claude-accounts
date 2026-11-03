@@ -170,7 +170,7 @@ function buildRequestUrl(input: RequestInfo | URL): string | URL {
 const sessionId = crypto.randomUUID()
 
 // Long-memory usage samples: one row per account per 5-minute bucket, flushed
-// to claude-auth-samples.jsonl when a bucket closes. Held here so every request
+// to claude-auth/samples.jsonl when a bucket closes. Held here so every request
 // in the process feeds the same aggregator. Flushed on a timer and at exit so a
 // short-lived process still records its final, open bucket.
 const sampleAggregator = new SampleAggregator(appendSample, samplesPath)

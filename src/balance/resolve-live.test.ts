@@ -24,7 +24,9 @@ describe("resolveRef against config + identity cache on disk", () => {
   before(() => {
     const dir = mkdtempSync(join(tmpdir(), "resolve-live-"))
     mkdirSync(join(dir, ".config", "opencode"), { recursive: true })
-    mkdirSync(join(dir, ".local", "share", "opencode"), { recursive: true })
+    mkdirSync(join(dir, ".local", "share", "opencode", "claude-auth"), {
+      recursive: true,
+    })
     writeFileSync(
       join(dir, ".config", "opencode", "claude-auth.jsonc"),
       JSON.stringify({
@@ -35,7 +37,14 @@ describe("resolveRef against config + identity cache on disk", () => {
       }),
     )
     writeFileSync(
-      join(dir, ".local", "share", "opencode", "claude-auth-identities.json"),
+      join(
+        dir,
+        ".local",
+        "share",
+        "opencode",
+        "claude-auth",
+        "identities.json",
+      ),
       JSON.stringify({
         "src-1": { accountUuid: "acc-1", orgUuid: "org-1", fetchedAt: 1 },
         "src-2": { accountUuid: "acc-2", orgUuid: "org-1", fetchedAt: 1 },

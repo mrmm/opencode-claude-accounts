@@ -6,14 +6,14 @@
  * folded once stays folded. Unknown or unreadable state means everything open.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+
+import { dirname } from "node:path"
+import { dataFile } from "../paths.ts"
 
 export type FoldState = Record<string, boolean>
 
 export function foldStatePath(): string {
-  const base = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share")
-  return join(base, "opencode", "claude-auth-tui-folds.json")
+  return dataFile("tui-folds.json")
 }
 
 export function toggleFold(state: FoldState, key: string): FoldState {

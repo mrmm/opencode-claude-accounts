@@ -27,8 +27,9 @@ import {
   renameSync,
   statSync,
 } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+
+import { dirname } from "node:path"
+import { dataFile } from "../paths.ts"
 
 /** One request served by one account. */
 export type RequestEvent = {
@@ -93,13 +94,7 @@ export type UsageEvent = RequestEvent | RotationEvent
 const MAX_BYTES = 2 * 1024 * 1024
 
 export function usagePath(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-auth-usage.jsonl",
-  )
+  return dataFile("usage.jsonl")
 }
 
 /**

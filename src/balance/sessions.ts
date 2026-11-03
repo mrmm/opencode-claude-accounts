@@ -17,8 +17,8 @@
  */
 
 import { mkdirSync, renameSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+
+import { dirname } from "node:path"
 import { type ClaudeAuthConfig, getConfig } from "../config.ts"
 import {
   AUTO_SOURCE,
@@ -34,6 +34,7 @@ import { currentUsageIndex } from "./usage.ts"
 import { type Health, type Member, assess, selectAccount } from "./balancer.ts"
 import { type QuotaCache, readQuotaCache } from "./quota.ts"
 import { readJsonFresh } from "./file-memo.ts"
+import { dataFile } from "../paths.ts"
 
 type Binding = { source: string; boundAt: number; lastSeen: number }
 
@@ -52,13 +53,7 @@ const bindings = new Map<string, Binding>()
  * conversation that made it, it just no longer depends on a process staying up.
  */
 function denialsPath(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-auth-credit-denials.json",
-  )
+  return dataFile("credit-denials.json")
 }
 
 type Denials = Record<string, number>
@@ -116,13 +111,7 @@ export function resetCreditDenials(): void {
  * rule, so the choice does not outlive the conversation that made it.
  */
 function reservesPath(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-auth-reserve-allows.json",
-  )
+  return dataFile("reserve-allows.json")
 }
 
 function readReserves(nowMs: number = Date.now()): Denials {

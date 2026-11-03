@@ -335,7 +335,7 @@ shorthand, and a way to see related accounts together.
 
 Every response is recorded — which account served it, the model, status,
 duration, and the utilisation the headers reported — to
-`~/.local/share/opencode/claude-auth-usage.jsonl`, along with every rotation.
+`~/.local/share/opencode/claude-auth/usage.jsonl`, along with every rotation.
 The quota cache holds only the newest reading per account, so it answers "how
 full is this account" but never "how much has it served, and how often was it
 refused".
@@ -383,7 +383,7 @@ measured.
 | `full`     | the above plus the system text, so a block can be traced to the file that produced it. |
 | `messages` | the above plus **the conversation itself, verbatim on disk**.                          |
 
-Records land in `~/.local/share/opencode/claude-auth-requests.jsonl`. Then:
+Records land in `~/.local/share/opencode/claude-auth/requests.jsonl`. Then:
 
 ```bash
 pnpm prompt              # the most recent request
@@ -851,7 +851,7 @@ If you're hitting auth errors that are hard to reproduce, enable debug logging t
 export CLAUDE_AUTH_DEBUG=1
 ```
 
-Restart OpenCode and reproduce the issue. The plugin writes structured JSON logs to `~/.local/share/opencode/claude-auth-debug.log`. All secrets (tokens, API keys) are automatically redacted — the log file is safe to paste into a GitHub issue.
+Restart OpenCode and reproduce the issue. The plugin writes structured JSON logs to `~/.local/share/opencode/claude-auth/debug.log`. All secrets (tokens, API keys) are automatically redacted — the log file is safe to paste into a GitHub issue.
 
 To write logs to a custom path:
 
@@ -1069,7 +1069,7 @@ export ANTHROPIC_CLI_VERSION=2.2.0
 - Injects Claude Code identity into system prompts via `experimental.chat.system.transform`
 - Sets required API headers (beta flags, billing, user-agent) with model-aware selection
 - On macOS, enumerates all `Claude Code-credentials*` Keychain entries and labels them by subscription tier
-- Provides an account switcher via `opencode auth login` when multiple accounts are found; persists selection to `~/.local/share/opencode/claude-account-source.txt`
+- Provides an account switcher via `opencode auth login` when multiple accounts are found; persists selection to `~/.local/share/opencode/claude-auth/selection.txt`
 - Syncs credentials to `auth.json` on startup and every 5 minutes as a fallback (sync never triggers refresh; refresh is lazy, only on API requests)
 - On Windows, writes to both `%USERPROFILE%\.local\share\opencode\auth.json` and `%LOCALAPPDATA%\opencode\auth.json`
 - Retries API requests on 429 (rate limit) and 529 (overloaded) with exponential backoff, respecting `retry-after` headers

@@ -7,9 +7,10 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs"
-import { dirname, join } from "node:path"
-import { homedir } from "node:os"
+import { dirname } from "node:path"
+
 import type { Writable } from "node:stream"
+import { dataFile } from "./paths.ts"
 
 const JWT_PATTERN = /^eyJ[A-Za-z0-9_-]{10,}/
 
@@ -268,7 +269,7 @@ let keepFiles = DEFAULT_KEEP
 let bytesWritten = 0
 
 function getDefaultLogPath(): string {
-  return join(homedir(), ".local", "share", "opencode", "claude-auth-debug.log")
+  return dataFile("debug.log")
 }
 
 export type LoggerConfig = {

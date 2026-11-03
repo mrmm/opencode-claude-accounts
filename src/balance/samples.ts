@@ -22,8 +22,9 @@ import {
   renameSync,
   statSync,
 } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+
+import { dirname } from "node:path"
+import { dataFile } from "../paths.ts"
 
 export const BUCKET_MS = 5 * 60_000
 export const RETENTION_MS = 8 * 24 * 60 * 60_000
@@ -142,13 +143,7 @@ export class SampleAggregator {
 }
 
 export function samplesPath(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-auth-samples.jsonl",
-  )
+  return dataFile("samples.jsonl")
 }
 
 /**

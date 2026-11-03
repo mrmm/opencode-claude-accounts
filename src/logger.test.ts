@@ -46,7 +46,7 @@ describe("logger", () => {
       initLogger()
       log("test_event", { key: "value" })
       // No file should be created at default path
-      const defaultPath = join(tmpDir, "claude-auth-debug.log")
+      const defaultPath = join(tmpDir, "claude-auth", "debug.log")
       assert.ok(!existsSync(defaultPath), "No log file should be created")
     })
 
@@ -54,7 +54,7 @@ describe("logger", () => {
       process.env.CLAUDE_AUTH_DEBUG = ""
       initLogger()
       log("test_event", { key: "value" })
-      const defaultPath = join(tmpDir, "claude-auth-debug.log")
+      const defaultPath = join(tmpDir, "claude-auth", "debug.log")
       assert.ok(!existsSync(defaultPath), "No log file should be created")
     })
   })

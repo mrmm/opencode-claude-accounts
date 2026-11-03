@@ -1466,7 +1466,7 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       await res.text()
       await new Promise<void>((resolve) => setImmediate(resolve))
       const rows = readFileSync(
-        join(home, ".local", "share", "opencode", "claude-auth-usage.jsonl"),
+        join(home, ".local", "share", "opencode", "claude-auth", "usage.jsonl"),
         "utf8",
       )
         .trim()
@@ -2165,7 +2165,7 @@ describe("quota attribution — the account that served, not the one now active"
 
       const cachePath = join(
         tempHome,
-        ".local/share/opencode/claude-auth-quota.json",
+        ".local/share/opencode/claude-auth/quota.json",
       )
       const cache = JSON.parse(await readFile(cachePath, "utf8")) as Record<
         string,

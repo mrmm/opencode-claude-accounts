@@ -248,7 +248,7 @@ describe("a credit denial crosses the process boundary", () => {
     denyCredits("stale")
     const p = join(
       homedir(),
-      ".local/share/opencode/claude-auth-credit-denials.json",
+      ".local/share/opencode/claude-auth/credit-denials.json",
     )
     // Backdate past the idle window rather than waiting an hour for it.
     writeFileSync(p, JSON.stringify({ stale: Date.now() - 2 * 60 * 60_000 }))
@@ -310,7 +310,7 @@ describe("the reserved-quota session override", () => {
     allowReserve("stale")
     const p = join(
       homedir(),
-      ".local/share/opencode/claude-auth-reserve-allows.json",
+      ".local/share/opencode/claude-auth/reserve-allows.json",
     )
     writeFileSync(p, JSON.stringify({ stale: Date.now() - 2 * 60 * 60_000 }))
     assert.equal(reserveAllowed("stale"), false)

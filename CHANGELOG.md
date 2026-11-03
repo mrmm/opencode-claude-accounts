@@ -13,6 +13,10 @@ Design decisions behind these changes are in [docs/adr](docs/adr/README.md); the
 * "Agent may use reserved quota" (`agentReserve`) in Settings
 * `OPENCODE_CLAUDE_AUTH_HOST_RETRIES` to match a different OpenCode retry count
 
+### Changes
+
+* all plugin files now live in one folder, `~/.local/share/opencode/claude-auth/` (`usage.jsonl`, `quota.json`, `selection.txt`, ...); loose `claude-auth-*` files are moved there on first start
+
 ### Bug Fixes
 
 * when every account is spent, OpenCode retries the request again instead of failing it: the 429 carries `x-should-retry: true` and no longer includes the server's quota wording, which OpenCode treats as final ([ADR 0003](docs/adr/0003-spent-pool-retry-pacing.md))

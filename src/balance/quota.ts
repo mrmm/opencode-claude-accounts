@@ -20,11 +20,12 @@
  */
 
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+
+import { dirname } from "node:path"
 import { accountKey, accountReadKeys } from "./account-key.ts"
 import { withFileLock } from "./file-lock.ts"
 import { primeJsonFresh, readJsonFresh } from "./file-memo.ts"
+import { dataFile } from "../paths.ts"
 
 /** One rate-limit window. */
 export type QuotaWindow = {
@@ -223,13 +224,7 @@ export function formatQuotaPrefix(
 // ---------------------------------------------------------------------------
 
 export function quotaCachePath(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-auth-quota.json",
-  )
+  return dataFile("quota.json")
 }
 
 export type QuotaCache = Record<string, AccountQuota>

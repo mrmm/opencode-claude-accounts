@@ -42,16 +42,11 @@ import { bindingWindow, readQuotaCache } from "../dist/balance/quota.js"
 import { assess } from "../dist/balance/balancer.js"
 import { credentialState } from "../dist/balance/rotate.js"
 import { DEFAULT_CONFIG } from "../dist/config.js"
+import { dataFile } from "../dist/paths.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const MODEL = "anthropic/claude-haiku-4-5"
-const PIN_FILE = join(
-  homedir(),
-  ".local",
-  "share",
-  "opencode",
-  "claude-account-source.txt",
-)
+const PIN_FILE = dataFile("selection.txt")
 
 let failures = 0
 

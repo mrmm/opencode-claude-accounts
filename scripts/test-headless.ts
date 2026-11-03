@@ -20,7 +20,7 @@
  *   - The real refresh token is never placed in a stale entry, so the OAuth
  *     refresh path fails at the real endpoint with a 4xx and nothing is
  *     rotated.
- *   - User state (`claude-account-source.txt`) is backed up and restored.
+ *   - User state (`claude-auth/selection.txt`) is backed up and restored.
  *
  * Requires: macOS, `opencode` on PATH, valid Claude Code credentials.
  * Run with: pnpm test:headless
@@ -38,6 +38,7 @@ import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { keychainSuffixForDir } from "../dist/keychain.js"
+import { dataFile } from "../dist/paths.js"
 
 const PRIMARY_SERVICE = "Claude Code-credentials"
 const MODEL = "anthropic/claude-haiku-4-5"
@@ -47,13 +48,7 @@ const RUN_TIMEOUT_MS = 180_000
 const STALE_EXPIRES_AT = 1_000_000_000_000 // 2001, definitively stale
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const accountSourcePath = join(
-  homedir(),
-  ".local",
-  "share",
-  "opencode",
-  "claude-account-source.txt",
-)
+const accountSourcePath = dataFile("selection.txt")
 
 interface LogEvent {
   event: string

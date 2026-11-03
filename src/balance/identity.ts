@@ -29,6 +29,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
 import { withFileLock } from "./file-lock.ts"
+import { dataFile } from "../paths.ts"
 
 /** The uniquely-identifying pair plus the fields that make it readable. */
 export type AccountIdentity = {
@@ -47,13 +48,7 @@ export const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 
 /** Next to the quota cache, so both live under one directory. */
 export function identityCachePath(): string {
-  return join(
-    homedir(),
-    ".local",
-    "share",
-    "opencode",
-    "claude-auth-identities.json",
-  )
+  return dataFile("identities.json")
 }
 
 /** Build the profile request. Same oauth beta header the rest of the plugin uses. */

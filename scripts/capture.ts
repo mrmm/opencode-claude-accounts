@@ -23,14 +23,16 @@ import {
 } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { dataFile } from "../dist/paths.js"
 
 const SHARE = join(homedir(), ".local", "share", "opencode")
-const PLUGIN_LOG = join(SHARE, "claude-auth-debug.log")
+const DATA = dataFile("debug.log").replace(/\/debug\.log$/, "")
+const PLUGIN_LOG = join(DATA, "debug.log")
 const OC_LOG = join(SHARE, "log", "opencode.log")
 // Deliberately NOT os.tmpdir(): TMPDIR differs between shells, so a mark
 // written by one process was invisible to the next and `capture stop` reported
 // no mark at all. Alongside the logs it reads, it is found by everyone.
-const MARK = join(SHARE, "claude-auth-capture-mark.json")
+const MARK = join(DATA, "capture-mark.json")
 
 type Mark = { at: string; pluginBytes: number; ocBytes: number }
 
@@ -90,7 +92,7 @@ if (!existsSync(MARK)) {
 
 const mark = JSON.parse(readFileSync(MARK, "utf8")) as Mark
 const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-const out = join(SHARE, "captures", `claude-auth-capture-${stamp}`)
+const out = join(DATA, "captures", `capture-${stamp}`)
 mkdirSync(out, { recursive: true })
 
 const pluginSlice = tailSince(PLUGIN_LOG, mark.pluginBytes)
@@ -106,8 +108,8 @@ const state: Record<string, unknown> = {
   capturedAt: new Date().toISOString(),
 }
 for (const [key, path] of [
-  ["selection", join(SHARE, "claude-account-source.txt")],
-  ["quota", join(SHARE, "claude-auth-quota.json")],
+  ["selection", join(DATA, "selection.txt")],
+  ["quota", join(DATA, "quota.json")],
 ] as const) {
   try {
     state[key] = readFileSync(path, "utf8").trim()

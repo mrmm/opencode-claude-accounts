@@ -23,21 +23,16 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+
+import { dirname } from "node:path"
 
 import { AUTO_SOURCE, PRESET_PREFIX } from "../dist/credentials.js"
 import { getConfig } from "../dist/config.js"
 import { readAllClaudeAccounts } from "../dist/keychain.js"
 import { resolveRef } from "../dist/balance/balancer.js"
+import { dataFile } from "../dist/paths.js"
 
-const STATE = join(
-  homedir(),
-  ".local",
-  "share",
-  "opencode",
-  "claude-account-source.txt",
-)
+const STATE = dataFile("selection.txt")
 
 const read = (): string | null => {
   try {
