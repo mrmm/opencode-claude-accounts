@@ -339,6 +339,39 @@ export function quotaForAccount(
 export type ProbeAccount = { source: string; accessToken: string }
 
 /**
+ * Probe targets with a token the usage endpoint will accept.
+ *
+ * An account nobody routes to (its weekly window spent, say) never has its
+ * token renewed by the request path, so after ~8 h it probes with an expired
+ * one forever and its credit figures freeze at the last good reading. Renew
+ * expired tokens here; an account that cannot be renewed is left out rather
+ * than probed with a token that cannot work.
+ */
+export function probeTargets<
+  A extends { source: string; credentials?: { accessToken?: string; expiresAt?: number } },
+>(
+  accounts: A[],
+  renew: (a: A) => { accessToken?: string; expiresAt?: number } | null,
+  nowMs: number = Date.now(),
+): ProbeAccount[] {
+  const out: ProbeAccount[] = []
+  for (const a of accounts) {
+    let creds = a.credentials
+    if (!creds?.accessToken) continue
+    if ((creds.expiresAt ?? Infinity) <= nowMs + 60_000) {
+      try {
+        creds = renew(a) ?? undefined
+      } catch {
+        creds = undefined
+      }
+      if (!creds?.accessToken || (creds.expiresAt ?? Infinity) <= nowMs) continue
+    }
+    out.push({ source: a.source, accessToken: creds.accessToken })
+  }
+  return out
+}
+
+/**
  * Per-process, because it only has to outlive the next probe sweep. Losing it
  * on restart costs one refused call, which is cheaper than persisting it.
  */

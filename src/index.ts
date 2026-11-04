@@ -24,6 +24,7 @@ import {
   recordRequest,
   resolveSessionCredentials,
   boundSource,
+  probeTargets,
   refreshQuotas,
   fetchIdentities,
   writeQuotaForAccount,
@@ -372,13 +373,10 @@ export function buildRequestHeaders(
 export function topUpQuota(trigger: string): void {
   const cfg = getConfig()
   if (!cfg.quotaProbe) return
-  const accounts = refreshAccountsList().filter(
-    (a) => a.credentials?.accessToken,
-  )
-  const targets = accounts.map((a) => ({
-    source: a.source,
-    accessToken: a.credentials.accessToken,
-  }))
+  const all = refreshAccountsList()
+  const targets = probeTargets(all, (a) => refreshIfNeeded(a))
+  const live = new Set(targets.map((t) => t.source))
+  const accounts = all.filter((a) => live.has(a.source))
   if (targets.length === 0) return
 
   // Resolve identity on the same fresh-token moment: an account not yet in the
