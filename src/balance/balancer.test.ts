@@ -1135,6 +1135,21 @@ describe("spentRetry", () => {
       20,
     )
   })
+  // Regression: recomputing remaining/9 on every retry shrank the step
+  // (134s, 119s, 106s, ... 60s), so ten retries ended ~3 min before a 20 min reset.
+  it("keeps the pace of the outage so the tenth retry reaches the reset", () => {
+    const at = { name: "Team 2", at: NOW_MS + 1200_000 }
+    let t = NOW_MS
+    for (let i = 0; i < 9; i++) {
+      t += spentRetry(at, t, clock, undefined, 10, NOW_MS).retryAfterS * 1000
+    }
+    assert.ok(t >= at.at, `last retry at +${(t - NOW_MS) / 1000}s, reset +1200s`)
+    let naive = NOW_MS
+    for (let i = 0; i < 9; i++) {
+      naive += spentRetry(at, naive, clock, undefined, 10, naive).retryAfterS * 1000
+    }
+    assert.ok(naive < at.at, "pacing from now falls short (the bug)")
+  })
   it("still re-checks when no reset is known", () => {
     const r = spentRetry(undefined, NOW_MS, clock)
     assert.equal(r.retryAfterS, 60)

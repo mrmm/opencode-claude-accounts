@@ -924,14 +924,19 @@ export function spentRetry(
   clock: (ms: number) => string,
   serverRetryAfterS?: number,
   retries: number = hostRetries(),
+  sinceMs: number = nowMs,
 ): { retryAfterS: number; message: string } {
   const wait = next ? Math.ceil((next.at - nowMs) / 1000) : undefined
+  // Paced from when the pool went spent, not from now: OpenCode does not say how
+  // many retries a request has left, and dividing the remaining wait by all of
+  // them again on every retry shrinks the step until the retries run out early.
+  const span = next ? Math.ceil((next.at - Math.min(sinceMs, nowMs)) / 1000) : 0
   const every =
     wait === undefined
       ? SPENT_RECHECK_S
       : Math.min(
           SPENT_RECHECK_MAX_S,
-          Math.max(SPENT_RECHECK_S, Math.ceil(wait / (retries - 1))),
+          Math.max(SPENT_RECHECK_S, Math.ceil(span / (retries - 1))),
         )
   const candidates = [every, wait, serverRetryAfterS].filter(
     (v): v is number => v !== undefined && v > 0,

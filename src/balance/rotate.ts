@@ -560,10 +560,18 @@ export function selectionRecovery(nowMs: number = Date.now()): {
  * The retry to hand OpenCode when the request was refused on every account it
  * could try: the selection's next account back, and when. Never throws.
  */
+let spentSince: number | undefined
+
+/** The pool answered again: the next spent stretch is paced from its own start. */
+export function clearSpentSince(): void {
+  spentSince = undefined
+}
+
 export function spentRetryNow(
   serverRetryAfterS?: number,
   nowMs: number = Date.now(),
 ): { retryAfterS: number; message: string } {
+  spentSince ??= nowMs
   const clock = (ms: number) =>
     new Date(ms).toLocaleTimeString(undefined, {
       hour: "2-digit",
@@ -575,5 +583,7 @@ export function spentRetryNow(
     nowMs,
     clock,
     serverRetryAfterS,
+    undefined,
+    spentSince,
   )
 }

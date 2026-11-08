@@ -12,6 +12,7 @@ import {
   maybeRotate,
   noteRejection,
   spentRetryNow,
+  clearSpentSince,
   noteSuccess,
   parseQuotaHeaders,
   quotaForAccount,
@@ -1312,6 +1313,8 @@ const plugin: PluginWithOptions = async (
                 preserveResponseUnchanged = false
               }
             }
+
+            if (response.status !== 429) clearSpentSince()
 
             // Record non-200 responses without writing over OpenCode's terminal UI.
             if (!response.ok) {
