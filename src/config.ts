@@ -630,7 +630,7 @@ export type ClaudeAuthConfig = {
   pinBlocksRotation: boolean
   /**
    * Whether the model may turn on the reserved-quota override itself through
-   * the claude_auth_reserve tool. Off: only the operator (TUI) can, since
+   * the claude_accounts_use_reserve tool. Off: only the operator (TUI) can, since
    * reserved quota may be a teammate's share.
    */
   agentReserve: boolean
@@ -649,7 +649,7 @@ export type ClaudeAuthConfig = {
    */
   ejectFor: number
   /**
-   * Register the claude_auth_* tools with OpenCode. They are convenient, and
+   * Register the claude_accounts_* tools with OpenCode. They are convenient, and
    * they are not free: every description sits in the model's context for the
    * whole session, and the agent can call them. Turn them off to keep the CLI
    * as the only front door.

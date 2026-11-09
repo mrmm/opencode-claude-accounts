@@ -62,8 +62,8 @@ Runtime facts worth knowing before reading code:
 - [src/ui/display.ts](src/ui/display.ts): decorates provider and model names with
   the active account.
 - [src/ui/advisory.ts](src/ui/advisory.ts): turns notices into toasts.
-- [src/ui/tools.ts](src/ui/tools.ts): the `claude_auth_status` / `claude_auth_select`
-  / `claude_auth_usage` tools.
+- [src/ui/tools.ts](src/ui/tools.ts): the `claude_accounts_status` / `claude_accounts_switch`
+  / `claude_accounts_usage` tools.
 - [src/notify.ts](src/notify.ts): the notice types and sink. Stays at the root
   because upstream's `credentials.ts` imports it.
 

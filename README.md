@@ -213,18 +213,18 @@ choosing a preset with `autoSwitch: false` would appear to do nothing.
 The plugin registers three tools, so the same surfaces are reachable from inside
 a session:
 
-| Tool                 | Does                                                                             |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `claude_auth_status` | who is serving now, what is selected, and each account's verdict with the reason |
-| `claude_auth_select` | switch to a preset, an account, `auto`, or `clear`                               |
-| `claude_auth_usage`  | per-account requests, share, refusals, latency, rotations                        |
+| Tool                     | Does                                                                             |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| `claude_accounts_status` | who is serving now, what is selected, and each account's verdict with the reason |
+| `claude_accounts_switch` | switch to a preset, an account, `auto`, or `clear`                               |
+| `claude_accounts_usage`  | per-account requests, share, refusals, latency, rotations                        |
 
 They register through the plugin's own `tool` hook rather than a separate MCP
 server: an MCP server would be another process with its own lifecycle and its
 own entry in `opencode.jsonc`, exposing functions that already live in this
 process and read this plugin's state.
 
-`claude_auth_select` is transparent in the way that matters — it writes the
+`claude_accounts_switch` is transparent in the way that matters — it writes the
 selection file, so nothing is re-registered and nothing in flight is cancelled.
 
 They are not free. Every description sits in the model's context for the whole
@@ -322,7 +322,7 @@ shorthand, and a way to see related accounts together.
   `5h 2.3/3 left · wk 0.4/3 left · 41% reqs`: room is counted in accounts
   (1.0 = one account's full window, an account with no reading counts as none),
   coloured by the worst member. Accounts in no group are listed under **Other**.
-- **`claude_auth_status`** prints the same aggregates per group.
+- **`claude_accounts_status`** prints the same aggregates per group.
 - **Ids and names.** The key (`main`) is the group's id and is what presets
   reference; `label` is the name shown. Renaming a group from the TUI changes
   only the label, so no preset breaks.
@@ -569,7 +569,7 @@ its ceiling, while every other session still obeys the global `capMode`. Both
 are written to disk, since the balancer runs in a different process and would
 never see a flag set in the TUI.
 
-The agent's `claude_auth_reserve` tool can turn the override off, but turning it
+The agent's `claude_accounts_use_reserve` tool can turn the override off, but turning it
 on is refused unless `agentReserve: true` is set: reserved quota may be a
 teammate's share, so spending it is the operator's call by default.
 
@@ -808,21 +808,21 @@ What this plugin attaches to, and the constraint each surface turned out to
 carry. Recorded because several of them are not documented and cost a
 measurement to establish.
 
-| surface                    | used for                                                        | constraint                                                                                                                                                               |
-| -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `auth.loader`              | supplying credentials per request                               | —                                                                                                                                                                        |
-| `auth.methods[].authorize` | the account switcher in `opencode auth login`                   | its callback returns credentials, which OpenCode persists; the server does **not** dispose anything on success (`provider/auth.ts` → `Auth.set` → `writeJson`, no event) |
-| `config` hook              | decorating the provider name with the active arrangement        | runs once per instance. Never invents a provider entry: doing so crashed every provider on 1.18.30                                                                       |
-| `chat.headers`             | stamping the session id so a session can keep one account       | the marker is stripped centrally before the request leaves                                                                                                               |
-| custom `fetch`             | routing, telemetry, quota reading, the prefill retry            | the only place that sees a response, so every measurement originates here                                                                                                |
-| `tool`                     | `claude_auth_status`, `claude_auth_select`, `claude_auth_usage` | loaded by dynamic import: a static one cancels 28 node:test subtests                                                                                                     |
-| `event`                    | idle-time rotation                                              | —                                                                                                                                                                        |
-| TUI `slots`                | the chip and the sidebar section                                | `session_prompt_right` and `sidebar_content`; a separate plugin kind, `PluginInput.tui` is `never`                                                                       |
-| TUI `keymap.registerLayer` | the four commands and their keys                                | global commands only; no dialog-scoped binding exists                                                                                                                    |
-| TUI `ui.dialog`            | every screen                                                    | `replace`/`clear`, not `open`/`close`; replaces the stack rather than pushing                                                                                            |
-| TUI `ui.DialogPrompt`      | the three text boxes                                            | declares `onCancel` and never calls it; escape is the stack's, via `onClose`                                                                                             |
-| TUI `ui.DialogSelect`      | every list                                                      | option text is `title`, not `label`; `category` renders as a real heading                                                                                                |
-| TUI `theme.current`        | the health colours                                              | `success`, `warning`, `error`, `text`, `textMuted`                                                                                                                       |
+| surface                    | used for                                                                    | constraint                                                                                                                                                               |
+| -------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `auth.loader`              | supplying credentials per request                                           | —                                                                                                                                                                        |
+| `auth.methods[].authorize` | the account switcher in `opencode auth login`                               | its callback returns credentials, which OpenCode persists; the server does **not** dispose anything on success (`provider/auth.ts` → `Auth.set` → `writeJson`, no event) |
+| `config` hook              | decorating the provider name with the active arrangement                    | runs once per instance. Never invents a provider entry: doing so crashed every provider on 1.18.30                                                                       |
+| `chat.headers`             | stamping the session id so a session can keep one account                   | the marker is stripped centrally before the request leaves                                                                                                               |
+| custom `fetch`             | routing, telemetry, quota reading, the prefill retry                        | the only place that sees a response, so every measurement originates here                                                                                                |
+| `tool`                     | `claude_accounts_status`, `claude_accounts_switch`, `claude_accounts_usage` | loaded by dynamic import: a static one cancels 28 node:test subtests                                                                                                     |
+| `event`                    | idle-time rotation                                                          | —                                                                                                                                                                        |
+| TUI `slots`                | the chip and the sidebar section                                            | `session_prompt_right` and `sidebar_content`; a separate plugin kind, `PluginInput.tui` is `never`                                                                       |
+| TUI `keymap.registerLayer` | the four commands and their keys                                            | global commands only; no dialog-scoped binding exists                                                                                                                    |
+| TUI `ui.dialog`            | every screen                                                                | `replace`/`clear`, not `open`/`close`; replaces the stack rather than pushing                                                                                            |
+| TUI `ui.DialogPrompt`      | the three text boxes                                                        | declares `onCancel` and never calls it; escape is the stack's, via `onClose`                                                                                             |
+| TUI `ui.DialogSelect`      | every list                                                                  | option text is `title`, not `label`; `category` renders as a real heading                                                                                                |
+| TUI `theme.current`        | the health colours                                                          | `success`, `warning`, `error`, `text`, `textMuted`                                                                                                                       |
 
 The SDK is pinned to the running binary's exact version. Three different
 versions were in play at one point -- the lockfile held 1.2.27, a sibling

@@ -11,7 +11,7 @@
  *
  * Why it is worth having: picking an account in the provider auth flow calls
  * authorize() and rewrites auth.json. Writing the selection file does not -- it
- * is what `claude_auth_select` and `pnpm lb` already do, and it switches
+ * is what `claude_accounts_switch` and `pnpm lb` already do, and it switches
  * accounts with no auth flow at all.
  *
  * Install: add the absolute path of this file to ~/.config/opencode/tui.json

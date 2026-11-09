@@ -249,7 +249,7 @@ export function maybeRotate(
     if (changed) {
       log("selection_changed", { trigger, selection, preset })
       // The status line cannot be rewritten mid-session, so without this a
-      // change made by `pnpm lb` or claude_auth_select is invisible: the label
+      // change made by `pnpm lb` or claude_accounts_switch is invisible: the label
       // would keep advertising the arrangement that was in force at start-up.
       emitNotice({
         kind: "selection-changed",
