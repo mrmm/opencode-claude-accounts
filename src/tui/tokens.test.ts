@@ -78,22 +78,22 @@ describe("composition", () => {
       toolBytes: 3_700,
       messageBytes: 7_400,
       system: [
-        { bytes: 30_000, head: "# AGENTS.md — Overlord" },
+        { bytes: 30_000, head: "# AGENTS.md — Acme" },
         { bytes: 7_000, head: "You are Claude Code" },
       ],
       tools: [
         { name: "bash", bytes: 1_850 },
-        { name: "pelico-notion_search", bytes: 925 },
-        { name: "pelico-notion_fetch", bytes: 925 },
+        { name: "acme-notion_search", bytes: 925 },
+        { name: "acme-notion_fetch", bytes: 925 },
       ],
     })
     assert.equal(c.fixed, 11_000)
-    assert.equal(c.blocks[0]!.head, "# AGENTS.md — Overlord")
+    assert.equal(c.blocks[0]!.head, "# AGENTS.md — Acme")
     assert.deepEqual(
       c.toolGroups.map((g) => [g.group, g.count]),
       [
         ["bash", 1],
-        ["pelico-notion", 2],
+        ["acme-notion", 2],
       ],
     )
     assert.match(compositionRows(c)[1]!.value, /11\.0k/)

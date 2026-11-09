@@ -239,7 +239,7 @@ export function maybeRotate(
     const { cfg, preset } = resolveActiveConfig(raw, persisted)
 
     // Re-read on every call, so a selection changed from outside this process —
-    // by an edit to the config file, or by `overlord`-style CLI writing the
+    // by an edit to the config file, or by an external CLI writing the
     // state file — is picked up on the next request without an auth flow, and
     // therefore without OpenCode re-initialising the provider and cancelling
     // whatever the agent had in flight.
