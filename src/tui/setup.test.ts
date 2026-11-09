@@ -51,10 +51,7 @@ describe("scanSetup", () => {
         ["~/.config/opencode/rules/big.md", "rule"],
       ],
     )
-    assert.deepEqual(scan.duplicateAgents, [
-      "acme-builder",
-      "acme-reviewer",
-    ])
+    assert.deepEqual(scan.duplicateAgents, ["acme-builder", "acme-reviewer"])
 
     // The hints now name what the scan found.
     const rows = hints({

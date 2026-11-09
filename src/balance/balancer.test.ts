@@ -1143,10 +1143,14 @@ describe("spentRetry", () => {
     for (let i = 0; i < 9; i++) {
       t += spentRetry(at, t, clock, undefined, 10, NOW_MS).retryAfterS * 1000
     }
-    assert.ok(t >= at.at, `last retry at +${(t - NOW_MS) / 1000}s, reset +1200s`)
+    assert.ok(
+      t >= at.at,
+      `last retry at +${(t - NOW_MS) / 1000}s, reset +1200s`,
+    )
     let naive = NOW_MS
     for (let i = 0; i < 9; i++) {
-      naive += spentRetry(at, naive, clock, undefined, 10, naive).retryAfterS * 1000
+      naive +=
+        spentRetry(at, naive, clock, undefined, 10, naive).retryAfterS * 1000
     }
     assert.ok(naive < at.at, "pacing from now falls short (the bug)")
   })

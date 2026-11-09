@@ -3,14 +3,22 @@ import assert from "node:assert/strict"
 import { probeTargets } from "./quota.ts"
 
 const now = 1_000_000_000_000
-const acct = (source: string, expiresAt: number, accessToken = "tok-" + source) => ({
+const acct = (
+  source: string,
+  expiresAt: number,
+  accessToken = "tok-" + source,
+) => ({
   source,
   credentials: { accessToken, expiresAt },
 })
 
 test("fresh tokens are used as they are, without renewing", () => {
   let renewed = 0
-  const out = probeTargets([acct("a", now + 3_600_000)], () => (renewed++, null), now)
+  const out = probeTargets(
+    [acct("a", now + 3_600_000)],
+    () => (renewed++, null),
+    now,
+  )
   assert.deepEqual(out, [{ source: "a", accessToken: "tok-a" }])
   assert.equal(renewed, 0)
 })
@@ -33,9 +41,15 @@ test("an account that cannot be renewed is left out, not probed with a dead toke
     },
     now,
   )
-  assert.deepEqual(out.map((t) => t.source), ["ok"])
+  assert.deepEqual(
+    out.map((t) => t.source),
+    ["ok"],
+  )
 })
 
 test("accounts with no token are skipped", () => {
-  assert.deepEqual(probeTargets([{ source: "x", credentials: {} }], () => null, now), [])
+  assert.deepEqual(
+    probeTargets([{ source: "x", credentials: {} }], () => null, now),
+    [],
+  )
 })
