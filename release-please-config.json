@@ -1,12 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "bootstrap-sha": "bcf996f596509c250c6c3068c5566fa2d04eb3a4",
-  "include-component-in-tag": true,
+  "bootstrap-sha": "1dea2694a0770c17aea3123ad45a5c54e965ecc2",
+  "include-component-in-tag": false,
   "include-v-in-tag": true,
   "packages": {
     ".": {
       "release-type": "node",
-      "component": "accounts",
       "package-name": "opencode-claude-accounts",
       "changelog-path": "CHANGELOG.md"
     }

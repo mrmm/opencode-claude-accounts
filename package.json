@@ -1,7 +1,7 @@
 {
   "name": "opencode-claude-accounts",
   "version": "2.1.4",
-  "description": "OpenCode plugin that uses your Claude Code credentials — no separate login needed.",
+  "description": "OpenCode plugin that uses your Claude Code credentials and balances requests across several Claude accounts.",
   "keywords": [
     "anthropic",
     "auth",
@@ -9,15 +9,24 @@
     "opencode",
     "plugin"
   ],
+  "homepage": "https://github.com/mrmm/opencode-claude-accounts#readme",
+  "bugs": {
+    "url": "https://github.com/mrmm/opencode-claude-accounts/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/griffinmartin/opencode-claude-auth.git"
+    "url": "git+https://github.com/mrmm/opencode-claude-accounts.git"
   },
   "files": [
     "opencode-claude-auth.js",
     "dist",
-    "installation.md"
+    "installation.md",
+    "index.js",
+    "tui.tsx",
+    "tui/claude-auth-tui.tsx",
+    "tui/v2-adapter.tsx",
+    "llms.txt"
   ],
   "type": "module",
   "main": "opencode-claude-auth.js",
@@ -51,6 +60,10 @@
       "import": "./dist/index.js"
     },
     "./tui": "./tui/claude-auth-tui.tsx"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "rm -rf .dist-next && tsc --outDir .dist-next && cp src/anthropic-prompt.txt .dist-next/ && node scripts/swap-dist.mjs && node scripts/stamp.mjs",

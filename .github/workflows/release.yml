@@ -6,21 +6,70 @@ on:
       - main
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  release:
+  release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # Fork releases: accounts-v* tags, GitHub release only, no npm publish.
-      # Version + changelog come from conventional commits via the manifest.
-      - uses: googleapis/release-please-action@v4
+      # Version and changelog come from conventional commits via the manifest.
+      - id: rp
+        uses: googleapis/release-please-action@v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload release assets
+      id-token: write # npm provenance and trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+
+      # Node 24 ships npm 11, which publishes through npm trusted publishing (OIDC).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm test
+
+      - name: Pack
+        id: pack
+        run: |
+          file=$(npm pack --silent)
+          sha256sum "$file" > "$file.sha256"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
+      - name: Attach tarball to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-please.outputs.tag }}" "${{ steps.pack.outputs.file }}" "${{ steps.pack.outputs.file }}.sha256" --clobber
+
+      # NPM_TOKEN is only needed until trusted publishing is configured on npmjs.com;
+      # without it npm authenticates through the workflow's OIDC token.
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "${{ steps.pack.outputs.file }}" --provenance --access public
