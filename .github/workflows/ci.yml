@@ -28,6 +28,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # check:tui type-checks the TUI against dist/, so build first.
+      - run: pnpm run build
+
       - run: pnpm run lint
 
   build:
