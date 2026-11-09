@@ -348,7 +348,10 @@ export type ProbeAccount = { source: string; accessToken: string }
  * than probed with a token that cannot work.
  */
 export function probeTargets<
-  A extends { source: string; credentials?: { accessToken?: string; expiresAt?: number } },
+  A extends {
+    source: string
+    credentials?: { accessToken?: string; expiresAt?: number }
+  },
 >(
   accounts: A[],
   renew: (a: A) => { accessToken?: string; expiresAt?: number } | null,
@@ -364,7 +367,8 @@ export function probeTargets<
       } catch {
         creds = undefined
       }
-      if (!creds?.accessToken || (creds.expiresAt ?? Infinity) <= nowMs) continue
+      if (!creds?.accessToken || (creds.expiresAt ?? Infinity) <= nowMs)
+        continue
     }
     out.push({ source: a.source, accessToken: creds.accessToken })
   }
