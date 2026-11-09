@@ -100,7 +100,8 @@
     "oxfmt": "0.41.0",
     "oxlint": "1.56.0",
     "solid-js": "^1.9.15",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "zod": "4.1.8"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "*"
