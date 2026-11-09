@@ -1,14 +1,14 @@
-# opencode-claude-auth
+# opencode-claude-accounts
 
 > An OpenCode plugin that authenticates the Anthropic provider with Claude Code
 > subscription credentials from the macOS Keychain, and balances requests across
 > several Claude accounts — rotating off one when its quota is spent, without
 > re-authenticating and without interrupting the agent.
 
-This is a **fork** of `griffinmartin/opencode-claude-auth`, tracked as the
-`upstream` remote and merged from periodically. That fact shapes the layout:
-files upstream also owns stay where upstream put them, and the fork's own code
-lives in domain folders. See `AGENTS.md` for the rules this imposes on changes.
+This started as a fork of `griffinmartin/opencode-claude-auth` and is now
+detached and released on its own. The layout still reflects that: the original
+credential and request-shaping files sit at `src/`'s root, and this project's
+own code lives in domain folders. See `AGENTS.md` for the rules this imposes on changes.
 
 Runtime facts worth knowing before reading code:
 

@@ -2,12 +2,10 @@
  * Enforce the rules in AGENTS.md.
  *
  * Written because a convention that is only documented is a convention that
- * rots: the fork/upstream layout rule in particular is invisible at review time
- * — moving a file looks tidy and costs merge pain months later, to someone else.
+ * rots.
  *
  * Run by `pnpm lint`, so it fails before a commit rather than after a merge.
  */
-import { execFileSync } from "node:child_process"
 import { readFileSync, readdirSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -27,45 +25,6 @@ function walk(dir: string): string[] {
 const all = walk(SRC).filter((f) => f.endsWith(".ts"))
 const rel = (f: string) => relative(SRC, f).split("\\").join("/")
 const prod = all.filter((f) => !f.endsWith(".test.ts"))
-
-// --- which files does upstream own? ----------------------------------------
-// Absent upstream ref (a fresh clone with no `upstream` remote) is not a
-// failure: the rule simply cannot be checked, and saying so is better than
-// passing silently.
-let upstreamFiles: Set<string> | null = null
-try {
-  const listed = execFileSync(
-    "git",
-    ["ls-tree", "-r", "--name-only", "upstream/main", "src/"],
-    { cwd: ROOT, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
-  )
-  upstreamFiles = new Set(
-    listed
-      .split("\n")
-      .filter(Boolean)
-      .map((p) => p.replace(/^src\//, "")),
-  )
-} catch {
-  notes.push(
-    "upstream/main not available — skipped the 'never move an upstream-owned file' check (git fetch upstream)",
-  )
-}
-
-// --- rule 1: upstream-owned files stay at src/'s root ----------------------
-if (upstreamFiles) {
-  for (const f of all) {
-    const r = rel(f)
-    const base = r.split("/").pop()!
-    // A domain barrel is a new file that happens to be named index.ts, not
-    // upstream's entry point relocated.
-    const isBarrel = /^\w+\/index\.ts$/.test(r)
-    if (r.includes("/") && !isBarrel && upstreamFiles.has(base)) {
-      problems.push(
-        `${r}: upstream owns this file — moving it makes every future merge conflict. Keep it at src/${base}.`,
-      )
-    }
-  }
-}
 
 // --- rule 2: every production module has a test beside it ------------------
 // Barrels have nothing of their own to test. ui/tools.ts is thin glue over the
@@ -102,27 +61,6 @@ for (const f of prod) {
     if (!isType && !isDynamic && !isComment && !isDynamicOnlyModule) {
       problems.push(
         `${rel(f)}:${i + 1}: static value import of @opencode-ai/plugin — it lands in every test's module graph and cancels subtests. Use a dynamic import.`,
-      )
-    }
-  }
-}
-
-// --- rule 4: upstream-owned files reach a domain only through its barrel ---
-// The barrel exists to keep the fork's footprint inside a file upstream also
-// edits down to one import line. Fork-owned files importing each other
-// precisely is better than dragging a whole domain in through a barrel, so the
-// rule applies only where the merge cost is real.
-const DOMAINS = new Set(["balance", "ui"])
-for (const f of all) {
-  const r = rel(f)
-  if (r.includes("/")) continue
-  if (upstreamFiles && !upstreamFiles.has(r)) continue
-  const text = readFileSync(f, "utf-8")
-  for (const m of text.matchAll(/from\s+"\.\/(\w+)\/([\w-]+)\.ts"/g)) {
-    const [, domain, mod] = m
-    if (DOMAINS.has(domain!) && mod !== "index" && mod !== "tools") {
-      problems.push(
-        `${r}: upstream also edits this file — reach ./${domain} through its barrel, not ./${domain}/${mod}.ts, so a merge touches one line.`,
       )
     }
   }

@@ -4,23 +4,17 @@ Read `llms.txt` first for what the modules are. This file is what a change must
 obey. Every rule here is checked by `pnpm check:structure`, which runs as part of
 `pnpm lint`; a rule that is only written down is a rule that rots.
 
-## 1. This is a fork, and layout follows from that
+## 1. Started as a fork, now detached
 
-`upstream` is `griffinmartin/opencode-claude-auth` and it is active — it ships
-OAuth and compatibility fixes you want. Every merge is cheap or expensive
-depending on how much of _its_ files you moved or rewrote.
+This began as a fork of `griffinmartin/opencode-claude-auth` and is now released
+on its own; it no longer merges from upstream. The layout still shows where
+code came from: files marked "upstream" below are the original credential and
+request-shaping core, and new behaviour goes in `src/balance/` or `src/ui/`.
+Upstream fixes are picked by hand when they are worth it, not merged.
 
-- **Never move or rename a file that exists upstream.** A path rename plus a
-  content change is the worst possible merge case, and it is paid on every pull,
-  forever. `check:structure` fails if an upstream-owned file leaves `src/`'s root.
-- **Prefer adding a module over editing one upstream owns.** New behaviour goes
-  in `src/balance/` or `src/ui/`, which upstream has never heard of and therefore
-  cannot conflict with.
-- **When you must touch a shared file, keep the footprint to one line.** That is
-  what the barrels are for: `src/index.ts` reaches the whole balancing domain
-  through `./balance/…` rather than four separate imports.
-- Check divergence before starting anything large:
-  `git fetch upstream && git rev-list --count HEAD..upstream/main`.
+- **When you touch a core file, keep the footprint small.** That is what the
+  barrels are for: `src/index.ts` reaches the whole balancing domain through
+  `./balance/…` rather than four separate imports.
 
 ## 2. Module layout
 
