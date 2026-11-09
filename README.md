@@ -1,8 +1,8 @@
 # opencode-claude-accounts
 
-[![npm](https://img.shields.io/npm/v/opencode-claude-auth)](https://www.npmjs.com/package/opencode-claude-auth)
-[![CI](https://github.com/griffinmartin/opencode-claude-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/griffinmartin/opencode-claude-auth/actions/workflows/ci.yml)
-[![Socket Badge](https://socket.dev/api/badge/npm/package/opencode-claude-auth)](https://socket.dev/npm/package/opencode-claude-auth)
+[![npm](https://img.shields.io/npm/v/opencode-claude-accounts)](https://www.npmjs.com/package/opencode-claude-accounts)
+[![CI](https://github.com/mrmm/opencode-claude-accounts/actions/workflows/ci.yml/badge.svg)](https://github.com/mrmm/opencode-claude-accounts/actions/workflows/ci.yml)
+[![Socket Badge](https://socket.dev/api/badge/npm/package/opencode-claude-accounts)](https://socket.dev/npm/package/opencode-claude-accounts)
 
 Self-contained Anthropic auth provider for OpenCode using your Claude Code credentials — no separate login or API key needed.
 
@@ -31,7 +31,7 @@ macOS is preferred (uses Keychain). Linux and Windows work via the credentials f
 Paste this into any LLM agent (Claude Code, OpenCode, Cursor, etc.):
 
 ```
-Install the opencode-claude-auth plugin and configure it by following: https://raw.githubusercontent.com/griffinmartin/opencode-claude-auth/main/installation.md
+Install the opencode-claude-accounts plugin and configure it by following: https://raw.githubusercontent.com/mrmm/opencode-claude-accounts/main/installation.md
 ```
 
 **Option B: Manual setup**
@@ -40,7 +40,7 @@ Install the opencode-claude-auth plugin and configure it by following: https://r
 
    ```json
    {
-     "plugin": ["opencode-claude-auth@latest"]
+     "plugin": ["opencode-claude-accounts@latest"]
    }
    ```
 
@@ -841,7 +841,7 @@ types matching nothing that runs.
 | Keychain read timed out                             | Restart Keychain Access (can happen on macOS Tahoe)                                                                                       |
 | "Credentials are unavailable or expired"            | Run `claude` to refresh your Claude Code credentials                                                                                      |
 | "Extra usage is required for long context requests" | Your conversation exceeded 200k tokens. See [Long context (1M)](#long-context-1m) below                                                   |
-| Plugin not updating to latest version               | Delete the cached package: `rm -rf ~/.cache/opencode/packages/opencode-claude-auth@latest/` then restart OpenCode                         |
+| Plugin not updating to latest version               | Delete the cached package: `rm -rf ~/.cache/opencode/packages/opencode-claude-accounts@latest/` then restart OpenCode                         |
 
 ### Diagnostic logging
 
@@ -889,7 +889,7 @@ Precedence, least specific first:
 1. defaults
 2. `~/.config/opencode/claude-auth.jsonc`
 3. `<project>/claude-auth.jsonc`
-4. inline options in `opencode.jsonc` — `["...opencode-claude-auth", { "quotaProbe": true }]`
+4. inline options in `opencode.jsonc` — `["opencode-claude-accounts", { "quotaProbe": true }]`
 5. `CLAUDE_AUTH_*` environment variables
 
 Environment stays highest so a single command can override without editing
@@ -1106,9 +1106,9 @@ the whole credential path come from: reading Claude Code's own OAuth tokens out
 of the Keychain, refreshing them, and presenting them to OpenCode as a provider.
 MIT licensed, actively maintained, and the reason this plugin exists at all.
 
-This fork inherits **153 commits** from it and adds **86**. It currently sits
-**25 commits behind** upstream, and the fork link on GitHub is kept deliberately
-so those can still be pulled and anything generally useful can go back.
+This project started as a fork of it and has since been detached: it is
+released and published on its own, as `opencode-claude-accounts`, and no
+longer merges from upstream. Fixes that are generally useful can still go back.
 
 **[robbash/opencode-claude-auth](https://github.com/robbash/opencode-claude-auth)**
 by **Robert Sternberg** contributed the piece this fork leans on hardest: reading
