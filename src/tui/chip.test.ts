@@ -952,26 +952,19 @@ describe("reset countdowns", () => {
     )
   })
 
-  it("puts the countdown in the sidebar only on a spent window", () => {
-    const { rows } = sidebarLines({
-      accounts: [{ source: "s1", label: "Acme 1" }],
-      quota: withResets(7800, 273_600),
-      selection: "__auto__",
-      activeSource: "s1",
-      now: NOW,
-    })
-    assert.doesNotMatch(rows[0]!.detail, /2h10m|3d4h/)
-    const spent = withResets(7800, 273_600)
-    spent["s1"]!.sevenDay!.utilization = 1
-    const { rows: full } = sidebarLines({
-      accounts: [{ source: "s1", label: "Acme 1" }],
-      quota: spent,
-      selection: "__auto__",
-      activeSource: "s1",
-      now: NOW,
-    })
-    assert.match(full[0]!.detail, /wk \u2588\u2588\u2588 3d4h$/)
-    assert.doesNotMatch(full[0]!.detail, /2h10m/)
+  it("puts a countdown on every sidebar window, spent or not", () => {
+    const row = (nerdFont?: boolean) =>
+      sidebarLines({
+        accounts: [{ source: "s1", label: "Acme 1" }],
+        quota: withResets(7800, 273_600),
+        selection: "__auto__",
+        activeSource: "s1",
+        now: NOW,
+        nerdFont,
+      }).rows[0]!.detail
+    assert.match(row(), /5h \S{3} \d+% +\u21bb2h10m/)
+    assert.match(row(), /wk \S{3} \d+% +\u21bb3d4h/)
+    assert.match(row(true), /\u{f0150}2h10m.*\u{f00f0}3d4h/u)
   })
 })
 

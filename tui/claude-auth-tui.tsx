@@ -1227,6 +1227,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             accounts: visible(),
             names: displayNames(),
             hiddenCount: accounts.length - visible().length,
+            nerdFont: getConfig().nerdFont,
             thresholds: {
               warnAt: getConfig().quotaWarnAt,
               weeklyWarnAt: getConfig().quotaWeeklyWarnAt,
@@ -1295,6 +1296,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                 {props.row.active ? "\u25cf" : "\u00b7"}
               </text>
               <text
+                wrapMode="none"
+                truncate
                 style={{
                   // Brightness says which account is serving; hue says how
                   // it is doing. Two facts, two channels -- the previous

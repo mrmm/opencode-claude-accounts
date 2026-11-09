@@ -184,6 +184,13 @@ export const EDITABLE: Editable[] = [
     hint: "DD/MM/YYYY HH:mm — empty for today/tomorrow/weekday",
   },
   {
+    key: "nerdFont",
+    label: "Nerd Font icons",
+    section: "Quota",
+    kind: "boolean",
+    hint: "clock/calendar icons on reset countdowns; off = ↻",
+  },
+  {
     key: "quotaWarnAt",
     label: "Warn at (5h)",
     section: "Quota",

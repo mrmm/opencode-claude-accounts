@@ -55,6 +55,8 @@ export type ChipInput = {
   hiddenCount?: number
   /** Unix seconds, injectable so a countdown can be asserted. */
   now?: number
+  /** Mark countdowns with Nerd Font icons rather than `↻`. */
+  nerdFont?: boolean
 }
 
 /**
@@ -123,18 +125,31 @@ export function gauge(pct: number): string {
 }
 
 /**
- * One window as a fixed-width cell, `5h ▄▁▁ 16%  `, so columns line up. A spent
- * window shows when it is back instead of `100%`: the full gauge already says
- * spent, and the countdown is the figure worth reading.
+ * Countdown markers. Nerd Font glyphs (md-clock-outline, md-calendar-clock) are
+ * one cell wide in a Nerd Font Mono; emoji clocks are not, and render tiny or
+ * double-width depending on the terminal. `↻` is the fallback every font has.
+ */
+export const RESET_ICONS = {
+  nerd: { "5h": "\u{f0150}", wk: "\u{f00f0}" },
+  plain: { "5h": "\u21bb", wk: "\u21bb" },
+} as const
+
+/**
+ * One window as a fixed-width cell, `5h ▄▁▁ 16% ↻2h14m`, so columns line up.
+ * The countdown shows whether or not the window is spent: when it frees up is
+ * worth knowing before it runs out, not only after.
  */
 export function windowCell(
   label: string,
   pct: number,
   resetIn?: number,
+  nerdFont = false,
 ): string {
-  const value =
-    pct >= 100 && resetIn !== undefined ? formatDuration(resetIn) : `${pct}%`
-  return `${label} ${gauge(pct)} ${value.padEnd(5)}`
+  const icon =
+    RESET_ICONS[nerdFont ? "nerd" : "plain"][label as "5h" | "wk"] ?? "\u21bb"
+  const left =
+    resetIn !== undefined ? `${icon}${formatDuration(resetIn).padEnd(5)}` : ""
+  return `${label} ${gauge(pct)} ${`${pct}%`.padEnd(5)}${left}`
 }
 
 export function quotaText(
@@ -146,8 +161,9 @@ export function quotaText(
     now?: number
     /** Append the money once credits are actually covering this account. */
     spend?: boolean
-    /** Sidebar form: a gauge per window, and a reset time only on a spent one. */
+    /** Sidebar form: a gauge and a reset countdown per window. */
     bars?: boolean
+    nerdFont?: boolean
   } = {},
 ): string {
   const { five, week, fiveIn, weekIn, rejected } = utilisation(
@@ -166,7 +182,7 @@ export function quotaText(
     pct === undefined
       ? `${label} ${NONE}`
       : opts.bars
-        ? windowCell(label, pct, opts.resets ? secs : undefined)
+        ? windowCell(label, pct, opts.resets ? secs : undefined, opts.nerdFont)
         : `${label} ${pct}%${left(secs, pct)}`
   const parts = [win("5h", five, fiveIn)]
   if (opts.includeWeek !== false) parts.push(win("wk", week, weekIn))
@@ -486,6 +502,7 @@ export function sidebarLines(input: ChipInput): {
       spend: true,
       bars: true,
       now: input.now,
+      nerdFont: input.nerdFont,
     })
     const health = accountHealth(
       input.quota,
