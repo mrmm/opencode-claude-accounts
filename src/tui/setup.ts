@@ -19,7 +19,7 @@ export type InstructionFile = {
 
 export type SetupScan = {
   files: InstructionFile[]
-  /** Agent names that appear both globally and in the project (overlord-x == x). */
+  /** Agent names that appear both globally and in the project (acme-x == x). */
   duplicateAgents: string[]
   agentCount: number
 }
@@ -138,7 +138,7 @@ export function scanSetup(
     : []
   const local = new Set(projectAgents)
   const duplicateAgents = globalAgents.filter(
-    (g) => local.has(g) || local.has(g.replace(/^overlord-/, "")),
+    (g) => local.has(g) || local.has(g.replace(/^[a-z0-9]+-/, "")),
   )
 
   return {

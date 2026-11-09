@@ -39,7 +39,7 @@ describe("scanSetup", () => {
     )
     for (const a of ["builder", "reviewer"])
       writeFileSync(join(repo, ".opencode", "agent", `${a}.md`), a)
-    for (const a of ["overlord-builder", "overlord-reviewer", "overlord-only"])
+    for (const a of ["acme-builder", "acme-reviewer", "acme-only"])
       writeFileSync(join(global, "agent", `${a}.md`), a)
 
     const scan = scanSetup(repo, home)
@@ -52,8 +52,8 @@ describe("scanSetup", () => {
       ],
     )
     assert.deepEqual(scan.duplicateAgents, [
-      "overlord-builder",
-      "overlord-reviewer",
+      "acme-builder",
+      "acme-reviewer",
     ])
 
     // The hints now name what the scan found.
@@ -80,7 +80,7 @@ describe("scanSetup", () => {
     )
     assert.equal(
       by.schema,
-      "Subagent ~3.0k: 2 agents listed twice (overlord-builder…)",
+      "Subagent ~3.0k: 2 agents listed twice (acme-builder…)",
     )
   })
 

@@ -154,7 +154,7 @@ export type Composition = {
 }
 
 /**
- * Tool names group by their MCP server prefix (`pelico-notion_search` -> `pelico-notion`);
+ * Tool names group by their MCP server prefix (`acme-notion_search` -> `acme-notion`);
  * built-ins stand alone under their own name.
  */
 export function toolGroup(name: string): string {
