@@ -429,6 +429,7 @@ describe("config surface coverage", () => {
     captureRequests: "messages",
     useCredits: "0",
     resetFormat: "DD/MM/YYYY HH:mm",
+    nerdFont: "1",
     preset: "rr-12",
     accounts: "alpha,beta",
     accountIds:
