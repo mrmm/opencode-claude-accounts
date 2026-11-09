@@ -223,7 +223,7 @@ export function noticeToToast(
     case "selection-changed":
       // Always shown. The provider name in the status line is written once at
       // config load and cannot be rewritten mid-session, so without this a
-      // change made by `pnpm lb` or claude_auth_select is invisible until the
+      // change made by `pnpm lb` or claude_accounts_switch is invisible until the
       // next restart — the status line would still advertise the old one.
       return {
         variant: "info",

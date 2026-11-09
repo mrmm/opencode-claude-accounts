@@ -782,7 +782,7 @@ const plugin: PluginWithOptions = async (
   let registeredTools: Record<string, unknown> | undefined
   if (getConfig().tools) {
     try {
-      registeredTools = (await import("./ui/tools.ts")).claudeAuthTools
+      registeredTools = (await import("./ui/tools.ts")).claudeAccountsTools
       log("tools_registered", { names: Object.keys(registeredTools) })
     } catch (err) {
       log("tools_register_failed", {
@@ -1534,7 +1534,7 @@ const plugin: PluginWithOptions = async (
             // instance — but that is true of picking a plain account too, so
             // withholding the load-balancing rows removed the only discoverable
             // way to reach them without buying any safety. `pnpm lb <preset>`
-            // and claude_auth_select remain the non-disruptive route, and the
+            // and claude_accounts_switch remain the non-disruptive route, and the
             // prompt says so.
             const presetRows = Object.entries(cfgNow.presets).map(
               ([name, preset]) => {
@@ -1562,7 +1562,7 @@ const plugin: PluginWithOptions = async (
                 type: "select" as const,
                 key: "account",
                 message:
-                  "Select a Claude Code account (restarts the session — use `pnpm lb` or claude_auth_select to switch without one):",
+                  "Select a Claude Code account (restarts the session — use `pnpm lb` or claude_accounts_switch to switch without one):",
                 // `hint` must be a string when present. Passing undefined fails
                 // OpenCode's schema validation for the whole request --
                 // /provider/auth answers 500, the TUI falls back to its built-in

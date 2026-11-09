@@ -158,7 +158,7 @@ export const EDITABLE: Editable[] = [
     label: "Agent may use reserved quota",
     section: "Balancing",
     kind: "boolean",
-    hint: "let the claude_auth_reserve tool turn the override on; off = operator only",
+    hint: "let the claude_accounts_use_reserve tool turn the override on; off = operator only",
   },
   {
     key: "cacheTtl",

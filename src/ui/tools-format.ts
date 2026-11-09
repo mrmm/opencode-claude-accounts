@@ -71,7 +71,7 @@ export function reserveRefusal(
 }
 
 /**
- * Per-account cache lines for claude_auth_status, in `order` (account ids as
+ * Per-account cache lines for claude_accounts_status, in `order` (account ids as
  * configured), then any account seen in the log but not configured.
  */
 export function cacheAccountLines(

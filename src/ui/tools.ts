@@ -84,8 +84,8 @@ function describeSelection(value: string | null): string {
 
 const pct = (n: number) => `${Math.round(n * 100)}%`
 
-export const claudeAuthTools = {
-  claude_auth_status: tool({
+export const claudeAccountsTools = {
+  claude_accounts_status: tool({
     description:
       "Report which Claude account is serving requests right now, what is selected (a preset, auto, or a pin), each account's quota, its usage ceiling and reserved state, whether this session may spend reserved quota, and whether automatic rotation is enabled. Read-only.",
     args: {},
@@ -222,7 +222,7 @@ export const claudeAuthTools = {
     },
   }),
 
-  claude_auth_select: tool({
+  claude_accounts_switch: tool({
     description:
       'Choose which Claude account serves requests: a preset name, an account (exact Keychain source or a unique fragment of its label), "auto" to let the strategy decide, or "clear" to fall back to the config. Applies to the next request without re-authenticating, so nothing in flight is cancelled.',
     args: {
@@ -269,7 +269,7 @@ export const claudeAuthTools = {
     },
   }),
 
-  claude_auth_reserve: tool({
+  claude_accounts_use_reserve: tool({
     description:
       "Turn this session's reserved-quota override on or off. When on, this session may draw on accounts that are past their configured usage ceiling (their reserved quota) once no free account is left — including in hard cap mode. Affects only this session, and is forgotten after an hour idle. Spending reserved quota may consume a teammate's share, so every change is logged. Turning it on is refused unless the operator set agentReserve: true.",
     args: {
@@ -298,7 +298,7 @@ export const claudeAuthTools = {
     },
   }),
 
-  claude_auth_usage: tool({
+  claude_accounts_usage: tool({
     description:
       "Report per-account Claude usage over a window: requests served, share, refusals, errors, average latency, and how often the balancer rotated. Read-only.",
     args: {
