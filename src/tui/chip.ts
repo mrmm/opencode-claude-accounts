@@ -149,8 +149,9 @@ export function windowCell(label: string, pct: number): string {
 
 /**
  * When each window frees up, on the same grid as the gauge line: each
- * countdown centred in a cell as wide as `windowCell`, so it sits under its
- * own window. The column says which window, so `↻` needs no label.
+ * countdown starts where its window's label starts and fills a cell exactly
+ * as wide as `windowCell`, so both columns are fixed. The column says which
+ * window, so `↻` needs no label.
  */
 export function resetLine(
   fiveIn: number | undefined,
@@ -164,9 +165,8 @@ export function resetLine(
       ? `${RESET_ICONS.nerd[label]} ${left}`
       : `${RESET_ICONS.plain[label]}${left}`
     // Counted in characters: a Nerd Font glyph is two UTF-16 units, one cell.
-    const room = Math.max(0, width - [...s].length)
-    const before = Math.floor(room / 2)
-    return `${" ".repeat(before)}${s}${" ".repeat(room - before)}`
+    const chars = [...s].slice(0, width)
+    return chars.join("") + " ".repeat(width - chars.length)
   }
   if (fiveIn === undefined && weekIn === undefined) return ""
   return `${one("5h", fiveIn)}  ${one("wk", weekIn)}`.trimEnd()
