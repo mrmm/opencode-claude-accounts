@@ -19,7 +19,13 @@
  * options synchronously and cannot await a request.
  */
 
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs"
 
 import { dirname } from "node:path"
 import { accountKey, accountReadKeys } from "./account-key.ts"
@@ -425,6 +431,45 @@ export type ProbeResult = {
   probed: number
   skipped: number
   failed: number
+  /** Accounts the server answered 429; present only when there were some. */
+  limited?: number
+}
+
+/**
+ * Claim an account's probe for every process, or report it already taken.
+ *
+ * Each OpenCode process runs its own timer, and they fire together: five
+ * processes meant five identical calls to an endpoint that answers excess with
+ * an hour-long 429. The claim (`<cache>.claims`, source -> until, unix s) lets
+ * one process probe and the rest skip; a 429 is written there too, so a block
+ * one process learns holds for all of them.
+ */
+export function claimProbe(
+  path: string,
+  source: string,
+  now: number,
+  until: number,
+  /** Overwrite a live claim: a 429 outranks the probe that earned it. */
+  force = false,
+): boolean {
+  const file = `${path}.claims`
+  return withFileLock(file, () => {
+    let claims: Record<string, number> = {}
+    try {
+      claims = JSON.parse(readFileSync(file, "utf8")) as Record<string, number>
+    } catch {}
+    if (!force && (claims[source] ?? 0) > now) return false
+    claims[source] = until
+    for (const [k, v] of Object.entries(claims)) if (v <= now) delete claims[k]
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify(claims), { mode: 0o600 })
+    } catch {
+      // An unwritable claims file must not stop the probe: worst case is the
+      // duplicate call this exists to avoid.
+    }
+    return true
+  })
 }
 
 export const PROBE_MODEL = "claude-haiku-4-5-20251001"
@@ -607,6 +652,10 @@ export async function refreshQuotas(
       result.skipped++
       continue
     }
+    if (!claimProbe(path, account.source, now(), now() + maxAgeSeconds)) {
+      result.skipped++
+      continue
+    }
 
     try {
       const [url, init] = buildUsageRequest(account.accessToken)
@@ -620,11 +669,11 @@ export async function refreshQuotas(
           (res.headers as Headers)?.get?.("retry-after") ?? "",
           10,
         )
-        blockProbe(
-          account.source,
-          now() + (Number.isFinite(after) ? after : 3600),
-        )
+        const until = now() + (Number.isFinite(after) ? after : 3600)
+        blockProbe(account.source, until)
+        claimProbe(path, account.source, now(), until, true)
         result.skipped++
+        result.limited = (result.limited ?? 0) + 1
         continue
       }
 
