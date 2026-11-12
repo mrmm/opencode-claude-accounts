@@ -328,6 +328,8 @@ export function accountDetail(
   id:
     | { email?: string; plan?: string; tier?: string; subscription?: string }
     | undefined,
+  /** Leave out extra usage where the caller already shows the credit line. */
+  withExtra = true,
 ): string {
   const x = quotaEntry(quota, source)?.extra
   const extra = !x
@@ -337,7 +339,12 @@ export function accountDetail(
       : spendText(quota, source)
         ? `${spendText(quota, source)}${creditHeadroom(x) ? "" : " (cap reached)"}`
         : "extra usage unfunded"
-  return [id?.email ?? "", planText(id), extra, scopedText(quota, source)]
+  return [
+    id?.email ?? "",
+    planText(id),
+    withExtra ? extra : "",
+    scopedText(quota, source),
+  ]
     .filter(Boolean)
     .join(SEP)
 }
@@ -804,7 +811,13 @@ export function buildPickerOptions(input: {
       value: a.source,
       description: [
         resetText(input.quota, a.source, input.now, input.resetFormat),
-        accountDetail(input.quota, a.source, input.identities?.[a.source]),
+        // The title already carries the credit line.
+        accountDetail(
+          input.quota,
+          a.source,
+          input.identities?.[a.source],
+          false,
+        ),
       ]
         .filter(Boolean)
         .join(SEP),
