@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+  # Re-run the screenshots for an existing release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)attach screenshots to, e.g. v3.0.0"
+        required: true
 
 permissions:
   contents: read
@@ -73,3 +79,50 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish "${{ steps.pack.outputs.file }}" --provenance --access public
+
+  # Every release carries a PNG per feature; its notes show only the features
+  # whose files changed since the previous tag. Rendered from demo accounts.
+  screenshots:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # upload assets, edit the release notes
+    env:
+      TAG: ${{ inputs.tag || needs.release-please.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag }}
+          fetch-depth: 0 # the previous tag, to see what changed
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: sudo apt-get install -y --no-install-recommends librsvg2-bin fonts-dejavu-core
+
+      - name: Render
+        run: |
+          node --experimental-strip-types scripts/screenshots.ts render shots
+          for f in shots/*.svg; do rsvg-convert -z 2 "$f" -o "${f%.svg}.png"; done
+
+      - name: Attach and feature in the notes
+        run: |
+          gh release upload "$TAG" shots/*.png --clobber
+          prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then git diff --name-only "$prev" "$TAG"; else git ls-files; fi > changed.txt
+          node --experimental-strip-types scripts/screenshots.ts notes "$GITHUB_REPOSITORY" "$TAG" < changed.txt > shots.md
+          [ -s shots.md ] || exit 0
+          gh release view "$TAG" --json body -q .body > notes.md
+          # Idempotent: a re-run replaces the section instead of stacking it.
+          sed -i '/^## Screenshots$/,$d' notes.md
+          { cat notes.md; echo; cat shots.md; } > final.md
+          gh release edit "$TAG" --notes-file final.md

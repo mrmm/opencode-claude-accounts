@@ -1385,3 +1385,34 @@ describe("resetLine", () => {
     assert.equal(resetLine(undefined, undefined), "")
   })
 })
+
+// Regression: the picker showed the credit line in its title and again in
+// the description under it.
+describe("picker detail", () => {
+  it("names the credit line once per account", () => {
+    const credited = {
+      a: {
+        fiveHour: { utilization: 0.2, resetsAt: 2_000_000_000 },
+        extra: {
+          enabled: true,
+          capReached: false,
+          usedMinor: 100,
+          limitMinor: 200,
+          currency: "EUR",
+        },
+        observedAt: 1_999_990_000,
+      },
+    } as unknown as QuotaCache
+    const pinned = buildPickerOptions({
+      accounts: [{ source: "a", label: "A" }],
+      presets: {},
+      quota: credited,
+      selection: "__auto__",
+      now: 1_999_990_000,
+      identities: { a: { email: "a@example.com" } },
+    }).find((o) => o.value === "a")
+    const all = `${pinned!.title} ${pinned!.description}`
+    assert.equal(all.match(/credits/g)?.length, 1, all)
+    assert.match(pinned!.description!, /a@example\.com/)
+  })
+})
