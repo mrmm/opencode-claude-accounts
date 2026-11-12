@@ -1276,44 +1276,76 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             }
           return m
         }
-        const nameWidth = () =>
+        // The column where every gauge starts, groups and accounts alike:
+        // the widest lead (tree branch, marker) plus name.
+        const tree = () => sections().length > 0
+        const gaugeCol = () =>
           Math.max(
             0,
-            ...(sections().length > 0
-              ? [...shownName().values()].map((n) => n.length)
-              : view().rows.map((r) => r.name.length)),
-            ...sections().map((g) => groupLabel(g).length),
+            ...(tree()
+              ? [...shownName().values()].map((n) => n.length + 4)
+              : view().rows.map((r) => r.name.length + 2)),
+            ...sections().map((g) => groupLabel(g).length + 2),
           )
         const rowBySource = () =>
           new Map(visible().map((a, i) => [a.source, view().rows[i]!]))
         type SidebarRow = ReturnType<typeof view>["rows"][number]
-        const AccountRow = (props: { row: SidebarRow; name?: string }) => {
+        // Two lines per account, drawn as a tree under its group: gauges on
+        // the first, countdowns and anything that would not fit on the second.
+        const AccountRow = (props: {
+          row: SidebarRow
+          name?: string
+          branch?: "mid" | "last"
+        }) => {
+          const lead = () =>
+            props.branch === "last" ? "\u2514 " : props.branch ? "\u251c " : ""
+          const cont = () =>
+            props.branch === "mid" ? "\u2502 " : props.branch ? "  " : ""
           return (
-            <box flexDirection="row" gap={1}>
-              <text
-                flexShrink={0}
-                style={{ fg: healthColour(props.row.health) }}
-              >
-                {props.row.active ? "\u25cf" : "\u00b7"}
-              </text>
-              <text
-                wrapMode="none"
-                truncate
-                style={{
-                  // Brightness says which account is serving; hue says how
-                  // it is doing. Two facts, two channels -- the previous
-                  // rendering put both on hue and could show neither.
-                  fg: props.row.active
-                    ? api.theme.current.text
-                    : api.theme.current.textMuted,
-                }}
-              >
-                {(props.name ?? props.row.name).padEnd(nameWidth())}
+            <box>
+              <text wrapMode="none" truncate>
+                <span style={{ fg: api.theme.current.textMuted }}>
+                  {lead()}
+                </span>
+                <span style={{ fg: healthColour(props.row.health) }}>
+                  {props.row.active ? "\u25cf " : "\u00b7 "}
+                </span>
+                <span
+                  style={{
+                    // Brightness says which account is serving; hue says how
+                    // it is doing. Two facts, two channels.
+                    fg: props.row.active
+                      ? api.theme.current.text
+                      : api.theme.current.textMuted,
+                  }}
+                >
+                  {(props.name ?? props.row.name).padEnd(
+                    gaugeCol() - lead().length - 2,
+                  )}
+                </span>
                 <span style={{ fg: healthColour(props.row.health) }}>
                   {"  "}
                   {props.row.detail}
                 </span>
               </text>
+              <Show when={props.row.sub}>
+                <text wrapMode="none" truncate fg={api.theme.current.textMuted}>
+                  {cont()}
+                  {"  "}
+                  {props.row.sub}
+                </text>
+              </Show>
+              <Show when={props.row.more}>
+                <text
+                  wrapMode="none"
+                  truncate
+                  fg={healthColour(props.row.health)}
+                >
+                  {cont()}
+                  {"  "}
+                  {props.row.more}
+                </text>
+              </Show>
             </box>
           )
         }
@@ -1328,10 +1360,10 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               <span style={{ fg: api.theme.current.textMuted }}>
                 {` v${BUILD}`}
               </span>
-              <span style={{ fg: api.theme.current.textMuted }}>
-                {" "}
-                ({view().heading})
-              </span>
+            </text>
+            <text wrapMode="none" truncate fg={api.theme.current.textMuted}>
+              {"  "}
+              {view().heading}
             </text>
             <Show when={spent()}>
               <text fg={api.theme.current.error}>{spent()}</text>
@@ -1351,27 +1383,35 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                   {(g) => (
                     <box>
                       <text
+                        wrapMode="none"
+                        truncate
                         fg={api.theme.current.text}
                         onMouseUp={() => toggleSection(g.key)}
                       >
                         {isFolded(g.key) ? "\u25b8 " : "\u25be "}
-                        <b>{groupLabel(g).padEnd(nameWidth())}</b>
+                        <b>{groupLabel(g).padEnd(gaugeCol() - 2)}</b>
                         <span style={{ fg: healthColour(g.health) }}>
                           {`  ${g.summary}`}
                         </span>
                       </text>
                       <Show when={!isFolded(g.key)}>
                         <box onMouseUp={openAccountPicker}>
-                          <For each={g.sources}>
-                            {(source) => (
-                              <Show when={rowBySource().get(source)}>
-                                {(row) => (
-                                  <AccountRow
-                                    row={row()}
-                                    name={shownName().get(source)}
-                                  />
-                                )}
-                              </Show>
+                          <For
+                            each={g.sources.filter((s) => rowBySource().has(s))}
+                          >
+                            {(source, i) => (
+                              <AccountRow
+                                row={rowBySource().get(source)!}
+                                name={shownName().get(source)}
+                                branch={
+                                  i() ===
+                                  g.sources.filter((s) => rowBySource().has(s))
+                                    .length -
+                                    1
+                                    ? "last"
+                                    : "mid"
+                                }
+                              />
                             )}
                           </For>
                         </box>

@@ -32,6 +32,7 @@ import {
   utilisation,
   gauge,
   windowCell,
+  resetLine,
   type ChipAccount,
   accountDetail as detailOf,
   planText as planOf,
@@ -301,10 +302,7 @@ describe("sidebarLines", () => {
 
   it("says so when an account has no reading, rather than implying 0%", () => {
     const { rows } = sidebarLines({ ...base, selection: "__auto__" })
-    assert.equal(
-      rows[0]!.detail,
-      "5h \u2588\u2582\u2581 41%    wk \u2588\u2583\u2581 45%",
-    )
+    assert.equal(rows[0]!.detail, "5h \u2584  41%  wk \u2584  45%")
     assert.match(rows[1]!.detail, /no reading/)
   })
 
@@ -956,7 +954,9 @@ describe("reset countdowns", () => {
     )
   })
 
-  it("puts a countdown on every sidebar window, spent or not", () => {
+  // Regression: one line held gauges, countdowns and credits, ran past the
+  // ~35-cell sidebar and was cut in the middle. Countdowns moved below.
+  it("puts a countdown for every window on the line under the account", () => {
     const row = (nerdFont?: boolean) =>
       sidebarLines({
         accounts: [{ source: "s1", label: "Acme 1" }],
@@ -965,10 +965,10 @@ describe("reset countdowns", () => {
         activeSource: "s1",
         now: NOW,
         nerdFont,
-      }).rows[0]!.detail
-    assert.match(row(), /5h \S{3} \d+% +\u21bb2h10m/)
-    assert.match(row(), /wk \S{3} \d+% +\u21bb3d4h/)
-    assert.match(row(true), /\u{f0150}2h10m.*\u{f00f0}3d4h/u)
+      }).rows[0]!
+    assert.equal(row().sub, "5h \u21bb2h10m  wk \u21bb3d4h")
+    assert.equal(row(true).sub, "\u{f0150} 2h10m  \u{f00f0} 3d4h")
+    assert.ok(row().detail.length <= 20, `fits beside a name: ${row().detail}`)
   })
 })
 
@@ -1076,14 +1076,15 @@ describe("paid overflow", () => {
     assert.equal(chip.includes("113.78"), false, "no room beside an input box")
   })
 
-  it("shows the spend on the sidebar row", () => {
+  it("shows the spend on the line under the account", () => {
     const { rows } = sidebarLines({
       accounts: [{ source: "s1", label: "Team 1" }],
       quota: withExtra(100, { enabled: true, used: 11378, limit: 20000 }),
       selection: "__auto__",
       activeSource: "s1",
     })
-    assert.match(rows[0]!.detail, /credits 113\.78\/200\.00 EUR/)
+    assert.equal(rows[0]!.more, "credits 113.78/200.00 EUR")
+    assert.doesNotMatch(rows[0]!.detail, /credits/)
     assert.equal(rows[0]!.health, "paid")
   })
 })
@@ -1259,6 +1260,7 @@ describe("windowCell", () => {
   it("is the same width whatever the percentage", () => {
     const widths = [0, 5, 16, 100].map((p) => windowCell("5h", p).length)
     assert.deepEqual(new Set(widths).size, 1)
+    assert.equal(windowCell("wk", 100), "wk \u2588 100%")
   })
 })
 
@@ -1317,15 +1319,16 @@ describe("oauth details", () => {
   it("names per-model caps, and the sidebar only shows binding ones", () => {
     assert.equal(scopedOf(q([fable]), "a"), "Fable 12% of 50% wk")
     assert.equal(scopedOf(q([fable]), "a", true), "")
-    assert.doesNotMatch(
-      quotaText(q([fable]), "a", { bars: true, now: NOW_S }),
-      /Fable/,
-    )
+    const sub = (quota: QuotaCache) =>
+      sidebarLines({
+        accounts: [{ source: "a", label: "A" }],
+        quota,
+        selection: "__auto__",
+        now: NOW_S,
+      }).rows[0]!.more
+    assert.doesNotMatch(sub(q([fable])), /Fable/)
     const binding = { ...fable, active: true }
-    assert.match(
-      quotaText(q([binding]), "a", { bars: true, now: NOW_S }),
-      /Fable 12% of 50% wk$/,
-    )
+    assert.match(sub(q([binding])), /^Fable 12% of 50% wk$/)
   })
 
   it("reads the plan the way a person says it", () => {
@@ -1371,5 +1374,14 @@ describe("oauth details", () => {
       "extra usage unfunded",
     )
     assert.equal(detailOf(q([]), "a", undefined), "")
+  })
+})
+
+describe("resetLine", () => {
+  it("keeps the weekly countdown in its column when 5h has none", () => {
+    const both = resetLine(3600, 86400, true)
+    const weekOnly = resetLine(undefined, 86400, true)
+    assert.equal(both.indexOf("\u{f00f0}"), weekOnly.indexOf("\u{f00f0}"))
+    assert.equal(resetLine(undefined, undefined), "")
   })
 })
