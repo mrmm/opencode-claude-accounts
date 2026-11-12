@@ -32,6 +32,18 @@ const PROFILE = {
   },
 }
 
+// The shape the profile endpoint returns today.
+const PRO_PROFILE = {
+  account: { uuid: PROFILE.account.uuid, email: "b@example.com" },
+  organization: {
+    uuid: PROFILE.organization.uuid,
+    name: "Acme",
+    organization_type: "claude_team",
+    rate_limit_tier: "default_claude_max_5x",
+    subscription_status: "active",
+  },
+}
+
 function tmpFile(): string {
   return join(mkdtempSync(join(tmpdir(), "ident-")), "identities.json")
 }
@@ -47,6 +59,19 @@ describe("parseProfile", () => {
       orgUuid: "00000000-0000-0000-0000-0000000000a1",
       email: "a@example.com",
       orgName: "Acme",
+    })
+  })
+
+  // Regression: the endpoint says `email`, and only `email_address` was read.
+  it("reads the email and the plan the endpoint returns today", () => {
+    assert.deepEqual(parseProfile(PRO_PROFILE), {
+      accountUuid: PROFILE.account.uuid,
+      orgUuid: PROFILE.organization.uuid,
+      email: "b@example.com",
+      orgName: "Acme",
+      plan: "claude_team",
+      tier: "default_claude_max_5x",
+      subscription: "active",
     })
   })
 
@@ -89,13 +114,54 @@ describe("fetchIdentities", () => {
 
   it("skips an account already cached", async () => {
     const p = tmpFile()
-    writeIdentity("src-a", { accountUuid: "a", orgUuid: "o" }, 1, p)
+    writeIdentity(
+      "src-a",
+      { accountUuid: "a", orgUuid: "o", plan: "claude_team" },
+      1,
+      p,
+    )
     const r = await fetchIdentities([{ source: "src-a", accessToken: "tok" }], {
       fetchImpl: okFetch(PROFILE),
       path: p,
       now: () => 7,
     })
     assert.deepEqual(r, { fetched: 0, cached: 1, failed: 0 })
+  })
+
+  // Regression: rows were cached forever, so plan and subscription could
+  // never appear for an account fetched before they were kept.
+  it("refreshes a day-old or plan-less row from the profile", async () => {
+    const p = tmpFile()
+    const pair = {
+      accountUuid: PROFILE.account.uuid,
+      orgUuid: PROFILE.organization.uuid,
+    }
+    writeIdentity("src-a", pair, 1, p)
+    const r = await fetchIdentities([{ source: "src-a", accessToken: "tok" }], {
+      fetchImpl: okFetch(PRO_PROFILE),
+      path: p,
+      now: () => 7,
+    })
+    assert.deepEqual(r, { fetched: 1, cached: 0, failed: 0 })
+    assert.equal(readIdentityCache(p)["src-a"]?.plan, "claude_team")
+  })
+
+  it("never rekeys or downgrades a held row on refresh", async () => {
+    const p = tmpFile()
+    const held = { accountUuid: "a", orgUuid: "o", email: "held@example.com" }
+    writeIdentity("src-a", held, 1, p)
+    const expired = (async () => ({
+      status: 401,
+      json: async () => null,
+    })) as never
+    for (const fetchImpl of [expired, okFetch(PRO_PROFILE), okFetch(null)]) {
+      const r = await fetchIdentities(
+        [{ source: "src-a", accessToken: "tok", configDir: "/nonexistent" }],
+        { fetchImpl, path: p, now: () => 7 },
+      )
+      assert.deepEqual(r, { fetched: 0, cached: 1, failed: 0 })
+      assert.equal(readIdentityCache(p)["src-a"]?.email, "held@example.com")
+    }
   })
 
   it("keeps a cached identity when the token is expired (401)", async () => {
