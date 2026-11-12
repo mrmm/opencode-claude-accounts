@@ -115,12 +115,44 @@ jobs:
           node --experimental-strip-types scripts/screenshots.ts render shots
           for f in shots/*.svg; do rsvg-convert -z 2 "$f" -o "${f%.svg}.png"; done
 
+      # The real TUI, through VHS. Never blocks a release: without it the notes
+      # just leave the capture out.
+      - name: Capture the real TUI
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          OPENCODE_VERSION: "2.2.7"
+          VHS_VERSION: "0.10.0"
+          VHS_NO_SANDBOX: "true"
+        run: |
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+          export PATH="$bin:$PATH"
+          curl -fsSL -o "$bin/ttyd" https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64
+          chmod +x "$bin/ttyd"
+          curl -fsSL "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP"/vhs_*/vhs "$bin/"
+          curl -fsSL "https://opencode.ai/files/bin/${OPENCODE_VERSION}/opencode-linux-x64-baseline.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          find "$RUNNER_TEMP" -maxdepth 2 -name opencode -type f -exec mv {} "$bin/" \;
+          opencode --version
+          pnpm run build
+          # VHS sometimes fails to start its browser; once more usually works.
+          # A fresh home each time, so a retry does not show a second session.
+          for i in 1 2; do
+            home="$RUNNER_TEMP/demo-home-$i"
+            scripts/tui-capture/seed.sh "$home" .
+            HOME="$home" vhs scripts/tui-capture/sidebar.tape && [ -s shots/tui.png ] && break
+          done
+          [ -s shots/tui.png ]
+
       - name: Attach and feature in the notes
         run: |
           gh release upload "$TAG" shots/*.png --clobber
           prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
           if [ -n "$prev" ]; then git diff --name-only "$prev" "$TAG"; else git ls-files; fi > changed.txt
-          node --experimental-strip-types scripts/screenshots.ts notes "$GITHUB_REPOSITORY" "$TAG" < changed.txt > shots.md
+          node --experimental-strip-types scripts/screenshots.ts notes "$GITHUB_REPOSITORY" "$TAG" shots < changed.txt > shots.md
           [ -s shots.md ] || exit 0
           gh release view "$TAG" --json body -q .body > notes.md
           # Idempotent: a re-run replaces the section instead of stacking it.

@@ -8,7 +8,9 @@ Self-contained Anthropic auth provider for OpenCode using your Claude Code crede
 
 ## Screenshots
 
-Rendered from demo accounts by every release (`scripts/screenshots.ts`); these always show the latest one.
+Taken by every release from demo accounts: one capture of the real TUI (`scripts/tui-capture/`) and one rendered image per feature (`scripts/screenshots.ts`). These always show the latest release.
+
+![The real OpenCode TUI, with a demo account](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/tui.png)
 
 | Sidebar                                                                                                                                            | Forecast                                                                                            |
 | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |

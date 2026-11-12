@@ -11,7 +11,7 @@ import {
 
 describe("screenshots", () => {
   it("renders every feature, and only demo identities", () => {
-    for (const f of FEATURES) {
+    for (const f of FEATURES.filter((x) => !x.captured)) {
       const svg = renderSvg(SCENES[f.id]!())
       assert.match(svg, /^<svg /, f.id)
       assert.ok(svg.split("<text").length > 4, `${f.id} has content`)
@@ -26,7 +26,7 @@ describe("screenshots", () => {
 
   it("features a release by the files it changed", () => {
     const ids = (p: string[]) => changedFeatures(p).map((f) => f.id)
-    assert.deepEqual(ids(["src/tui/forecast.ts"]), ["forecast"])
+    assert.deepEqual(ids(["src/tui/forecast.ts"]), ["tui", "forecast"])
     assert.deepEqual(ids(["README.md", ""]), [])
     assert.ok(ids(["src/tui/chip.ts"]).includes("sidebar"))
   })
