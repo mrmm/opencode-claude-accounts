@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-accounts",
-  "version": "2.1.4",
+  "version": "3.0.0",
   "description": "OpenCode plugin that uses your Claude Code credentials and balances requests across several Claude accounts.",
   "keywords": [
     "anthropic",
