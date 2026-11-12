@@ -81,6 +81,25 @@ export type ActiveLimit = {
   resetsAt?: number
 }
 
+/**
+ * One limit as the usage endpoint lists it, active or not. Carries what the
+ * windows cannot: the server's own severity, and per-model caps (a model
+ * allowed only a share of the weekly allowance).
+ */
+export type LimitReading = {
+  /** session | weekly_all | weekly_scoped | ... */
+  kind: string
+  percent: number
+  /** normal | warning | critical: the server's verdict, not our threshold. */
+  severity: string
+  active: boolean
+  resetsAt?: number
+  /** weekly_scoped only: the model the cap applies to. */
+  model?: string
+  /** weekly_scoped only: the share of the weekly allowance it may use, 0..100. */
+  allowance?: number
+}
+
 export type AccountQuota = {
   fiveHour?: QuotaWindow
   sevenDay?: QuotaWindow
@@ -92,6 +111,8 @@ export type AccountQuota = {
   extra?: ExtraUsage
   /** Limits the server marks active -- authoritative, not inferred. */
   activeLimits?: ActiveLimit[]
+  /** Every limit the probe saw. Only the usage endpoint reports it. */
+  limits?: LimitReading[]
   /** Which organization this account bills against. */
   orgName?: string
 }
@@ -275,6 +296,7 @@ export function writeQuotaForAccount(
         ...(prior?.activeLimits !== undefined
           ? { activeLimits: prior.activeLimits }
           : {}),
+        ...(prior?.limits !== undefined ? { limits: prior.limits } : {}),
         ...quota,
       }
       // The source-keyed entry is now superseded; leaving it lets any reader
@@ -481,11 +503,41 @@ export function parseUsageBody(
         })
     : []
 
+  // Shares are keyed by the limit's position in `limits`.
+  const shares = new Map<number, number>()
+  for (const s of Array.isArray(b.weekly_scoped_shares)
+    ? b.weekly_scoped_shares
+    : []) {
+    if (
+      typeof s?.limit_index === "number" &&
+      typeof s?.allowance_percent_of_weekly === "number"
+    )
+      shares.set(s.limit_index, s.allowance_percent_of_weekly)
+  }
+  const limits: LimitReading[] = Array.isArray(b.limits)
+    ? b.limits.flatMap((l: any, i: number) => {
+        if (!l || typeof l.kind !== "string") return []
+        const row: LimitReading = {
+          kind: l.kind,
+          percent: Number(l.percent ?? 0),
+          severity: String(l.severity ?? "normal"),
+          active: l.is_active === true,
+        }
+        const at = epoch(l.resets_at)
+        if (at !== undefined) row.resetsAt = at
+        const model = l.scope?.model?.display_name ?? l.scope?.model?.id
+        if (typeof model === "string") row.model = model
+        if (shares.has(i)) row.allowance = shares.get(i)
+        return [row]
+      })
+    : []
+
   return {
     ...(five ? { fiveHour: five } : {}),
     ...(week ? { sevenDay: week } : {}),
     ...(extra ? { extra } : {}),
     ...(activeLimits.length ? { activeLimits } : {}),
+    ...(limits.length ? { limits } : {}),
     observedAt: now,
   }
 }

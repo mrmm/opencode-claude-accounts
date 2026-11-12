@@ -1107,6 +1107,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
       quota: current.quota,
       selection: current.selection,
       resetFormat: getConfig().resetFormat,
+      identities: readIdentityCache(),
     })
     // A per-session choice belongs beside the per-session account, not in
     // the global settings screen. Offered only when there is a session to

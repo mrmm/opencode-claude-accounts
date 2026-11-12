@@ -33,6 +33,10 @@ import {
   gauge,
   windowCell,
   type ChipAccount,
+  accountDetail as detailOf,
+  planText as planOf,
+  scopedText as scopedOf,
+  serverSeverity as severityOf,
 } from "./chip.ts"
 import type { QuotaCache } from "../balance/index.ts"
 
@@ -1255,5 +1259,117 @@ describe("windowCell", () => {
   it("is the same width whatever the percentage", () => {
     const widths = [0, 5, 16, 100].map((p) => windowCell("5h", p).length)
     assert.deepEqual(new Set(widths).size, 1)
+  })
+})
+
+// What the OAuth usage and profile endpoints add beyond the two gauges.
+describe("oauth details", () => {
+  const NOW_S = 1_800_000_000
+  const lim = (kind: string, severity: string, over = {}) => ({
+    kind,
+    percent: 50,
+    severity,
+    active: false,
+    ...over,
+  })
+  const q = (limits: unknown[], extra?: unknown) =>
+    ({
+      a: {
+        fiveHour: { utilization: 0.3, resetsAt: NOW_S + 3600 },
+        sevenDay: { utilization: 0.4, resetsAt: NOW_S + 86400 },
+        limits,
+        ...(extra ? { extra } : {}),
+        observedAt: NOW_S,
+      },
+    }) as unknown as QuotaCache
+  const fable = lim("weekly_scoped", "normal", {
+    percent: 12,
+    model: "Fable",
+    allowance: 50,
+  })
+
+  it("takes the worst server severity, ignoring a reset window", () => {
+    assert.equal(
+      severityOf(q([lim("session", "normal")]), "a", NOW_S),
+      undefined,
+    )
+    assert.equal(
+      severityOf(
+        q([lim("session", "warning"), lim("weekly_all", "critical")]),
+        "a",
+        NOW_S,
+      ),
+      "critical",
+    )
+    const old = lim("weekly_all", "critical", { resetsAt: NOW_S - 1 })
+    assert.equal(severityOf(q([old]), "a", NOW_S), undefined)
+  })
+
+  it("a server warning colours a row warn below our own threshold", () => {
+    const th = { warnAt: 0.8, weeklyWarnAt: 0.8 }
+    assert.equal(accountHealth(q([]), "a", th), "ok")
+    assert.equal(
+      accountHealth(q([lim("weekly_all", "warning")]), "a", th),
+      "warn",
+    )
+  })
+
+  it("names per-model caps, and the sidebar only shows binding ones", () => {
+    assert.equal(scopedOf(q([fable]), "a"), "Fable 12% of 50% wk")
+    assert.equal(scopedOf(q([fable]), "a", true), "")
+    assert.doesNotMatch(
+      quotaText(q([fable]), "a", { bars: true, now: NOW_S }),
+      /Fable/,
+    )
+    const binding = { ...fable, active: true }
+    assert.match(
+      quotaText(q([binding]), "a", { bars: true, now: NOW_S }),
+      /Fable 12% of 50% wk$/,
+    )
+  })
+
+  it("reads the plan the way a person says it", () => {
+    assert.equal(
+      planOf({
+        plan: "claude_team",
+        tier: "default_claude_max_5x",
+        subscription: "active",
+      }),
+      "team · max 5x",
+    )
+    assert.equal(
+      planOf({ plan: "claude_pro", subscription: "past_due" }),
+      "pro · subscription past due",
+    )
+    assert.equal(planOf(undefined), "")
+  })
+
+  it("puts email, plan, extra usage and caps on one detail line", () => {
+    const spent = {
+      enabled: true,
+      capReached: false,
+      usedMinor: 15075,
+      limitMinor: 15000,
+      currency: "EUR",
+    }
+    assert.equal(
+      detailOf(q([fable], spent), "a", {
+        email: "a@example.com",
+        plan: "claude_team",
+        tier: "default_claude_max_5x",
+      }),
+      "a@example.com · team · max 5x · credits 150.75/150.00 EUR (cap reached) · Fable 12% of 50% wk",
+    )
+    const unfunded = {
+      enabled: true,
+      capReached: false,
+      usedMinor: 0,
+      limitMinor: 0,
+    }
+    assert.equal(
+      detailOf(q([], unfunded), "a", undefined),
+      "extra usage unfunded",
+    )
+    assert.equal(detailOf(q([]), "a", undefined), "")
   })
 })
