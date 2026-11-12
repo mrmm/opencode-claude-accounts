@@ -10,8 +10,8 @@ Self-contained Anthropic auth provider for OpenCode using your Claude Code crede
 
 Rendered from demo accounts by every release (`scripts/screenshots.ts`); these always show the latest one.
 
-| Sidebar | Forecast |
-| --- | --- |
+| Sidebar                                                                                                                                            | Forecast                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | ![Sidebar: accounts as a tree, gauges and reset countdowns](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/sidebar.png) | ![Forecast](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/forecast.png) |
 
 ![Account picker](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/picker.png)
