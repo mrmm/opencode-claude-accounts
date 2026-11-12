@@ -3,12 +3,13 @@
  *
  *   node --experimental-strip-types scripts/screenshots.ts render <dir>
  *   git diff --name-only <prev> <tag> |
- *     node --experimental-strip-types scripts/screenshots.ts notes <repo> <tag>
+ *     node --experimental-strip-types scripts/screenshots.ts notes <repo> <tag> [dir]
  *
  * `render` writes one SVG per feature using the plugin's own render functions,
  * so a release shows what its code draws. `notes` reads changed paths on stdin
  * and prints a markdown section with the features those paths touch, linking
- * the PNGs the release workflow uploads next to the tarball.
+ * the PNGs the release workflow uploads next to the tarball; given `dir`, only
+ * the ones that exist there, so a failed capture leaves no broken image.
  *
  * Demo data only: the repository is public, so no real account, email or
  * organisation ever reaches an image.
@@ -16,7 +17,7 @@
 // Reset clocks render in local time; pin it so every machine draws the same.
 process.env.TZ = "UTC"
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -25,6 +26,8 @@ import {
   accountDetail,
   accountHealth,
   buildPickerOptions,
+  fitText,
+  NAME_MAX,
   sidebarLines,
   type Health,
 } from "../src/tui/chip.ts"
@@ -32,10 +35,26 @@ import { forecast, forecastSummaryRows } from "../src/tui/forecast.ts"
 import { groupRows } from "../src/tui/groups.ts"
 import type { Row } from "../src/tui/tokens.ts"
 
-export type Feature = { id: string; title: string; files: string[] }
+export type Feature = {
+  id: string
+  title: string
+  files: string[]
+  /** Taken from the real TUI by scripts/tui-capture, not rendered here. */
+  captured?: boolean
+}
 
 /** Which source files each screenshot shows; a change to any re-features it. */
 export const FEATURES: Feature[] = [
+  {
+    id: "tui",
+    title: "The real OpenCode TUI, with a demo account",
+    files: [
+      "tui/claude-auth-tui.tsx",
+      "src/tui/chip.ts",
+      "src/tui/forecast.ts",
+    ],
+    captured: true,
+  },
   {
     id: "sidebar",
     title: "Sidebar: accounts as a tree, gauges and reset countdowns",
@@ -90,7 +109,8 @@ const health: Record<Health, Colour> = {
   critical: "critical",
   unknown: "muted",
 }
-const label = (g: { title: string; count: string }) => `${g.title} ${g.count}`
+const label = (g: { title: string; count: string }) =>
+  fitText(`${g.title} ${g.count}`, NAME_MAX + 2)
 const clock = (s: number) => new Date(s * 1000).toISOString().slice(11, 16)
 const level = (l?: Row["level"]): Colour =>
   l === "critical" ? "critical" : l === "warn" ? "warn" : "text"
@@ -225,7 +245,7 @@ function sidebar(): Line[] {
         { t: last ? "\u2514 " : "\u251c ", c: "muted" },
         { t: row.active ? "\u25cf " : "\u00b7 ", c: health[row.health] },
         {
-          t: NAMES.get(s)!.padEnd(col - 4),
+          t: fitText(NAMES.get(s)!, NAME_MAX).padEnd(col - 4),
           c: row.active ? "text" : "muted",
         },
         { t: `  ${row.detail}`, c: health[row.health] },
@@ -392,16 +412,21 @@ export function releaseNotes(
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [cmd, a, b] = process.argv.slice(2)
+  const [cmd, a, b, dir] = process.argv.slice(2)
   if (cmd === "render" && a) {
     mkdirSync(a, { recursive: true })
     for (const [id, scene] of Object.entries(SCENES))
       writeFileSync(join(a, `${id}.svg`), renderSvg(scene()))
   } else if (cmd === "notes" && a && b) {
     const paths = readFileSync(0, "utf8").split("\n")
-    process.stdout.write(releaseNotes(changedFeatures(paths), a, b))
+    const shown = changedFeatures(paths).filter(
+      (f) => !dir || existsSync(join(dir, `${f.id}.png`)),
+    )
+    process.stdout.write(releaseNotes(shown, a, b))
   } else {
-    console.error("usage: screenshots.ts render <dir> | notes <repo> <tag>")
+    console.error(
+      "usage: screenshots.ts render <dir> | notes <repo> <tag> [dir]",
+    )
     process.exit(2)
   }
 }

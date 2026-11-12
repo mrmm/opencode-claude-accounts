@@ -148,6 +148,19 @@ export function windowCell(label: string, pct: number): string {
 }
 
 /**
+ * Widest account name in the sidebar, in cells. With the tree lead, marker
+ * and both gauge cells that is 2 + 2 + 9 + 2 + 20 = 35, the sidebar's width.
+ * A group label sits two cells further left, so it gets two more.
+ */
+export const NAME_MAX = 9
+
+/** `s` cut to `max` cells, ending in `…` when cut. */
+export function fitText(s: string, max: number): string {
+  const chars = [...s]
+  return chars.length <= max ? s : `${chars.slice(0, max - 1).join("")}\u2026`
+}
+
+/**
  * When each window frees up, on the same grid as the gauge line: each
  * countdown starts where its window's label starts and fills a cell exactly
  * as wide as `windowCell`, so both columns are fixed. The column says which

@@ -150,6 +150,8 @@ import {
   sessionRows,
   shortNames,
   sidebarLines,
+  fitText,
+  NAME_MAX,
   toggleAccount,
   utilisation,
   type Health,
@@ -1275,14 +1277,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         // One name column for groups and accounts, so every figure after it
         // starts at the same place whatever the names are.
         const groupLabel = (g: { title: string; count: string }) =>
-          `${g.title} ${g.count}`
+          fitText(`${g.title} ${g.count}`, NAME_MAX + 2)
         // Inside a group a member drops the group's name from its own.
         const shownName = () => {
           const m = new Map<string, string>()
           for (const g of sections())
             for (const s of g.sources) {
               const row = rowBySource().get(s)
-              if (row) m.set(s, memberName(g.title, row.name))
+              if (row)
+                m.set(s, fitText(memberName(g.title, row.name), NAME_MAX))
             }
           return m
         }
@@ -1294,7 +1297,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
             0,
             ...(tree()
               ? [...shownName().values()].map((n) => n.length + 4)
-              : view().rows.map((r) => r.name.length + 2)),
+              : view().rows.map((r) => fitText(r.name, NAME_MAX).length + 2)),
             ...sections().map((g) => groupLabel(g).length + 2),
           )
         const rowBySource = () =>
@@ -1329,7 +1332,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
                       : api.theme.current.textMuted,
                   }}
                 >
-                  {(props.name ?? props.row.name).padEnd(
+                  {(props.name ?? fitText(props.row.name, NAME_MAX)).padEnd(
                     gaugeCol() - lead().length - 2,
                   )}
                 </span>
