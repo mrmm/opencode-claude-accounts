@@ -33,6 +33,8 @@ import {
   gauge,
   windowCell,
   resetLine,
+  fitText,
+  NAME_MAX,
   type ChipAccount,
   accountDetail as detailOf,
   planText as planOf,
@@ -1429,5 +1431,25 @@ describe("picker detail", () => {
     const all = `${pinned!.title} ${pinned!.description}`
     assert.equal(all.match(/credits/g)?.length, 1, all)
     assert.match(pinned!.description!, /a@example\.com/)
+  })
+})
+
+// Regression: a long account name pushed the gauges out of the sidebar and cut
+// the countdown line in the middle.
+describe("fitText", () => {
+  it("caps a part at its width and says it was cut", () => {
+    assert.equal(fitText("Team 1", NAME_MAX), "Team 1")
+    const long = fitText("Claude Max: dev@example.com", NAME_MAX)
+    assert.equal([...long].length, NAME_MAX)
+    assert.match(long, /\u2026$/)
+    // Two lead cells, marker, name, gap and both gauge cells: the sidebar.
+    assert.equal(
+      2 +
+        2 +
+        NAME_MAX +
+        2 +
+        `${windowCell("5h", 100)}  ${windowCell("wk", 100)}`.length,
+      35,
+    )
   })
 })
