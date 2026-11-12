@@ -4,6 +4,14 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+// A path whose parent is a regular file: every OS refuses to create it.
+// (/proc/... is not portable: on Linux a recursive mkdir there never returns.)
+const unwritable = (leaf: string) => {
+  const f = join(mkdtempSync(join(tmpdir(), "cauth-ro-")), "file")
+  writeFileSync(f, "")
+  return join(f, leaf)
+}
+
 import {
   acquireRefreshLock,
   isStale,
@@ -103,7 +111,7 @@ describe("acquire", () => {
   it("proceeds rather than blocking when the lock cannot be written", () => {
     // Refusing to refresh because a lock file failed would be worse than
     // refreshing without coordination.
-    assert.ok(acquireRefreshLock("acct", { dir: "/proc/nope/locks" }))
+    assert.ok(acquireRefreshLock("acct", { dir: unwritable("locks") }))
   })
 })
 
