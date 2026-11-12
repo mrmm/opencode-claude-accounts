@@ -35,6 +35,20 @@ Design decisions behind these changes are in [docs/adr](docs/adr/README.md); the
 * quota and reserve files are re-read only when they change; the usage index refresh went from about 10 ms to 0.3 ms
 * account profiles are fetched in parallel at start-up
 
+## [3.0.1](https://github.com/mrmm/opencode-claude-accounts/compare/v3.0.0...v3.0.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **tui:** cap account names so the gauges stay in the sidebar ([8fd1316](https://github.com/mrmm/opencode-claude-accounts/commit/8fd13167df7b6a5619e61014f19ea886ddfb5919))
+* **tui:** start each countdown at its gauge's column ([#10](https://github.com/mrmm/opencode-claude-accounts/issues/10)) ([7f5d137](https://github.com/mrmm/opencode-claude-accounts/commit/7f5d137e09dd9d96d9f96bfdce789a869ec1e98b))
+* **tui:** tree layout that fits the sidebar ([34ebf0c](https://github.com/mrmm/opencode-claude-accounts/commit/34ebf0c20c37c6fe9850d65c8df0cd1d44d21f42))
+
+
+### Performance Improvements
+
+* faster sidebar refresh, one probe per account across processes ([#7](https://github.com/mrmm/opencode-claude-accounts/issues/7)) ([3853981](https://github.com/mrmm/opencode-claude-accounts/commit/3853981fe90d329fbe0841c7b7b918079e908f9f))
+
 ## [3.0.0](https://github.com/mrmm/opencode-claude-accounts/compare/v2.1.4...v3.0.0) (2026-11-12)
 
 
