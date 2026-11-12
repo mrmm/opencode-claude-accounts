@@ -966,8 +966,8 @@ describe("reset countdowns", () => {
         now: NOW,
         nerdFont,
       }).rows[0]!
-    assert.equal(row().sub, "5h \u21bb2h10m  wk \u21bb3d4h")
-    assert.equal(row(true).sub, "\u{f0150} 2h10m  \u{f00f0} 3d4h")
+    assert.equal(row().sub, " \u21bb2h10m      \u21bb3d4h")
+    assert.equal(row(true).sub, " \u{f0150} 2h10m    \u{f00f0} 3d4h")
     assert.ok(row().detail.length <= 20, `fits beside a name: ${row().detail}`)
   })
 })
@@ -1383,6 +1383,22 @@ describe("resetLine", () => {
     const weekOnly = resetLine(undefined, 86400, true)
     assert.equal(both.indexOf("\u{f00f0}"), weekOnly.indexOf("\u{f00f0}"))
     assert.equal(resetLine(undefined, undefined), "")
+  })
+
+  // Regression: countdowns started at a fixed indent, not under their gauges.
+  it("centres each countdown under its own gauge cell", () => {
+    const gauges = `${windowCell("5h", 32)}  ${windowCell("wk", 87)}`
+    const line = resetLine(4800, 18 * 86400, true)
+    const centre = (s: string, at: number, len: number) => at + len / 2
+    const five = [...line].indexOf("\u{f0150}")
+    const week = [...line].indexOf("\u{f00f0}")
+    assert.ok(Math.abs(centre(line, five, 7) - centre(gauges, 0, 9)) <= 1)
+    assert.ok(
+      Math.abs(
+        centre(line, week, 4) - centre(gauges, gauges.indexOf("wk"), 9),
+      ) <= 1,
+      `${gauges}\n${line}`,
+    )
   })
 })
 

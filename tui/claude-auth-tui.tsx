@@ -1340,8 +1340,8 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
               </text>
               <Show when={props.row.sub}>
                 <text wrapMode="none" truncate fg={api.theme.current.textMuted}>
-                  {cont()}
-                  {"  "}
+                  {/* Under the gauges: they start two cells past gaugeCol. */}
+                  {cont().padEnd(gaugeCol() + 2)}
                   {props.row.sub}
                 </text>
               </Show>

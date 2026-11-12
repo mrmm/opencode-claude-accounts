@@ -148,26 +148,28 @@ export function windowCell(label: string, pct: number): string {
 }
 
 /**
- * When each window frees up: `󰅐 2h10m  󰃰 3d4h`, or `5h ↻2h10m  wk ↻3d4h`
- * without a Nerd Font, where one glyph cannot tell the windows apart.
+ * When each window frees up, on the same grid as the gauge line: each
+ * countdown centred in a cell as wide as `windowCell`, so it sits under its
+ * own window. The column says which window, so `↻` needs no label.
  */
 export function resetLine(
   fiveIn: number | undefined,
   weekIn: number | undefined,
   nerdFont = false,
 ): string {
+  const width = windowCell("5h", 0).length
   const one = (label: "5h" | "wk", secs: number | undefined) => {
     const left = secs === undefined ? NONE : formatDuration(secs)
-    return nerdFont
+    const s = nerdFont
       ? `${RESET_ICONS.nerd[label]} ${left}`
-      : `${label} ${RESET_ICONS.plain[label]}${left}`
+      : `${RESET_ICONS.plain[label]}${left}`
+    // Counted in characters: a Nerd Font glyph is two UTF-16 units, one cell.
+    const room = Math.max(0, width - [...s].length)
+    const before = Math.floor(room / 2)
+    return `${" ".repeat(before)}${s}${" ".repeat(room - before)}`
   }
   if (fiveIn === undefined && weekIn === undefined) return ""
-  // Fixed width for the 5h part, so the weekly countdown keeps its column.
-  // Counted in characters: a Nerd Font glyph is two UTF-16 units, one cell.
-  const five = one("5h", fiveIn)
-  const pad = (nerdFont ? 9 : 11) - [...five].length
-  return `${five}${" ".repeat(Math.max(1, pad))}${one("wk", weekIn)}`
+  return `${one("5h", fiveIn)}  ${one("wk", weekIn)}`.trimEnd()
 }
 
 export function quotaText(
