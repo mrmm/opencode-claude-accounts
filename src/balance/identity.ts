@@ -37,12 +37,21 @@ export type AccountIdentity = {
   orgUuid: string
   email?: string
   orgName?: string
+  /** organization_type, e.g. claude_team. */
+  plan?: string
+  /** rate_limit_tier, e.g. default_claude_max_5x. */
+  tier?: string
+  /** subscription_status, e.g. active. Anything else is worth a warning. */
+  subscription?: string
 }
 
 /** One cache row: an identity plus when it was fetched, keyed by Keychain source. */
 export type CachedIdentity = AccountIdentity & { fetchedAt: number }
 
 export type IdentityCache = Record<string, CachedIdentity>
+
+/** How long a cached profile row is trusted for plan and subscription. */
+export const IDENTITY_MAX_AGE_S = 24 * 60 * 60
 
 export const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 
@@ -75,18 +84,23 @@ export function buildProfileRequest(
 export function parseProfile(body: unknown): AccountIdentity | undefined {
   if (!body || typeof body !== "object") return undefined
   const b = body as {
-    account?: { uuid?: unknown; email_address?: unknown }
-    organization?: { uuid?: unknown; name?: unknown }
+    account?: { uuid?: unknown; email?: unknown; email_address?: unknown }
+    organization?: Record<string, unknown> & { uuid?: unknown }
   }
   const accountUuid = b.account?.uuid
   const orgUuid = b.organization?.uuid
   if (typeof accountUuid !== "string" || typeof orgUuid !== "string")
     return undefined
   const out: AccountIdentity = { accountUuid, orgUuid }
-  if (typeof b.account?.email_address === "string")
-    out.email = b.account.email_address
-  if (typeof b.organization?.name === "string")
-    out.orgName = b.organization.name
+  // The profile endpoint says `email`; `email_address` is the older spelling.
+  const email = b.account?.email ?? b.account?.email_address
+  if (typeof email === "string") out.email = email
+  const o = b.organization ?? {}
+  if (typeof o.name === "string") out.orgName = o.name
+  if (typeof o.organization_type === "string") out.plan = o.organization_type
+  if (typeof o.rate_limit_tier === "string") out.tier = o.rate_limit_tier
+  if (typeof o.subscription_status === "string")
+    out.subscription = o.subscription_status
   return out
 }
 
@@ -203,7 +217,8 @@ export type IdentityResult = { fetched: number; cached: number; failed: number }
  * Resolve identities for accounts with a fresh token, writing what it learns.
  *
  * Resolves rather than rejects: it runs detached from start-up and must never
- * reach the user as an error. An account already in the cache is skipped. A 401
+ * reach the user as an error. An account cached within a day, with its plan,
+ * is skipped; an older row is refreshed from the profile only. A 401
  * (expired token) keeps whatever identity is already cached rather than erasing
  * it -- the pair does not change when a token lapses.
  */
@@ -232,15 +247,31 @@ export async function fetchIdentities(
         result.failed++
         return
       }
-      if (cache[account.source]) {
+      // The pair never changes, but plan and subscription do: refetch a row
+      // a day old, or one written before those fields were kept.
+      const held = cache[account.source]
+      if (
+        held &&
+        held.plan !== undefined &&
+        now() - held.fetchedAt < IDENTITY_MAX_AGE_S
+      ) {
         result.cached++
         return
       }
       try {
         const [url, init] = buildProfileRequest(account.accessToken)
         const res = await fetchImpl(url, init)
+        // A row already held is only ever refreshed from the profile itself:
+        // the disk fallback is known to name the wrong org, and the pair it
+        // holds keys every account id.
+        const keepHeld = () => {
+          if (!held) return false
+          result.cached++
+          return true
+        }
         if (res.status === 401) {
           // Expired token: keep any cached identity, fall back to disk otherwise.
+          if (keepHeld()) return
           const fallback = account.configDir
             ? identityFromConfigDir(account.configDir)
             : undefined
@@ -253,9 +284,20 @@ export async function fetchIdentities(
           return
         }
         const identity = parseProfile(await res.json().catch(() => null))
-        if (identity) {
+        if (
+          identity &&
+          held &&
+          (identity.accountUuid !== held.accountUuid ||
+            identity.orgUuid !== held.orgUuid)
+        ) {
+          // A different pair under the same source is a re-login, which
+          // migration handles; a refresh must not rekey the account.
+          result.cached++
+        } else if (identity) {
           writeIdentity(account.source, identity, now(), path)
           result.fetched++
+        } else if (keepHeld()) {
+          return
         } else {
           const fallback = account.configDir
             ? identityFromConfigDir(account.configDir)
