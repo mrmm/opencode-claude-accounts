@@ -134,22 +134,40 @@ export const RESET_ICONS = {
   plain: { "5h": "\u21bb", wk: "\u21bb" },
 } as const
 
+/** Percent used as one cell, fuller meaning more used: `▁` idle, `█` spent. */
+export function level(pct: number): string {
+  return LEVELS[Math.min(7, Math.max(0, Math.ceil((pct / 100) * 8) - 1))]!
+}
+
 /**
- * One window as a fixed-width cell, `5h ▄▁▁ 16% ↻2h14m`, so columns line up.
- * The countdown shows whether or not the window is spent: when it frees up is
- * worth knowing before it runs out, not only after.
+ * One window as a fixed-width cell, `5h ▂  21%`, so columns line up in a
+ * sidebar about 35 cells wide. Countdowns live on the line under the account.
  */
-export function windowCell(
-  label: string,
-  pct: number,
-  resetIn?: number,
+export function windowCell(label: string, pct: number): string {
+  return `${label} ${level(pct)}${`${pct}%`.padStart(5)}`
+}
+
+/**
+ * When each window frees up: `󰅐 2h10m  󰃰 3d4h`, or `5h ↻2h10m  wk ↻3d4h`
+ * without a Nerd Font, where one glyph cannot tell the windows apart.
+ */
+export function resetLine(
+  fiveIn: number | undefined,
+  weekIn: number | undefined,
   nerdFont = false,
 ): string {
-  const icon =
-    RESET_ICONS[nerdFont ? "nerd" : "plain"][label as "5h" | "wk"] ?? "\u21bb"
-  const left =
-    resetIn !== undefined ? `${icon}${formatDuration(resetIn).padEnd(5)}` : ""
-  return `${label} ${gauge(pct)} ${`${pct}%`.padEnd(5)}${left}`
+  const one = (label: "5h" | "wk", secs: number | undefined) => {
+    const left = secs === undefined ? NONE : formatDuration(secs)
+    return nerdFont
+      ? `${RESET_ICONS.nerd[label]} ${left}`
+      : `${label} ${RESET_ICONS.plain[label]}${left}`
+  }
+  if (fiveIn === undefined && weekIn === undefined) return ""
+  // Fixed width for the 5h part, so the weekly countdown keeps its column.
+  // Counted in characters: a Nerd Font glyph is two UTF-16 units, one cell.
+  const five = one("5h", fiveIn)
+  const pad = (nerdFont ? 9 : 11) - [...five].length
+  return `${five}${" ".repeat(Math.max(1, pad))}${one("wk", weekIn)}`
 }
 
 export function quotaText(
@@ -161,9 +179,8 @@ export function quotaText(
     now?: number
     /** Append the money once credits are actually covering this account. */
     spend?: boolean
-    /** Sidebar form: a gauge and a reset countdown per window. */
+    /** Sidebar form: a fixed-width gauge cell per window. */
     bars?: boolean
-    nerdFont?: boolean
   } = {},
 ): string {
   const { five, week, fiveIn, weekIn, rejected } = utilisation(
@@ -174,25 +191,20 @@ export function quotaText(
   if (five === undefined && week === undefined) return "no reading"
   // Percentage then time-remaining, the shape the account switcher already
   // uses, so the two surfaces read the same way.
-  const left = (secs: number | undefined, pct: number | undefined) =>
-    opts.resets && secs !== undefined && (!opts.bars || (pct ?? 0) >= 100)
-      ? ` ${formatDuration(secs)}`
-      : ""
+  const left = (secs: number | undefined) =>
+    opts.resets && secs !== undefined ? ` ${formatDuration(secs)}` : ""
   const win = (label: string, pct: number | undefined, secs?: number) =>
     pct === undefined
-      ? `${label} ${NONE}`
+      ? `${label} ${NONE}`.padEnd(opts.bars ? windowCell(label, 0).length : 0)
       : opts.bars
-        ? windowCell(label, pct, opts.resets ? secs : undefined, opts.nerdFont)
-        : `${label} ${pct}%${left(secs, pct)}`
+        ? windowCell(label, pct)
+        : `${label} ${pct}%${left(secs)}`
   const parts = [win("5h", five, fiveIn)]
   if (opts.includeWeek !== false) parts.push(win("wk", week, weekIn))
   // Said in a word rather than punctuation: "!" needs a legend, "refused" does
   // not, and this is the one state that means requests are failing right now.
-  // In the sidebar it goes last, so it cannot push the columns out of line.
-  if (rejected) {
-    if (opts.bars) parts.push("refused")
-    else parts.unshift("refused")
-  }
+  // The sidebar puts it on the line under the account instead.
+  if (rejected && !opts.bars) parts.unshift("refused")
 
   // Always, when there is a funded line: knowing an account has 66 EUR left
   // is what tells you it can take over, and that is worth knowing BEFORE the
@@ -202,12 +214,7 @@ export function quotaText(
     const spent = spendText(quota, source)
     if (spent) parts.push(spent)
   }
-  // A per-model cap only earns sidebar room while the server says it binds.
-  if (opts.bars) {
-    const capped = scopedText(quota, source, true)
-    if (capped) parts.push(capped)
-  }
-  return opts.bars ? parts.join("  ").trimEnd() : parts.join(SEP)
+  return opts.bars ? parts.join("  ") : parts.join(SEP)
 }
 
 /**
@@ -565,6 +572,10 @@ export function sidebarLines(input: ChipInput): {
   rows: {
     name: string
     detail: string
+    /** The line under the account: countdowns, refusals, credits, caps. */
+    sub: string
+    /** A third line when credits or a binding per-model cap need saying. */
+    more: string
     /** `41% reqs`, kept off the sidebar line to fit one line. */
     share: string
     active: boolean
@@ -584,12 +595,26 @@ export function sidebarLines(input: ChipInput): {
 
   const rows = input.accounts.map((a) => {
     const quota = quotaText(input.quota, a.source, {
-      resets: true,
-      spend: true,
       bars: true,
       now: input.now,
-      nerdFont: input.nerdFont,
     })
+    // The line under the account: when it frees up, then whatever would not
+    // fit beside the gauges. A per-model cap only shows while it binds.
+    const u = utilisation(input.quota, a.source, input.now)
+    const sub = [
+      resetLine(u.fiveIn, u.weekIn, input.nerdFont),
+      u.rejected ? "refused" : "",
+    ]
+      .filter(Boolean)
+      .join("  ")
+    // A third line, only when there is something: it would not fit beside
+    // the countdowns in a sidebar ~35 cells wide.
+    const more = [
+      spendText(input.quota, a.source),
+      scopedText(input.quota, a.source, true),
+    ]
+      .filter(Boolean)
+      .join(SEP)
     const health = accountHealth(
       input.quota,
       a.source,
@@ -608,6 +633,8 @@ export function sidebarLines(input: ChipInput): {
     return {
       name: names.get(a.source) ?? shortLabel(a.label),
       detail: quota,
+      sub,
+      more,
       share: share.slice(SEP.length),
       active: a.source === input.activeSource,
       health,

@@ -102,8 +102,7 @@ export function groupRows(input: {
     return {
       key,
       title,
-      summary:
-        `${windowCell("5h", used(five))}  ${windowCell("wk", used(week))}`.trimEnd(),
+      summary: `${windowCell("5h", used(five))}  ${windowCell("wk", used(week))}`,
       count: `${usable}/${n}`,
       share,
       health,
