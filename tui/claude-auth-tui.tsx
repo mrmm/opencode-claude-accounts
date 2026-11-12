@@ -202,7 +202,7 @@ import {
 let lastSessionId: string | null = null
 
 /** Two small file reads. No Keychain, no network, so polling is cheap. */
-const POLL_MS = 4000
+const POLL_MS = 1000
 
 function read() {
   const quota = readQuotaCache()
@@ -470,13 +470,23 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     description: `to ${where}`,
   })
 
-  const [snap, setSnap] = createSignal(read())
+  // Polled every second, so it re-renders only on change: the quota cache is
+  // memoised per file write, so an unchanged file is the same object.
+  const [snap, setSnap] = createSignal(read(), {
+    equals: (a, b) =>
+      a.quota === b.quota &&
+      a.selection === b.selection &&
+      a.activeSource === b.activeSource &&
+      JSON.stringify(a.requests) === JSON.stringify(b.requests),
+  })
   const timer = setInterval(() => setSnap(read()), POLL_MS)
   onCleanup(() => clearInterval(timer))
 
   // The pace forecast scans up to two generations of the telemetry log, so it
   // refreshes on its own slower clock rather than on every quota poll.
   const FORECAST_MS = 60_000
+  // The pace forecast itself is cheap enough to follow the quota closely.
+  const PACE_MS = 15_000
   // Ceilings the pool is allowed to spend, keyed by source for the forecast.
   // The config stores them by account id, so each source is resolved to its id
   // first; an un-migrated account keys by its own source and reads no ceiling.
@@ -562,7 +572,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
     }
   }
   const [pace, setPace] = createSignal(readForecast())
-  const paceTimer = setInterval(() => setPace(readForecast()), FORECAST_MS)
+  const paceTimer = setInterval(() => setPace(readForecast()), PACE_MS)
   onCleanup(() => clearInterval(paceTimer))
 
   // Global token totals come from OpenCode's own store (real counts, every session),

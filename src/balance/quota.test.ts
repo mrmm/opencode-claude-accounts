@@ -30,6 +30,7 @@ import {
   quotaForAccount,
   readQuotaCache,
   writeQuotaForAccount,
+  claimProbe,
   type AccountQuota,
 } from "./quota.ts"
 
@@ -443,9 +444,19 @@ describe("refreshQuotas", () => {
       path: p,
       now: () => 1000,
     })
-    assert.deepEqual(r, { probed: 0, skipped: 1, failed: 0 })
+    assert.deepEqual(r, { probed: 0, skipped: 1, failed: 0, limited: 1 })
     assert.equal(calls.length, 1)
     assert.equal(probeBlocked("a", 1000 + 3212), true)
+
+    // Another process, with no memory of the 429, must honour it too.
+    resetProbeBlocks()
+    const other = await refreshQuotas([acct("a")], {
+      fetchImpl: fn,
+      path: p,
+      now: () => 1000 + 3000,
+    })
+    assert.equal(other.skipped, 1)
+    assert.equal(calls.length, 1, "the block is shared through the claims file")
 
     // A second sweep inside the window must not spend another call.
     const again = await refreshQuotas([acct("a")], {
@@ -456,6 +467,22 @@ describe("refreshQuotas", () => {
     assert.equal(again.skipped, 1)
     assert.equal(calls.length, 1, "no second call while blocked")
     resetProbeBlocks()
+  })
+
+  // Regression: every OpenCode process probed the same accounts in the same
+  // second, spending the endpoint's small budget several times over.
+  it("lets one process probe an account and the others skip it", async () => {
+    resetProbeBlocks()
+    const p = tmp()
+    const { fn, calls } = fakeFetch([usageBody(10), usageBody(10)])
+    const [x, y] = await Promise.all([
+      refreshQuotas([acct("a")], { fetchImpl: fn, path: p, now: () => 5000 }),
+      refreshQuotas([acct("a")], { fetchImpl: fn, path: p, now: () => 5000 }),
+    ])
+    assert.equal(calls.length, 1)
+    assert.equal(x.probed + y.probed, 1)
+    assert.equal(x.skipped + y.skipped, 1)
+    assert.equal(claimProbe(p, "a", 5000 + 601, 9999), true, "claim expires")
   })
 
   it("resolves rather than throwing when the network fails", async () => {
