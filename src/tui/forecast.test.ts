@@ -10,7 +10,9 @@ import {
   forecastLines,
   forecastSummaryRows,
   outsideBurn,
+  recentRate,
   simulate,
+  windowAverage,
   toSourceKeys,
   type Forecast,
 } from "./forecast.ts"
@@ -110,7 +112,9 @@ describe("forecast", () => {
       { account: "b", at: at(1), u5: 0.3 },
     ]
     const f = forecast(s, quota, ["a", "b"], NOW)
-    assert.ok(f.nowPace > 0.55 && f.nowPace < 0.65, `now ${f.nowPace}`)
+    // 64%/h for the last 28 min, nothing before: a 20-min half-life still
+    // weighs the quiet time, so it reads 64% x (1 - 2^(-28/20)) ~ 40%/h.
+    assert.ok(f.nowPace > 0.35 && f.nowPace < 0.45, `now ${f.nowPace}`)
     assert.ok(f.spike !== undefined && f.spike > 1.5, `spike ${f.spike}`)
   })
 
@@ -134,8 +138,11 @@ describe("forecast", () => {
     const lines = forecastLines(f, (e) => String(e - NOW))
     assert.equal(lines[0]!.value, "idle")
     assert.match(lines[2]!.value, /idle/)
+    // The week still forecasts from the windows' own average: a at 70% over
+    // 3 days and b at 50% over 2 days, weighted 0.7 with no recent burn,
+    // drain 0.8 of room in about 57 h, before either window resets.
     const week = lines.find((l) => l.label === "week")
-    assert.match(week!.value, /^✓ lasts >7d · past /)
+    assert.match(week!.value, /^✗ out in 2d8h · /)
   })
 
   it("says how long the pool lasts and when it runs out", () => {
@@ -145,7 +152,7 @@ describe("forecast", () => {
     ]
     const f = forecast(burst, quota, ["a", "b"], NOW)
     const lines = forecastLines(f, (e) => `T${e - NOW}`)
-    assert.match(lines[2]!.value, /^✗ out in \d+m · ~T\d+$/)
+    assert.match(lines[2]!.value, /^✗ out in \d+m · ~T\d+ · rough$/)
     assert.equal(lines[2]!.level, "critical", "under an hour left")
   })
 })
@@ -485,5 +492,93 @@ describe("toSourceKeys", () => {
     )
     assert.equal(raw.idle, true)
     assert.equal(keyed.idle, false)
+  })
+})
+
+// Regression: the gauges count every user of an account, yet the simulation
+// added the learned outside pace on top of a pace that already held it; the
+// weekly token ratio came from the 5h gauge; weekly paces were per hour but
+// printed as per day.
+describe("pace model", () => {
+  const NOW_MS = NOW * 1000
+
+  it("recentRate weighs recent rises more and is per hour", () => {
+    const steady = Array.from({ length: 13 }, (_, i) => ({
+      account: "a",
+      at: NOW_MS - (60 - i * 5) * 60_000,
+      u5: i * 0.05,
+    }))
+    // 0.05 every 5 min for an hour = 60%/h whatever the smoothing.
+    const r = recentRate(steady, "u5", NOW_MS, 20 * 60)
+    assert.ok(Math.abs(r.rate - 0.6) < 0.05, `rate ${r.rate}`)
+    assert.equal(r.points, 12)
+    const old = [
+      { account: "a", at: NOW_MS - 3 * 3_600_000, u5: 0 },
+      { account: "a", at: NOW_MS - 2.9 * 3_600_000, u5: 0.3 },
+      { account: "a", at: NOW_MS, u5: 0.3 },
+    ]
+    assert.ok(recentRate(old, "u5", NOW_MS, 20 * 60).rate < 0.05)
+  })
+
+  it("windowAverage is used / time since each window opened", () => {
+    const quota = {
+      a: { sevenDay: { utilization: 0.5, resetsAt: NOW + 4 * 86400 } },
+      young: { sevenDay: { utilization: 0.2, resetsAt: NOW + 7 * 86400 - 60 } },
+    } as never
+    // a opened 3 days ago: 0.5 / 72 h. The minute-old window is left out.
+    const avg = windowAverage(quota, ["a", "young"], NOW)!
+    assert.equal(avg.toFixed(5), (0.5 / 72).toFixed(5))
+    assert.equal(windowAverage(quota, ["young"], NOW), undefined)
+  })
+
+  it("outside users are drained once, not on top of the gauge total", () => {
+    const quota = {
+      a: { fiveHour: { utilization: 0.2, resetsAt: NOW + 4 * 3600 } },
+    } as never
+    // The gauge climbs with none of our tokens: all outside use, so our
+    // share is what is left of the total after outside, never more.
+    const s = Array.from({ length: 13 }, (_, i) => ({
+      account: "a",
+      at: NOW_MS - (120 - i * 10) * 60_000,
+      u5: i * 0.05,
+      reqs: 0,
+      input: 0,
+    }))
+    const f = forecast(s, quota, ["a"], NOW)
+    assert.ok(f.five.outsidePace > 0)
+    assert.ok(
+      Math.abs(f.five.ourPace - Math.max(0, f.five.pace - f.five.outsidePace)) <
+        1e-9,
+      `ours ${f.five.ourPace} total ${f.five.pace} outside ${f.five.outsidePace}`,
+    )
+  })
+
+  it("learns the weekly token ratio from the weekly gauge", () => {
+    // Our tokens move u5 by 0.1 and u7 by 0.01 per bucket: no outside use on
+    // either window. A 5h ratio applied to u7 would call none of it ours.
+    const rows = Array.from({ length: 12 }, (_, i) => ({
+      account: "a",
+      at: NOW_MS - (110 - i * 10) * 60_000,
+      u5: i * 0.1,
+      u7: i * 0.01,
+      reqs: 1,
+      input: 1e5,
+    }))
+    const b = outsideBurn(rows, NOW)
+    assert.ok(b["a"]!.week.pace! < 1e-9, `week outside ${b["a"]!.week.pace}`)
+    // Someone else's burst on top: the weekly side sees it.
+    rows.push({ ...rows[11]!, at: NOW_MS, u7: 0.2, input: 0, reqs: 0 })
+    assert.ok(outsideBurn(rows, NOW)["a"]!.week.pace! > 0)
+  })
+
+  it("prints weekly paces per day", () => {
+    const quota = {
+      a: { sevenDay: { utilization: 0.24, resetsAt: NOW + 6 * 86400 } },
+    } as never
+    // 24% over the window's first day = 1%/h; weighted 0.7 with no recent
+    // burn, 0.7%/h = 17%/d.
+    const f = forecast([], quota, ["a"], NOW)
+    const burn = forecastLines(f, String).find((r) => r.label === "wk burn")!
+    assert.match(burn.value, /^ours 17%\/d · outside 0%\/d$/)
   })
 })

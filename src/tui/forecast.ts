@@ -11,9 +11,10 @@
  * The model, kept small enough to check by hand:
  *  - Consumption is the sum of RISES in each account's utilisation between
  *    consecutive responses. A fall is a window turning over, never negative use.
- *  - "Now" pace is the last 30 minutes; "typical" is the whole history divided
- *    by the time actually spent working (10-minute buckets with a request), so
- *    a night of idling does not make a busy afternoon look like a spike.
+ *  - "Now" pace is an exponentially weighted rate of rises (half-life 20 min);
+ *    "typical" is the whole history divided by the time actually spent working
+ *    (10-minute buckets with a request), so a night of idling does not make a
+ *    busy afternoon look like a spike.
  *  - Capacity per account is its CEILING (default 1): the share the operator
  *    allows the pool to spend before leaving the rest for outside users. The
  *    pool "runs out" when it reaches those ceilings, not the full windows.
@@ -21,10 +22,12 @@
  *    subscription. `outsideBurn` learns each account's utilisation-per-token
  *    ratio from buckets where WE sent tokens, then books the rise it cannot
  *    explain (plus any rise in a bucket where we sent nothing) to the outside.
- *  - The forecast simulates the pool forward: our pace drains whichever accounts
- *    still have room, each account's own outside pace drains it regardless, and
- *    each window refills at its reset. The 5h window runs at the current pace;
- *    the weekly window at the wall-clock average of the last 24h.
+ *  - The gauges count everyone, so a pace is ours + outside. The forecast
+ *    simulates the pool forward: our share (total minus outside) drains
+ *    whichever accounts still have room, each account's own outside pace
+ *    drains it regardless, and each window refills at its reset. The 5h window
+ *    runs at the "now" pace; the weekly one at 0.3 x a 6h-half-life rate plus
+ *    0.7 x the windows' own average (used / time since they opened).
  *  - Utilisation is a fraction of ONE account's window, so a pool of two holds
  *    up to 2.0 and a pace of 0.30/h means "30% of an account per hour".
  */
@@ -51,18 +54,21 @@ export type PaceSample = {
 
 /** A learned burn pace for one account and window, or unknown when too few buckets back it. */
 export type OutsidePace = {
-  /** Fraction of the account's window per hour (5h) or per day (7d). Undefined when unknown. */
+  /** Fraction of the account's window per hour. Undefined when unknown. */
   pace?: number
   /** How many buckets fed the estimate. 0 => unknown. */
   buckets: number
 }
 
 export type WindowForecast = {
-  /** Our own consumption, fraction of one account per hour (5h) or per day (7d). */
+  /** The gauges' total pace (ours + outside), fraction of one account per hour. */
   pace: number
-  /** Our pace + the pool's outside pace: what the simulation actually drains. */
+  /** Our share: what moves between accounts when the balancer switches. */
   ourPace: number
+  /** Everyone else on the pool's accounts; stays on its own account. */
   outsidePace: number
+  /** Too few readings back this pace to trust its precision. */
+  rough?: boolean
   /** Unix seconds when the pool runs dry, or undefined when it lasts. */
   runsOutAt?: number
   /** Unix seconds the simulation covered up to. */
@@ -77,7 +83,7 @@ export type AccountForecast = {
   used: number
   /** The ceiling the operator allows the pool to spend, fraction 0..1. */
   ceiling: number
-  /** Our pace against this account, fraction of the window per hour (5h) / per day (7d). */
+  /** Our pace against this account, fraction of the window per hour. */
   ourPace: number
   /** Outside burn against this account, same unit. Undefined when unknown. */
   outsidePace?: number
@@ -125,6 +131,81 @@ const CHART_ROWS = 3
 const MIN_RATIO_BUCKETS = 5
 /** Below this many window buckets, outside burn is unknown rather than zero. */
 const MIN_OUTSIDE_BUCKETS = 3
+/** Smoothing for "how fast right now": short for 5h, a working day for 7d. */
+const FIVE_H_HALF_LIFE_S = 20 * 60
+const WEEK_HALF_LIFE_S = 6 * HOUR
+/** The weekly pace leans on the whole window's average, nudged by today. */
+const WEEK_RECENT_WEIGHT = 0.3
+/** A window younger than this has too little behind it to average. */
+const MIN_WINDOW_ELAPSED_S = 6 * HOUR
+/** Fewer rises than this and a pace is marked rough. */
+const MIN_CONFIDENT_POINTS = 6
+
+/**
+ * Exponentially weighted rate of rises, per hour, across all accounts.
+ *
+ * Each rise counts with weight e^(-age/τ); dividing by the weight the observed
+ * span could hold (not the infinite past) keeps a short history from reading
+ * low. Bursty agent traffic then moves the figure smoothly instead of jumping
+ * with whatever landed in the last fixed window.
+ */
+export function recentRate(
+  samples: PaceSample[],
+  key: "u5" | "u7",
+  nowMs: number,
+  halfLifeS: number,
+): { rate: number; points: number } {
+  const lambda = Math.LN2 / halfLifeS
+  const last = new Map<string, { v: number; at: number }>()
+  let first = nowMs
+  let weighted = 0
+  let points = 0
+  for (const s of [...samples].sort((a, b) => a.at - b.at)) {
+    const v = s[key]
+    if (typeof v !== "number" || s.at > nowMs) continue
+    first = Math.min(first, s.at)
+    const prev = last.get(s.account)
+    last.set(s.account, { v, at: s.at })
+    if (prev === undefined || v <= prev.v) continue
+    // The rise happened somewhere between the two readings: weigh it there.
+    const mid = (prev.at + s.at) / 2
+    weighted += (v - prev.v) * Math.exp((-lambda * (nowMs - mid)) / 1000)
+    points++
+  }
+  const spanS = (nowMs - first) / 1000
+  const norm = 1 - Math.exp(-lambda * spanS)
+  if (norm <= 0) return { rate: 0, points }
+  return { rate: ((weighted * lambda) / norm) * HOUR, points }
+}
+
+/**
+ * The weekly windows' own average pace, per hour: used / time since each
+ * window opened, summed over accounts. It needs no history and already
+ * covers nights, weekends and every user of the account.
+ *
+ * Undefined when no account's window is old enough to average.
+ */
+export function windowAverage(
+  quota: QuotaCache,
+  accounts: string[],
+  now: number,
+): number | undefined {
+  let total = 0
+  let known = false
+  for (const a of accounts) {
+    const w = (
+      quotaEntry(quota, a) as
+        | { sevenDay?: { utilization?: number; resetsAt?: number } }
+        | undefined
+    )?.sevenDay
+    if (typeof w?.resetsAt !== "number" || w.resetsAt <= now) continue
+    const elapsed = now - (w.resetsAt - WEEK)
+    if (elapsed < MIN_WINDOW_ELAPSED_S) continue
+    total += (frac(w.utilization) / elapsed) * HOUR
+    known = true
+  }
+  return known ? total : undefined
+}
 
 /** Sum of rises per account, counting only pairs that both fall in [from, to] ms. */
 export function consumed(
@@ -228,25 +309,29 @@ export function outsideBurn(
   for (const [account, rows] of byAccount) {
     const sorted = [...rows].sort((a, b) => a.at - b.at)
 
-    // Learn k = utilisation rise per token, from buckets we drove.
-    const ratios: number[] = []
-    let prev5: number | undefined
-    for (const s of sorted) {
-      const v = s.u5
-      const tok = tokens(s)
-      if (typeof v === "number") {
-        if (prev5 !== undefined && v > prev5 && tok > 0)
-          ratios.push((v - prev5) / tok)
-        prev5 = v
+    // Learn k = utilisation rise per token, from buckets we drove. Per window:
+    // a token moves the weekly gauge far less than the 5h one.
+    const ratioFor = (key: "u5" | "u7"): number | undefined => {
+      const ratios: number[] = []
+      let prev: number | undefined
+      for (const s of sorted) {
+        const v = s[key]
+        const tok = tokens(s)
+        if (typeof v === "number") {
+          if (prev !== undefined && v > prev && tok > 0)
+            ratios.push((v - prev) / tok)
+          prev = v
+        }
       }
+      return ratios.length >= MIN_RATIO_BUCKETS ? median(ratios) : undefined
     }
-    const k = ratios.length >= MIN_RATIO_BUCKETS ? median(ratios) : undefined
 
     const windowPace = (
       key: "u5" | "u7",
       fromMs: number,
       perSeconds: number,
     ): OutsidePace => {
+      const k = ratioFor(key)
       let outside = 0
       let buckets = 0
       let prev: number | undefined
@@ -275,7 +360,7 @@ export function outsideBurn(
 
     out[account] = {
       five: windowPace("u5", nowMs - FIVE_H * 1000, HOUR),
-      week: windowPace("u7", nowMs - WEEK * 1000, DAY),
+      week: windowPace("u7", nowMs - WEEK * 1000, HOUR),
     }
   }
   return out
@@ -363,18 +448,20 @@ export function forecast(
     return c === undefined ? 1 : frac(c)
   }
 
-  const nowPace =
-    (consumed(own, "u5", nowMs - NOW_WINDOW_S * 1000, nowMs) / NOW_WINDOW_S) *
-    HOUR
+  // Every pace is the gauge's total (ours + everyone else on the account).
+  const five = recentRate(own, "u5", nowMs, FIVE_H_HALF_LIFE_S)
+  const nowPace = five.rate
+  const idle = consumed(own, "u5", nowMs - NOW_WINDOW_S * 1000, nowMs) === 0
   const first = own.reduce((m, s) => Math.min(m, s.at), nowMs)
   const hrs = activeHours(own, first, nowMs)
   const typicalPace = hrs > 0 ? consumed(own, "u5", first, nowMs) / hrs : 0
-  const daySpan = Math.max(
-    1,
-    (nowMs - Math.max(first, nowMs - 24 * HOUR * 1000)) / 3_600_000,
-  )
+  const weekRecent = recentRate(own, "u7", nowMs, WEEK_HALF_LIFE_S)
+  const weekAvg = windowAverage(quota, accounts, now)
   const weekPace =
-    consumed(own, "u7", nowMs - 24 * HOUR * 1000, nowMs) / daySpan
+    weekAvg === undefined
+      ? weekRecent.rate
+      : WEEK_RECENT_WEIGHT * weekRecent.rate +
+        (1 - WEEK_RECENT_WEIGHT) * weekAvg
 
   const burn = outsideBurn(own, now)
 
@@ -412,7 +499,7 @@ export function forecast(
           (q?.sevenDay?.resetsAt ?? 0) > 0
         )
       const outsidePerHour = burn[a]?.[w]?.pace ?? 0
-      const perStepDivisor = w === "five" ? HOUR / STEP_S : DAY / STEP_S
+      const perStepDivisor = HOUR / STEP_S
       return {
         used: turned ? 0 : frac(win?.utilization),
         ceiling: ceilingOf(a, w),
@@ -434,12 +521,19 @@ export function forecast(
     ...weekSlots.map((s) => s.resetsAt ?? 0),
   )
 
-  const ahead: number[] = []
-  simulate(fiveSlots, nowPace, now, now + CHART_S, (r) => ahead.push(r))
-  while (ahead.length < CHART_S / STEP_S) ahead.push(0)
-
   const outsideSum = (w: "five" | "week") =>
     accounts.reduce((r, a) => r + (burn[a]?.[w]?.pace ?? 0), 0)
+  const fiveOutside = outsideSum("five")
+  const weekOutside = outsideSum("week")
+  // The simulation drains each slot's outside pace on its own, so only OUR
+  // share may be moved between accounts; draining the total would count
+  // everyone else twice.
+  const fiveOurs = Math.max(0, nowPace - fiveOutside)
+  const weekOurs = Math.max(0, weekPace - weekOutside)
+
+  const ahead: number[] = []
+  simulate(fiveSlots, fiveOurs, now, now + CHART_S, (r) => ahead.push(r))
+  while (ahead.length < CHART_S / STEP_S) ahead.push(0)
 
   const reserveLeft = (sl: Slot[]) =>
     sl.reduce(
@@ -456,25 +550,19 @@ export function forecast(
     accounts.map((a, i) => {
       const slot = sl[i]!
       const outsidePace = burn[a]?.[w]?.pace
-      // This account alone against its ceiling: our whole pace on just this slot.
-      const solo = simulate(
-        [{ ...slot }],
-        w === "five" ? nowPace : weekPace,
-        now,
-        horizon,
-      )
+      const ours = w === "five" ? fiveOurs : weekOurs
+      // This account alone against its ceiling: our whole share on just this
+      // slot, plus its own outside users.
+      const solo = simulate([{ ...slot }], ours, now, horizon)
       return {
         account: a,
         used: slot.used,
         ceiling: slot.ceiling ?? 1,
-        ourPace: slot.blocked ? 0 : w === "five" ? nowPace : weekPace,
+        ourPace: slot.blocked ? 0 : ours,
         outsidePace,
         runsOutAt: slot.blocked ? undefined : solo,
       }
     })
-
-  const fiveOutside = outsideSum("five")
-  const weekOutside = outsideSum("week")
 
   return {
     nowPace,
@@ -482,23 +570,27 @@ export function forecast(
     spike: nowPace > 0 && typicalPace > 0 ? nowPace / typicalPace : undefined,
     five: {
       pace: nowPace,
-      ourPace: nowPace,
+      ourPace: fiveOurs,
       outsidePace: fiveOutside,
-      runsOutAt: simulate(fiveSlots, nowPace, now, fiveHorizon),
+      runsOutAt: simulate(fiveSlots, fiveOurs, now, fiveHorizon),
       horizon: fiveHorizon,
       reserveLeft: reserveLeft(fiveSlots),
+      ...(five.points < MIN_CONFIDENT_POINTS ? { rough: true } : {}),
     },
     week: {
       pace: weekPace,
-      ourPace: weekPace,
+      ourPace: weekOurs,
       outsidePace: weekOutside,
-      runsOutAt: simulate(weekSlots, weekPace, now, weekHorizon),
+      runsOutAt: simulate(weekSlots, weekOurs, now, weekHorizon),
       horizon: weekHorizon,
       reserveLeft: reserveLeft(weekSlots),
+      ...(weekAvg === undefined && weekRecent.points < MIN_CONFIDENT_POINTS
+        ? { rough: true }
+        : {}),
     },
     fivePerAccount: perAccount(fiveSlots, "five", fiveHorizon),
     weekPerAccount: perAccount(weekSlots, "week", weekHorizon),
-    idle: nowPace === 0,
+    idle,
     history: burnHistory(own, nowMs, CHART_S * 1000, CHART_BUCKETS),
     ahead,
     now,
@@ -513,7 +605,11 @@ export function forecast(
 }
 
 const pctH = (v: number) => `${Math.round(v * 100)}%/h`
-const pctD = (v: number) => `${Math.round(v * 100)}%/d`
+/** Marks a pace with too few readings behind it. */
+const rough = (w: WindowForecast) => (w.rough ? " · rough" : "")
+
+// Paces are per hour throughout; the weekly ones read better per day.
+const pctD = (v: number) => `${Math.round(v * 24 * 100)}%/d`
 
 /** Sidebar lines. `clock` renders a unix-seconds moment (resetClock in chip.ts). */
 export function forecastLines(
@@ -534,7 +630,7 @@ export function forecastLines(
         }
       : {
           label,
-          value: `✗ out in ${formatDuration(w.runsOutAt - f.now)} · ~${clock(w.runsOutAt)}`,
+          value: `✗ out in ${formatDuration(w.runsOutAt - f.now)} · ~${clock(w.runsOutAt)}${rough(w)}`,
           level: w.runsOutAt - f.now < HOUR ? "critical" : "warn",
         }
   // "ours x/h · outside y/h" so a surprise can be blamed on the pool's neighbours.
@@ -618,22 +714,29 @@ export function forecastSummaryRows(
       level: r < 0.25 ? "critical" : r < 0.75 ? "warn" : "ok",
     }
   }
-  const lasts = (label: string, w: WindowForecast, unit: typeof pctH): Row =>
-    f.idle
+  // Idle only silences the 5h line: the weekly pace also rests on the
+  // windows' own average, which still holds while this machine is quiet.
+  const lasts = (
+    label: string,
+    w: WindowForecast,
+    unit: typeof pctH,
+    quiet: boolean,
+  ): Row =>
+    quiet
       ? { label, value: "idle, nothing burning", level: "ok" }
       : w.runsOutAt === undefined
-        ? { label, value: `lasts at ${unit(w.pace)}`, level: "ok" }
+        ? { label, value: `lasts at ${unit(w.pace)}${rough(w)}`, level: "ok" }
         : {
             label,
-            value: `runs out ~${clock(w.runsOutAt)} (in ${formatDuration(w.runsOutAt - f.now)})`,
+            value: `runs out ~${clock(w.runsOutAt)} (in ${formatDuration(w.runsOutAt - f.now)})${rough(w)}`,
             level: w.runsOutAt - f.now < HOUR ? "critical" : "warn",
           }
 
   const rows: Row[] = [
     left("5h left", f.fivePerAccount),
-    lasts("5h", f.five, pctH),
+    lasts("5h", f.five, pctH, f.idle),
     left("week left", f.weekPerAccount),
-    lasts("week", f.week, pctD),
+    lasts("week", f.week, pctD, false),
   ]
 
   // The usable account with the least weekly room: the next one to drop out.
