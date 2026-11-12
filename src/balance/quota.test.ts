@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { mkdtempSync, renameSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -563,6 +563,55 @@ describe("usage endpoint", () => {
       limitMinor: 30000,
       currency: "EUR",
     })
+  })
+
+  it("keeps every limit, with per-model caps and their weekly share", () => {
+    const q = parseUsageBody(
+      {
+        ...PAYLOAD,
+        limits: [
+          ...PAYLOAD.limits,
+          {
+            kind: "weekly_scoped",
+            percent: 12,
+            severity: "normal",
+            is_active: false,
+            scope: { model: { id: null, display_name: "Opus" }, surface: null },
+          },
+        ],
+        weekly_scoped_shares: [
+          {
+            limit_index: 2,
+            used_percent_of_weekly: 6,
+            allowance_percent_of_weekly: 50,
+          },
+        ],
+      },
+      1_700_000_000,
+    )!
+    assert.equal(q.limits?.length, 3)
+    assert.deepEqual(q.limits?.[2], {
+      kind: "weekly_scoped",
+      percent: 12,
+      severity: "normal",
+      active: false,
+      model: "Opus",
+      allowance: 50,
+    })
+    assert.equal(q.limits?.[1]?.severity, "critical")
+  })
+
+  it("keeps the probe's limits when a response rewrites the windows", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "cauth-q-")), "q.json")
+    writeQuotaForAccount("x", parseUsageBody(PAYLOAD, 1_700_000_000)!, path)
+    writeQuotaForAccount(
+      "x",
+      { fiveHour: { utilization: 0.2 }, observedAt: 1_700_000_100 },
+      path,
+    )
+    const q = JSON.parse(readFileSync(path, "utf8")).x
+    assert.equal(q.limits.length, 2)
+    assert.equal(q.fiveHour.utilization, 0.2)
   })
 
   it("keeps only the limits the server marks active", () => {

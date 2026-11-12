@@ -202,6 +202,11 @@ export function quotaText(
     const spent = spendText(quota, source)
     if (spent) parts.push(spent)
   }
+  // A per-model cap only earns sidebar room while the server says it binds.
+  if (opts.bars) {
+    const capped = scopedText(quota, source, true)
+    if (capped) parts.push(capped)
+  }
   return opts.bars ? parts.join("  ").trimEnd() : parts.join(SEP)
 }
 
@@ -251,6 +256,85 @@ export function spendText(quota: QuotaCache, source: string | null): string {
   return `credits ${money(x.usedMinor)}/${money(x.limitMinor)} ${x.currency ?? ""}`.trim()
 }
 
+const SEVERITY_RANK: Record<string, number> = { warning: 1, critical: 2 }
+
+/**
+ * The server's own verdict on the 5h and weekly limits, worst first, or
+ * undefined when it has none or has only said "normal". A reading for a
+ * window that has since reset says nothing about the new one.
+ */
+export function serverSeverity(
+  quota: QuotaCache,
+  source: string | null,
+  now: number = Math.floor(Date.now() / 1000),
+): "warning" | "critical" | undefined {
+  let worst = 0
+  for (const l of quotaEntry(quota, source)?.limits ?? []) {
+    if (l.kind !== "session" && l.kind !== "weekly_all") continue
+    if (l.resetsAt !== undefined && l.resetsAt <= now) continue
+    worst = Math.max(worst, SEVERITY_RANK[l.severity] ?? 0)
+  }
+  return worst === 2 ? "critical" : worst === 1 ? "warning" : undefined
+}
+
+/**
+ * Per-model caps: `Fable 0% of 50% wk`, one per capped model. `activeOnly`
+ * keeps the sidebar to the caps the server says are binding right now.
+ */
+export function scopedText(
+  quota: QuotaCache,
+  source: string | null,
+  activeOnly = false,
+): string {
+  return (quotaEntry(quota, source)?.limits ?? [])
+    .filter((l) => l.kind === "weekly_scoped" && l.model)
+    .filter((l) => !activeOnly || l.active)
+    .map(
+      (l) =>
+        `${l.model} ${Math.round(l.percent)}%${l.allowance === undefined ? "" : ` of ${Math.round(l.allowance)}% wk`}`,
+    )
+    .join(SEP)
+}
+
+/** Plan words for a person: `team · max 5x`, with a non-active subscription called out. */
+export function planText(
+  id: { plan?: string; tier?: string; subscription?: string } | undefined,
+): string {
+  if (!id) return ""
+  const parts: string[] = []
+  if (id.plan) parts.push(id.plan.replace(/^claude_/, "").replace(/_/g, " "))
+  if (id.tier)
+    parts.push(id.tier.replace(/^default_(claude_)?/, "").replace(/_/g, " "))
+  if (id.subscription && id.subscription !== "active")
+    parts.push(`subscription ${id.subscription.replace(/_/g, " ")}`)
+  return parts.join(SEP)
+}
+
+/**
+ * Everything the usage and profile endpoints add beyond the gauges, for the
+ * surfaces with room for it (picker description, status tool): who the login
+ * is, its plan, the extra-usage line and any per-model cap.
+ */
+export function accountDetail(
+  quota: QuotaCache,
+  source: string | null,
+  id:
+    | { email?: string; plan?: string; tier?: string; subscription?: string }
+    | undefined,
+): string {
+  const x = quotaEntry(quota, source)?.extra
+  const extra = !x
+    ? ""
+    : !x.enabled
+      ? "extra usage off"
+      : spendText(quota, source)
+        ? `${spendText(quota, source)}${creditHeadroom(x) ? "" : " (cap reached)"}`
+        : "extra usage unfunded"
+  return [id?.email ?? "", planText(id), extra, scopedText(quota, source)]
+    .filter(Boolean)
+    .join(SEP)
+}
+
 /**
  * Credits are not merely available -- they are being spent right now.
  *
@@ -278,6 +362,8 @@ export function accountHealth(
   if (spent) return onCredits(quota, source) ? "paid" : "critical"
   // Below this line the account is inside its allowance, so nothing is owed.
   if (five === undefined && week === undefined) return "unknown"
+  // Anthropic's own warning counts even below our thresholds.
+  if (serverSeverity(quota, source) !== undefined) return "warn"
   if (
     (five ?? 0) >= Math.round(thresholds.warnAt * 100) ||
     (week ?? 0) >= Math.round(thresholds.weeklyWarnAt * 100)
@@ -650,6 +736,11 @@ export function buildPickerOptions(input: {
   now?: number
   /** `DD/MM/YYYY HH:mm`, or "" for the relative style. */
   resetFormat?: string
+  /** Profile rows by source: email and plan for each account's description. */
+  identities?: Record<
+    string,
+    { email?: string; plan?: string; tier?: string; subscription?: string }
+  >
 }): PickerOption[] {
   // "active" PREFIXES rather than replaces: the reset times are why this row
   // is worth reading, and the selected account is the one most likely to be
@@ -684,12 +775,12 @@ export function buildPickerOptions(input: {
     return mark(a.source, {
       title: `${pickerNames.get(a.source) ?? shortLabel(a.label)}${load}`,
       value: a.source,
-      description: resetText(
-        input.quota,
-        a.source,
-        input.now,
-        input.resetFormat,
-      ),
+      description: [
+        resetText(input.quota, a.source, input.now, input.resetFormat),
+        accountDetail(input.quota, a.source, input.identities?.[a.source]),
+      ]
+        .filter(Boolean)
+        .join(SEP),
       category: "Pin to one account",
     })
   })

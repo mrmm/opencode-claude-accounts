@@ -29,6 +29,8 @@ import { assess, orderByConfig, resolveRef } from "../balance/balancer.ts"
 import { ceilingFor } from "../balance/caps.ts"
 import { cacheBreakdown, cacheImpact } from "../balance/cache-stats.ts"
 import { requestsFromUsage, toCacheRows } from "../tui/caps-ui.ts"
+import { accountDetail } from "../tui/chip.ts"
+import { readIdentityCache } from "../balance/identity.ts"
 import {
   allowReserve,
   boundSource,
@@ -149,6 +151,7 @@ export const claudeAccountsTools = {
         return ` ceiling ${parts.join(" ")}`
       }
 
+      const identities = readIdentityCache()
       for (const m of orderByConfig(members(), cfg.accounts, cfg.groups)) {
         const h = health.get(m.source)
         const verdict = h?.reserved
@@ -159,6 +162,8 @@ export const claudeAccountsTools = {
         lines.push(
           `  ${m.source === servingSource ? "*" : " "} ${accountKey(m.source).padEnd(16)} ${nameOf(m.source, m.label).padEnd(32)} ${(formatQuotaPrefix(quotaEntry(quota, m.source)) || "[no reading]").padEnd(16)} ${verdict}${ceilingLabel(accountKey(m.source))}`,
         )
+        const detail = accountDetail(quota, m.source, identities[m.source])
+        if (detail) lines.push(`      ${detail}`)
       }
 
       const groups = groupRows({
