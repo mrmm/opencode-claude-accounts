@@ -475,10 +475,9 @@ describe("refreshQuotas", () => {
     resetProbeBlocks()
     const p = tmp()
     const { fn, calls } = fakeFetch([usageBody(10), usageBody(10)])
-    const at = () => 5000
     const [x, y] = await Promise.all([
-      refreshQuotas([acct("a")], { fetchImpl: fn, path: p, now: at }),
-      refreshQuotas([acct("a")], { fetchImpl: fn, path: p, now: at }),
+      refreshQuotas([acct("a")], { fetchImpl: fn, path: p, now: () => 5000 }),
+      refreshQuotas([acct("a")], { fetchImpl: fn, path: p, now: () => 5000 }),
     ])
     assert.equal(calls.length, 1)
     assert.equal(x.probed + y.probed, 1)
