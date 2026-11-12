@@ -35,6 +35,25 @@ Design decisions behind these changes are in [docs/adr](docs/adr/README.md); the
 * quota and reserve files are re-read only when they change; the usage index refresh went from about 10 ms to 0.3 ms
 * account profiles are fetched in parallel at start-up
 
+## [3.0.0](https://github.com/mrmm/opencode-claude-accounts/compare/v2.1.4...v3.0.0) (2026-11-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* the claude_auth_* tool names are gone. Update agent prompts and permission rules that name them.
+
+### Features
+
+* rename the agent tools to claude_accounts_* ([d3e6497](https://github.com/mrmm/opencode-claude-accounts/commit/d3e6497393b169b8eced1e1a68232d037a9c5149))
+* show plan, server severity, per-model caps and extra usage ([be20b97](https://github.com/mrmm/opencode-claude-accounts/commit/be20b970d1380b8ed2b98d1ab1c4d698a10a6061))
+* **tui:** reset countdown on every sidebar window, kept to one line ([5159d48](https://github.com/mrmm/opencode-claude-accounts/commit/5159d4829d29d16897ff50d377640e7ea8de5be3))
+
+
+### Bug Fixes
+
+* **forecast:** drain outside use once and pace windows from the gauge ([55200a3](https://github.com/mrmm/opencode-claude-accounts/commit/55200a3ade15f2a6364d00b7faf8cd0b25d3083b))
+* **identity:** read the profile's email, keep the plan and refresh daily ([f481922](https://github.com/mrmm/opencode-claude-accounts/commit/f481922c496be6ea772f5a480d7f3c972ba7234d))
+
 ## [2.1.4](https://github.com/griffinmartin/opencode-claude-auth/compare/v2.1.3...v2.1.4) (2026-07-26)
 
 
