@@ -6,6 +6,18 @@
 
 Self-contained Anthropic auth provider for OpenCode using your Claude Code credentials — no separate login or API key needed.
 
+## Screenshots
+
+Rendered from demo accounts by every release (`scripts/screenshots.ts`); these always show the latest one.
+
+| Sidebar | Forecast |
+| --- | --- |
+| ![Sidebar: accounts as a tree, gauges and reset countdowns](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/sidebar.png) | ![Forecast](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/forecast.png) |
+
+![Account picker](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/picker.png)
+
+![claude_accounts_status tool](https://github.com/mrmm/opencode-claude-accounts/releases/latest/download/status.png)
+
 ## How it works
 
 The plugin registers its own auth provider with a custom fetch handler that intercepts all Anthropic API requests. It reads OAuth tokens from the macOS Keychain (or `~/.claude/.credentials.json` — or `$CLAUDE_CONFIG_DIR/.credentials.json` if that env var is set — on other platforms), caches them in memory with a 30-second TTL, and handles the full request lifecycle — no builtin Anthropic auth plugin required. On macOS, multiple Claude Code accounts are detected automatically and can be switched via `opencode auth login`.
