@@ -93,9 +93,10 @@ jobs:
       TAG: ${{ inputs.tag || needs.release-please.outputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # The workflow's own commit: the release commit on a release, and the
+      # current code on a backfill (an older tag may predate the script).
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || needs.release-please.outputs.tag }}
           fetch-depth: 0 # the previous tag, to see what changed
 
       - uses: pnpm/action-setup@v4
