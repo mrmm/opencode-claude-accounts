@@ -142,8 +142,17 @@ jobs:
           # A fresh home each time, so a retry does not show a second session.
           for i in 1 2; do
             home="$RUNNER_TEMP/demo-home-$i"
+            # OpenCode keeps its server running after the TUI exits; a new TUI
+            # would attach to the old one and its config.
+            pkill -x opencode || true
             scripts/tui-capture/seed.sh "$home" .
-            HOME="$home" vhs scripts/tui-capture/sidebar.tape && [ -s shots/tui.png ] && break
+            # The runner sets XDG_*, which would point OpenCode back at the
+            # runner's own config and leave the plugin out of the picture.
+            env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+              HOME="$home" vhs scripts/tui-capture/sidebar.tape &&
+              grep -q "loading plugin\" id=$PWD " "$home/.local/share/opencode/log/opencode.log" &&
+              [ -s shots/tui.png ] && break
+            rm -f shots/tui.png
           done
           [ -s shots/tui.png ]
 
