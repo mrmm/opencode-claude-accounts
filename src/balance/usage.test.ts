@@ -10,6 +10,14 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+// A path whose parent is a regular file: every OS refuses to create it.
+// (/proc/... is not portable: on Linux a recursive mkdir there never returns.)
+const unwritable = (leaf: string) => {
+  const f = join(mkdtempSync(join(tmpdir(), "cauth-ro-")), "file")
+  writeFileSync(f, "")
+  return join(f, leaf)
+}
+
 import {
   type UsageEvent,
   readUsage,
@@ -77,7 +85,7 @@ describe("record + readUsage", () => {
   })
 
   it("never throws on an unwritable path", () => {
-    assert.doesNotThrow(() => record(req("a"), "/proc/nope/usage.jsonl"))
+    assert.doesNotThrow(() => record(req("a"), unwritable("usage.jsonl")))
   })
 })
 

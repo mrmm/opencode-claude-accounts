@@ -4,6 +4,14 @@ import { mkdtempSync, renameSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+// A path whose parent is a regular file: every OS refuses to create it.
+// (/proc/... is not portable: on Linux a recursive mkdir there never returns.)
+const unwritable = (leaf: string) => {
+  const f = join(mkdtempSync(join(tmpdir(), "cauth-ro-")), "file")
+  writeFileSync(f, "")
+  return join(f, leaf)
+}
+
 import {
   bindingWindow,
   creditHeadroom,
@@ -251,7 +259,7 @@ describe("cache", () => {
 
   it("never throws when the path is unwritable", () => {
     const q = parseQuotaHeaders(REAL_HEADERS, OBSERVED)!
-    assert.equal(writeQuotaForAccount("x", q, "/proc/nope/q.json"), false)
+    assert.equal(writeQuotaForAccount("x", q, unwritable("q.json")), false)
   })
 
   it("expires stale entries", () => {

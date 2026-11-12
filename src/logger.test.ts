@@ -9,6 +9,14 @@ import {
   writeFileSync,
 } from "node:fs"
 import { join } from "node:path"
+
+// A path whose parent is a regular file: every OS refuses to create it.
+// (/proc/... is not portable: on Linux a recursive mkdir there never returns.)
+const unwritable = (leaf: string) => {
+  const f = join(mkdtempSync(join(tmpdir(), "cauth-ro-")), "file")
+  writeFileSync(f, "")
+  return join(f, leaf)
+}
 import { tmpdir } from "node:os"
 import { PassThrough } from "node:stream"
 import {
@@ -438,7 +446,7 @@ describe("rotateLog", () => {
   })
 
   it("does not throw on an unwritable path", () => {
-    assert.doesNotThrow(() => rotateLog("/proc/nope/x.log", 3))
+    assert.doesNotThrow(() => rotateLog(unwritable("x.log"), 3))
   })
 })
 
