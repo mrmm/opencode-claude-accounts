@@ -230,7 +230,8 @@ function sidebar(): Line[] {
         },
         { t: `  ${row.detail}`, c: health[row.health] },
       ])
-      if (row.sub) lines.push([{ t: `${cont}  ${row.sub}`, c: "muted" }])
+      if (row.sub)
+        lines.push([{ t: `${cont.padEnd(col + 2)}${row.sub}`, c: "muted" }])
       if (row.more)
         lines.push([{ t: `${cont}  ${row.more}`, c: health[row.health] }])
     })
